@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lord's PrizePicks Prop Engine</title>
+<style>
+:root {
+  --bg:#0b1020; --panel:#141c30; --panel2:#1b2740;
+  --line:#293650; --text:#f4f7ff; --muted:#9aa9c1;
+  --green:#20c982; --yellow:#f2bd45; --red:#ef626b;
+  --blue:#69a7ff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+font-family:Arial,sans-serif}
+header{padding:24px 5%;border-bottom:1px solid var(--line);
+background:#10182b}
+.brand{color:var(--green);font-size:12px;font-weight:bold;
+letter-spacing:2px}
+h1{font-size:26px;margin:8px 0}
+.sub{color:var(--muted);font-size:13px}
+main{max-width:1250px;margin:auto;padding:24px 5%}
+.notice{padding:13px;background:#202b40;border:1px solid var(--line);
+border-radius:9px;color:var(--yellow);font-size:12px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);
+border-radius:12px;padding:17px}
+.card small{color:var(--muted)}
+.value{font-size:25px;font-weight:bold;margin-top:9px}
+.section{margin-top:27px}
+h2{font-size:17px;margin-bottom:14px}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px}
+input,select{background:var(--panel2);color:white;border:1px solid var(--line);
+padding:11px;border-radius:7px;min-width:0}
+input::placeholder{color:#8492aa}
+button{background:var(--green);color:#07150f;border:0;
+padding:11px 16px;border-radius:7px;font-weight:bold;cursor:pointer}
+button.secondary{background:var(--panel2);color:white;
+border:1px solid var(--line)}
+button:disabled{opacity:.4;cursor:not-allowed}
+.tablewrap{overflow-x:auto;background:var(--panel);
+border:1px solid var(--line);border-radius:10px}
+table{width:100%;border-collapse:collapse;min-width:700px}
+th,td{text-align:left;padding:13px;border-bottom:1px solid var(--line);
+font-size:12px}
+th{color:var(--muted);font-weight:normal}
+td{font-size:13px}
+.badge{padding:5px 8px;border-radius:5px;font-weight:bold;font-size:11px}
+.GREEN{background:#123e31;color:#43e6a3}
+.YELLOW{background:#44371b;color:#ffd16b}
+.RED{background:#48252c;color:#ff8990}
+.GRAY{background:#303b4c;color:#bdc8d8}
+.formgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;color:var(--muted)}
+.result{margin-top:15px;padding:16px;background:var(--panel2);
+border-radius:9px;display:none}
+.result strong{font-size:24px}
+.empty{padding:25px;text-align:center;color:var(--muted)}
+footer{color:var(--muted);font-size:11px;padding:30px 0}
+@media(max-width:700px){
+.grid{grid-template-columns:repeat(2,1fr)}
+.formgrid{grid-template-columns:repeat(2,1fr)}
+h1{font-size:21px}
+}
+</style>
+</head>
+<body>
+<header>
+ <div class="brand">LORD'S SPORTS ANALYTICS</div>
+ <h1>Lord's PrizePicks Prop Engine</h1>
+ <div class="sub">Built on probability. Driven by research. Refined by results.</div>
+</header>
+
+<main>
+ <div class="notice">
+  DEVELOPMENT BUILD — No live PrizePicks connection yet.
+  Sample entries are demonstrations, not betting recommendations.
+ </div>
+
+ <div class="grid">
+  <div class="card"><small>Props Analyzed</small><div class="value" id="total">0</div></div>
+  <div class="card"><small>GREEN Candidates</small><div class="value" id="greens">0</div></div>
+  <div class="card"><small>Average Probability</small><div class="value" id="average">--</div></div>
+  <div class="card"><small>Four-Pick Builder</small><div class="value" id="builderCount">0/4</div></div>
+ </div>
+
+ <section class="section">
+  <h2>Prop Analyzer</h2>
+  <p class="sub">Enter an independent projection and standard deviation to estimate MORE or LESS probability.</p>
+  <div class="formgrid">
+   <div class="field"><label>Player</label><input id="player" placeholder="Player name"></div>
+   <div class="field"><label>Sport</label>
+    <select id="sport">
+     <option>NFL</option><option>NBA</option><option>MLB</option>
+     <option>NHL</option><option>NCAAF</option><option>NCAAB</option>
+     <option>Soccer</option><option>Other</option>
+    </select>
+   </div>
+   <div class="field"><label>Prop Market</label><input id="market" placeholder="Receptions, points..."></div>
+   <div class="field"><label>PrizePicks Line</label><input id="line" type="number" step="any" placeholder="Example: 4.5"></div>
+   <div class="field"><label>Independent Projection</label><input id="projection" type="number" step="any" placeholder="Example: 6.2"></div>
+   <div class="field"><label>Standard Deviation</label><input id="sd" type="number" min=".01" step="any" placeholder="Example: 2.1"></div>
+   <div class="field"><label>Direction</label>
+    <select id="side"><option>MORE</option><option>LESS</option></select>
+   </div>
+   <div class="field"><label>Line Type</label>
+    <select id="lineType"><option>Standard</option><option>Demon</option><option>Goblin</option></select>
+   </div>
+   <div class="field"><label>Source / Model</label><input id="source" placeholder="Projection source"></div>
+  </div>
+  <div class="toolbar" style="margin-top:14px">
+   <button onclick="analyze()">Calculate Probability</button>
+   <button class="secondary" onclick="addProp()">Save Prop</button>
+  </div>
+  <div class="result" id="result"></div>
+ </section>
+
+ <section class="section">
+  <h2>Ranked Prop Board</h2>
+  <div class="toolbar">
+   <select id="filterSport" onchange="render()">
+    <option value="ALL">All Sports</option>
+    <option>NFL</option><option>NBA</option><option>MLB</option>
+    <option>NHL</option><option>NCAAF</option><option>NCAAB</option>
+    <option>Soccer</option><option>Other</option>
+   </select>
+   <select id="filterGrade" onchange="render()">
+    <option value="ALL">All Grades</option>
+    <option>GREEN</option><option>YELLOW</option>
+    <option>RED</option><option>GRAY</option>
+   </select>
+   <input id="search" placeholder="Search players..." oninput="render()">
+   <button class="secondary" onclick="exportCSV()">Export CSV</button>
+  </div>
+  <div class="tablewrap">
+   <table>
+    <thead><tr>
+     <th>PLAYER / SPORT</th><th>MARKET</th><th>LINE</th>
+     <th>SIDE</th><th>PROJECTION</th><th>PROBABILITY</th>
+     <th>GRADE</th><th>ENTRY</th>
+    </tr></thead>
+    <tbody id="board">
+     <tr><td colspan="8" class="empty">No props entered yet. Add your first prop above.</td></tr>
+    </tbody>
+   </table>
+  </div>
+ </section>
+
+ <section class="section">
+  <h2>Four-Pick GREEN-Only Builder</h2>
+  <p class="sub">Only GREEN candidates can be added. The builder does not guarantee positive expected value or independent outcomes.</p>
+  <div class="card">
+   <div class="value" id="builderProbability">--</div>
+   <small>Illustrative combined probability, assuming independence</small>
+   <div id="builderList" class="sub" style="margin-top:14px">No selections yet.</div>
+   <button class="secondary" style="margin-top:14px" onclick="clearBuilder()">Clear Entry</button>
+  </div>
+ </section>
+
+ <footer>
+  LPPE Development Version 0.1 · Probability estimates are model-based approximations.
+  They require validated inputs and independent research. Never treat a grade as a guarantee.
+ </footer>
+</main>
+
+<script>
+let props=[];
+let selected=[];
+let lastResult=null;
+
+function normalCDF(x){
+ const t=1/(1+0.2316419*Math.abs(x));
+ const d=0.3989422804*Math.exp(-x*x/2);
+ let p=1-d*t*(0.319381530+t*(-0.356563782+
+ t*(1.781477937+t*(-1.821255978+t*1.330274429))));
+ return x>=0?p:1-p;
+}
+
+function calculate(line,projection,sd,side){
+ const z=(line-projection)/sd;
+ const less=normalCDF(z);
+ return side==="MORE" ? 1-less : less;
+}
+
+function grade(p){
+ if(!Number.isFinite(p))return "GRAY";
+ if(p>=.60)return "GREEN";
+ if(p>=.55)return "YELLOW";
+ return "RED";
+}
+
+function analyze(){
+ const line=Number(document.getElementById("line").value);
+ const projection=Number(document.getElementById("projection").value);
+ const sd=Number(document.getElementById("sd").value);
+ const side=document.getElementById("side").value;
+ if(!document.getElementById("player").value.trim() ||
+ !document.getElementById("market").value.trim() ||
+ !Number.isFinite(line)||!Number.isFinite(projection)||
+ !Number.isFinite(sd)||sd<=0){
+ alert("Enter a player, market, valid line, projection, and positive standard deviation.");
+ return;
+ }
+ const probability=calculate(line,projection,sd,side);
+ lastResult={
+ player:document.getElementById("player").value.trim(),
+ sport:document.getElementById("sport").value,
+ market:document.getElementById("market").value.trim(),
+ line,projection,sd,side,probability,
+ type:document.getElementById("lineType").value,
+ source:document.getElementById("source").value.trim()
+ };
+ const r=document.getElementById("result");
+ r.style.display="block";
+ r.innerHTML=`<small>Estimated ${side} probability</small><br>
+ <strong>${(probability*100).toFixed(1)}%</strong>
+ <span class="badge ${grade(probability)}">${grade(probability)}</span>
+ <p class="sub">Model estimate only. Validate distribution, source quality, line type, and market rules before using.</p>`;
+}
+
+function addProp(){
+ if(!lastResult){analyze();if(!lastResult)return;}
+ const p={...lastResult,id:Date.now()};
+ props.push(p);
+ lastResult=null;
+ document.getElementById("result").style.display="none";
+ render();
+}
+
+function togglePick(id){
+ const p=props.find(x=>x.id===id);
+ if(!p||grade(p.probability)!=="GREEN")return;
+ if(selected.includes(id))selected=selected.filter(x=>x!==id);
+ else if(selected.length<4)selected.push(id);
+ else alert("Four selections maximum.");
+ render();
+}
+
+function render(){
+ const sport=document.getElementById("filterSport").value;
+ const g=document.getElementById("filterGrade").value;
+ const q=document.getElementById("search").value.toLowerCase();
+ const sorted=[...props].sort((a,b)=>b.probability-a.probability);
+ const visible=sorted.filter(p=>
+ (sport==="ALL"||p.sport===sport)&&
+ (g==="ALL"||grade(p.probability)===g)&&
+ p.player.toLowerCase().includes(q));
+ document.getElementById("board").innerHTML=visible.length?visible.map(p=>{
+ const gr=grade(p.probability);
+ const chosen=selected.includes(p.id);
+ return `<tr>
+ <td><b>${escapeHTML(p.player)}</b><br><small>${p.sport}</small></td>
+ <td>${escapeHTML(p.market)}<br><small>${p.type}</small></td>
+ <td>${p.line}</td><td>${p.side}</td><td>${p.projection}</td>
+ <td>${(p.probability*100).toFixed(1)}%</td>
+ <td><span class="badge ${gr}">${gr}</span></td>
+ <td>${gr==="GREEN"?`<button class="secondary" onclick="togglePick(${p.id})">${chosen?"Remove":"Add"}</button>`:"—"}</td>
+ </tr>`;
+ }).join(""):`<tr><td colspan="8" class="empty">No matching props.</td></tr>`;
+ document.getElementById("total").textContent=props.length;
+ document.getElementById("greens").textContent=props.filter(p=>grade(p.probability)==="GREEN").length;
+ document.getElementById("average").textContent=props.length?
+ (props.reduce((s,p)=>s+p.probability,0)/props.length*100).toFixed(1)+"%":"--";
+ document.getElementById("builderCount").textContent=selected.length+"/4";
+ const chosen=selected.map(id=>props.find(p=>p.id===id)).filter(Boolean);
+ document.getElementById("builderList").textContent=chosen.length?
+ chosen.map(p=>`${p.player} — ${p.market} ${p.side} (${(p.probability*100).toFixed(1)}%)`).join(" | "):
+ "No selections yet.";
+ document.getElementById("builderProbability").textContent=chosen.length===4?
+ (chosen.reduce((v,p)=>v*p.probability,1)*100).toFixed(2)+"%":"Select four GREEN props";
+}
+
+function clearBuilder(){selected=[];render();}
+function escapeHTML(s){
+ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function exportCSV(){
+ const header=["Player","Sport","Market","Line","Side","Projection","SD","Probability","Grade","Line Type","Source"];
+ const rows=props.map(p=>[p.player,p.sport,p.market,p.line,p.side,p.projection,p.sd,p.probability,grade(p.probability),p.type,p.source]);
+ const csv=[header,...rows].map(row=>row.map(v=>'"'+String(v??"").replace(/"/g,'""')+'"').join(",")).join("\n");
+ const a=document.createElement("a");
+ a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+ a.download="lppe-props.csv";a.click();URL.revokeObjectURL(a.href);
+}
+render();
+</script>
+</body>
+</html>
