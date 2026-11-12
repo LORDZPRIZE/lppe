@@ -83,7 +83,7 @@ h1{font-size:21px}
   <div class="card"><small>Props Analyzed</small><div class="value" id="total">0</div></div>
   <div class="card"><small>GREEN Candidates</small><div class="value" id="greens">0</div></div>
   <div class="card"><small>Average Probability</small><div class="value" id="average">--</div></div>
-  <div class="card"><small>Four-Pick Builder</small><div class="value" id="builderCount">0/4</div></div>
+  <div class="card"><small>Smart Pick Builder</small><div class="value" id="builderCount">0/6</div></div>
  </div>
 
  <section class="section">
@@ -149,7 +149,7 @@ h1{font-size:21px}
  </section>
 
  <section class="section">
-  <h2>Four-Pick GREEN-Only Builder</h2>
+  <h2>Smart GREEN-Only Builder</h2>
   <p class="sub">Only GREEN candidates can be added. The builder does not guarantee positive expected value or independent outcomes.</p>
   <div class="card">
    <div class="value" id="builderProbability">--</div>
@@ -169,7 +169,7 @@ h1{font-size:21px}
 let props=[];
 let selected=[];
 let lastResult=null;
-
+const MAX_PICKS = 6;
 function normalCDF(x){
  const t=1/(1+0.2316419*Math.abs(x));
  const d=0.3989422804*Math.exp(-x*x/2);
@@ -233,8 +233,8 @@ function togglePick(id){
  const p=props.find(x=>x.id===id);
  if(!p||grade(p.probability)!=="GREEN")return;
  if(selected.includes(id))selected=selected.filter(x=>x!==id);
- else if(selected.length<4)selected.push(id);
- else alert("Four selections maximum.");
+ else if(selected.length<MAX_PICKS)selected.push(id);
+ else alert("Six selections maximum.");
  render();
 }
 
@@ -263,13 +263,13 @@ function render(){
  document.getElementById("greens").textContent=props.filter(p=>grade(p.probability)==="GREEN").length;
  document.getElementById("average").textContent=props.length?
  (props.reduce((s,p)=>s+p.probability,0)/props.length*100).toFixed(1)+"%":"--";
- document.getElementById("builderCount").textContent=selected.length+"/4";
+ document.getElementById("builderCount").textContent=selected.length+"/6";
  const chosen=selected.map(id=>props.find(p=>p.id===id)).filter(Boolean);
  document.getElementById("builderList").textContent=chosen.length?
  chosen.map(p=>`${p.player} — ${p.market} ${p.side} (${(p.probability*100).toFixed(1)}%)`).join(" | "):
  "No selections yet.";
- document.getElementById("builderProbability").textContent=chosen.length===4?
- (chosen.reduce((v,p)=>v*p.probability,1)*100).toFixed(2)+"%":"Select four GREEN props";
+ document.getElementById("builderProbability").textContent=chosen.length>=2?
+ (chosen.reduce((v,p)=>v*p.probability,1)*100).toFixed(2)+"%":"Select 2 to 6 GREEN props";
 }
 
 function clearBuilder(){selected=[];render();}
