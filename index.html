@@ -166,6 +166,30 @@ h1{font-size:21px}
 </main>
 <script>
 const API_URL = "https://lppe-api.lord-joseph.workers.dev";
+ async function loadNBAProps() {
+  try {
+    const response = await fetch(API_URL + "/api/props");
+
+    if (!response.ok) {
+      throw new Error("API returned " + response.status);
+    }
+
+    const data = await response.json();
+
+    console.log("LPPE API response:", data);
+
+    if (!Array.isArray(data.props)) {
+      throw new Error("Invalid props response");
+    }
+
+    props = data.props;
+    selected = [];
+    render();
+  } catch (error) {
+    console.error("LPPE API connection failed:", error);
+  }
+}
+  
 let props=[];
 let selected=[];
 let lastResult=null;
@@ -285,6 +309,7 @@ function exportCSV(){
  a.download="lppe-props.csv";a.click();URL.revokeObjectURL(a.href);
 }
 render();
+loadNBAProps();
 </script>
 </body>
 </html>
