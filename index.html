@@ -118,6 +118,15 @@ h1{font-size:21px}
   <div class="result" id="result"></div>
  </section>
 
+
+ <section class="section" id="sportsbookSection">
+  <h2>NBA Sportsbook Lines</h2>
+  <p class="sub">Live sportsbook lines from The Odds API, when available. These are NOT PrizePicks lines or independent projections. Odds do not establish a model edge.</p>
+  <div class="toolbar"><button class="secondary" id="refreshLines" onclick="loadSportsbookLines()">Refresh sportsbook lines</button><input id="oddsSearch" placeholder="Filter player or market" oninput="renderSportsbookLines()"></div>
+  <div id="oddsStatus" class="sub" role="status" aria-live="polite">Press Refresh to request sportsbook data. Refreshes may consume provider credits.</div>
+  <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>PLAYER</th><th>MARKET</th><th>BOOKMAKER</th><th>LINE</th><th>SIDE</th><th>AMERICAN ODDS</th><th>UPDATED</th></tr></thead><tbody id="oddsBoard"><tr><td colspan="7" class="empty">No sportsbook data requested yet.</td></tr></tbody></table></div>
+ </section>
+
  <section class="section">
   <h2>Ranked Prop Board</h2>
   <div class="toolbar">
@@ -342,6 +351,29 @@ function exportCSV(){
  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
  a.download="lppe-props.csv";a.click();URL.revokeObjectURL(a.href);
 }
+
+let sportsbookLines=[];
+function renderSportsbookLines(){
+ const q=document.getElementById("oddsSearch").value.trim().toLowerCase();
+ const rows=sportsbookLines.filter(p=>(p.player+" "+p.market+" "+p.bookmaker).toLowerCase().includes(q)).slice(0,300);
+ document.getElementById("oddsBoard").innerHTML=rows.length?rows.map(p=>`<tr><td>${escapeHTML(p.player)}</td><td>${escapeHTML(p.market)}</td><td>${escapeHTML(p.bookmaker)}</td><td>${p.line}</td><td>${p.side}</td><td>${p.americanOdds>0?"+":""}${p.americanOdds}</td><td>${p.updatedAt?escapeHTML(p.updatedAt):"—"}</td></tr>`).join(""):'<tr><td colspan="7" class="empty">No matching sportsbook lines.</td></tr>';
+}
+async function loadSportsbookLines(){
+ const btn=document.getElementById("refreshLines"),status=document.getElementById("oddsStatus");
+ btn.disabled=true;status.textContent="Fetching NBA sportsbook lines…";
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+ try{
+  const response=await fetch(API_URL+"/api/lines",{signal:controller.signal});
+  if(!response.ok)throw new Error("API returned "+response.status);
+  const data=await response.json();
+  if(!Array.isArray(data.lines))throw new Error(data.message||"Invalid sportsbook response");
+  sportsbookLines=data.lines.filter(p=>p&&typeof p.player==="string"&&typeof p.market==="string"&&typeof p.bookmaker==="string"&&Number.isFinite(p.line)&&Number.isFinite(p.americanOdds)&&(p.side==="MORE"||p.side==="LESS"));
+  renderSportsbookLines();
+  status.textContent=data.connected===false?(data.message||"Sportsbook feed not configured."):"Loaded "+sportsbookLines.length+" sportsbook outcomes. Not PrizePicks lines. No modeled edge or win probability.";
+ }catch(e){status.textContent="Sportsbook feed unavailable: "+e.message+". The manual analyzer still works."}
+ finally{clearTimeout(timer);btn.disabled=false}
+}
+
 render();
 loadNBAProps();
 </script>
