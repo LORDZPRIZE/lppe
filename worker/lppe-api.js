@@ -66,8 +66,26 @@ export default {
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});
     if (path === "/api/lines") {
-      try {return json(await sportsbookLines(env));}
-      catch (e) {return json({error:"Sportsbook feed unavailable",detail:String(e.message)},502);}
+      // Cache successful results for 15 minutes to reduce paid provider requests.
+      const cache = caches.default;
+      const cacheKey = new Request(new URL("/api/lines", request.url).toString(), {method:"GET"});
+      const cached = await cache.match(cacheKey);
+      if (cached) return cached;
+      try {
+        const result = await sportsbookLines(env);
+        const response = json(result);
+        if (result.connected) {
+          const cacheResponse = new Response(JSON.stringify(result), {headers:{
+            "Content-Type":"application/json; charset=utf-8",
+            "Access-Control-Allow-Origin":ORIGIN,
+            "Cache-Control":"public, max-age=900"
+          }});
+          await cache.put(cacheKey, cacheResponse.clone());
+        }
+        return response;
+      } catch (e) {
+        return json({error:"Sportsbook feed unavailable",detail:String(e.message)},502);
+      }
     }
     return json({error:"Endpoint not found"},404);
   }
