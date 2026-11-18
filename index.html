@@ -119,6 +119,26 @@ h1{font-size:21px}
  </section>
 
  <section class="section">
+  <h2>NBA Sportsbook Lines</h2>
+  <p class="sub">Bookmaker lines and American odds from The Odds API. PrizePicks lines are entered separately in the Prop Analyzer.</p>
+  <div class="toolbar">
+   <button type="button" id="loadSportsbook" class="secondary">Load sportsbook lines</button>
+   <input id="sportsbookSearch" aria-label="Search sportsbook players, markets, or bookmakers" placeholder="Search player, market, or book">
+  </div>
+  <p id="sportsbookStatus" class="sub" role="status">Load the latest available NBA sportsbook lines.</p>
+  <div class="tablewrap" id="sportsbookTable" hidden>
+   <table>
+    <thead><tr>
+     <th scope="col">PLAYER</th><th scope="col">MARKET</th><th scope="col">LINE</th>
+     <th scope="col">SIDE</th><th scope="col">AMERICAN ODDS</th><th scope="col">BOOKMAKER</th>
+     <th scope="col">BOOK UPDATED</th>
+    </tr></thead>
+    <tbody id="sportsbookRows"></tbody>
+   </table>
+  </div>
+ </section>
+
+ <section class="section">
   <h2>Ranked Prop Board</h2>
   <div class="toolbar">
    <select id="filterSport" onchange="render()">
@@ -167,6 +187,76 @@ h1{font-size:21px}
 </main>
 <script>
 const API_URL = "https://lppe-api.lord-joseph.workers.dev";
+
+const sportsbookButton = document.getElementById("loadSportsbook");
+const sportsbookSearch = document.getElementById("sportsbookSearch");
+const sportsbookStatus = document.getElementById("sportsbookStatus");
+const sportsbookTable = document.getElementById("sportsbookTable");
+const sportsbookRows = document.getElementById("sportsbookRows");
+let sportsbookLines = [];
+const sportsbookDateFormat = new Intl.DateTimeFormat(undefined, {dateStyle:"short",timeStyle:"short"});
+
+function renderSportsbookLines() {
+ const search = sportsbookSearch.value.trim().toLowerCase();
+ const matches = sportsbookLines.filter(line =>
+   [line.player,line.market,line.bookmaker].some(value => value.toLowerCase().includes(search)));
+ const rows = document.createDocumentFragment();
+ for (const line of matches) {
+  const row = document.createElement("tr");
+  const timestamp = Date.parse(line.updatedAt);
+  const updated = Number.isFinite(timestamp) ? sportsbookDateFormat.format(timestamp) : "Unavailable";
+  const odds = line.americanOdds > 0 ? "+" + line.americanOdds : line.americanOdds;
+  const values = [line.player,line.market,line.line,line.side === "MORE" ? "Over" : "Under",odds,line.bookmaker,updated];
+  for (const value of values) {
+   const cell = document.createElement("td");
+   cell.textContent = value;
+   row.append(cell);
+  }
+  rows.append(row);
+ }
+ sportsbookRows.replaceChildren(rows);
+ sportsbookTable.hidden = matches.length === 0;
+ if (sportsbookLines.length) {
+  sportsbookStatus.textContent = matches.length + " of " + sportsbookLines.length + " sportsbook lines shown.";
+ }
+}
+
+async function loadSportsbookLines() {
+ sportsbookButton.disabled = true;
+ sportsbookStatus.textContent = "Loading NBA sportsbook lines…";
+ sportsbookLines = [];
+ renderSportsbookLines();
+ const controller = new AbortController();
+ const timeout = setTimeout(() => controller.abort(), 20000);
+ try {
+  const response = await fetch(API_URL + "/api/lines", {signal:controller.signal});
+  if (!response.ok) throw new Error("Sportsbook request failed");
+  const data = await response.json();
+  if (data.connected === false) {
+   sportsbookStatus.textContent = "The sportsbook feed is not configured.";
+   return;
+  }
+  if (data.connected !== true || data.source !== "the_odds_api" || !Array.isArray(data.lines)) {
+   throw new Error("Unexpected sportsbook response");
+  }
+  sportsbookLines = data.lines.filter(line => line?.source === "sportsbook" &&
+   typeof line.player === "string" && typeof line.market === "string" &&
+   typeof line.bookmaker === "string" && Number.isFinite(line.line) &&
+   Number.isFinite(line.americanOdds) && ["MORE","LESS"].includes(line.side));
+  sportsbookStatus.textContent = data.lines.length && !sportsbookLines.length
+   ? "The sportsbook feed returned no readable lines." : "No NBA sportsbook lines are available right now.";
+  renderSportsbookLines();
+ } catch (error) {
+  sportsbookStatus.textContent = "NBA sportsbook lines are temporarily unavailable.";
+ } finally {
+  clearTimeout(timeout);
+  sportsbookButton.disabled = false;
+  sportsbookButton.textContent = "Refresh sportsbook lines";
+ }
+}
+
+sportsbookButton.addEventListener("click", loadSportsbookLines);
+sportsbookSearch.addEventListener("input", renderSportsbookLines);
 function setAPIStatus(message, color) {
  const el=document.getElementById("apiStatus");
  el.textContent=message;
