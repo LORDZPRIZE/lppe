@@ -78,6 +78,7 @@ h1{font-size:21px}
   DEVELOPMENT BUILD — No live PrizePicks connection yet.
   Sample entries are demonstrations, not betting recommendations.
  </div>
+ <div id="apiStatus" class="notice" role="status" aria-live="polite">Checking LPPE API connection…</div>
 
  <div class="grid">
   <div class="card"><small>Props Analyzed</small><div class="value" id="total">0</div></div>
@@ -166,9 +167,19 @@ h1{font-size:21px}
 </main>
 <script>
 const API_URL = "https://lppe-api.lord-joseph.workers.dev";
+function setAPIStatus(message, color) {
+ const el=document.getElementById("apiStatus");
+ el.textContent=message;
+ el.style.color=color || "var(--muted)";
+}
  async function loadNBAProps() {
   try {
-    const response = await fetch(API_URL + "/api/props");
+    setAPIStatus("Connecting to LPPE API…");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    let response;
+    try { response = await fetch(API_URL + "/api/props", {signal:controller.signal}); }
+    finally { clearTimeout(timeout); }
 
     if (!response.ok) {
       throw new Error("API returned " + response.status);
@@ -183,13 +194,26 @@ const API_URL = "https://lppe-api.lord-joseph.workers.dev";
     }
 
     if (data.live !== true) {
+      setAPIStatus("API ONLINE • Live NBA prop feed not connected. Manual analyzer is available.", "var(--yellow)");
       console.info("LPPE API connected; live NBA data is not available yet.");
       return;
     }
-    props = data.props;
+    const incoming=data.props.filter(p=>p && typeof p.player==="string" && typeof p.market==="string" &&
+      Number.isFinite(p.line) && Number.isFinite(p.projection) && Number.isFinite(p.sd) && p.sd>0 &&
+      (p.side==="MORE" || p.side==="LESS"));
+    // Calculate estimates locally; never trust probability or HTML fields from a feed.
+    props=incoming.map((p,i)=>({
+      id:i+1,player:p.player,sport:"NBA",market:p.market,line:p.line,
+      projection:p.projection,sd:p.sd,side:p.side,
+      type:typeof p.type==="string"?p.type:"Standard",
+      source:typeof p.source==="string"?p.source:"API",
+      probability:calculate(p.line,p.projection,p.sd,p.side)
+    }));
     selected = [];
     render();
+    setAPIStatus("API ONLINE • "+props.length+" NBA props loaded. Estimates are not validated.", "var(--green)");
   } catch (error) {
+    setAPIStatus("API UNAVAILABLE • Manual analyzer still works. Check connection and retry by refreshing.", "var(--red)");
     console.error("LPPE API connection failed:", error);
   }
 }
@@ -220,11 +244,15 @@ function grade(p){
 }
 
 function analyze(){
- const line=Number(document.getElementById("line").value);
- const projection=Number(document.getElementById("projection").value);
- const sd=Number(document.getElementById("sd").value);
+ const lineInput=document.getElementById("line").value.trim();
+ const projectionInput=document.getElementById("projection").value.trim();
+ const sdInput=document.getElementById("sd").value.trim();
+ const line=Number(lineInput);
+ const projection=Number(projectionInput);
+ const sd=Number(sdInput);
  const side=document.getElementById("side").value;
- if(!document.getElementById("player").value.trim() ||
+ lastResult=null;
+ if(!lineInput || !projectionInput || !sdInput || !document.getElementById("player").value.trim() ||
  !document.getElementById("market").value.trim() ||
  !Number.isFinite(line)||!Number.isFinite(projection)||
  !Number.isFinite(sd)||sd<=0){
@@ -249,7 +277,9 @@ function analyze(){
 }
 
 function addProp(){
- if(!lastResult){analyze();if(!lastResult)return;}
+ // Recalculate to prevent saving a stale result after the form is edited.
+ analyze();
+ if(!lastResult)return;
  const p={...lastResult,id:Date.now()};
  props.push(p);
  lastResult=null;
