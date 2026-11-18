@@ -182,6 +182,10 @@ const API_URL = "https://lppe-api.lord-joseph.workers.dev";
       throw new Error("Invalid props response");
     }
 
+    if (data.live !== true) {
+      console.info("LPPE API connected; live NBA data is not available yet.");
+      return;
+    }
     props = data.props;
     selected = [];
     render();
