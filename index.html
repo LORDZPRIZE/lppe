@@ -75,8 +75,7 @@ h1{font-size:21px}
 
 <main>
  <div class="notice">
-  DEVELOPMENT BUILD — No live PrizePicks connection yet.
-  Sample entries are demonstrations, not betting recommendations.
+  The Prop Analyzer uses independent projections and standard deviations to estimate probabilities.
  </div>
  <div id="apiStatus" class="notice" role="status" aria-live="polite">Checking LPPE API connection…</div>
 
@@ -122,7 +121,7 @@ h1{font-size:21px}
  <section class="section" aria-labelledby="prizePicksHeading">
   <h2 id="prizePicksHeading">NBA PrizePicks Lines</h2>
   <p class="sub">PrizePicks board lines via an independent data provider. Model inputs are entered in the Prop Analyzer.</p>
-  <div class="toolbar"><button type="button" class="secondary" id="refreshPrizePicks">Load PrizePicks lines</button></div>
+  <div class="toolbar"><button type="button" class="secondary" id="refreshPrizePicks">Refresh PrizePicks lines</button></div>
   <p id="prizePicksStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="prizePicksTable" hidden>
    <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>PERIOD</th><th>LINE</th><th>AVAILABLE SIDES</th></tr></thead>
@@ -134,7 +133,7 @@ h1{font-size:21px}
   <h2>NBA Sportsbook Lines</h2>
   <p class="sub">Live sportsbook lines from The Odds API, when available. These are NOT PrizePicks lines or independent projections. Odds do not establish a model edge.</p>
   <div class="toolbar"><button class="secondary" id="refreshLines" onclick="loadSportsbookLines()">Refresh sportsbook lines</button><input id="oddsSearch" placeholder="Filter player or market" oninput="renderSportsbookLines()"></div>
-  <div id="oddsStatus" class="sub" role="status" aria-live="polite">Press Refresh to request sportsbook data. Refreshes may consume provider credits.</div>
+  <div id="oddsStatus" class="sub" role="status" aria-live="polite">Sportsbook lines load when you open LPPE. Manual refreshes may consume provider credits.</div>
   <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>PLAYER</th><th>MARKET</th><th>BOOKMAKER</th><th>LINE</th><th>SIDE</th><th>AMERICAN ODDS</th><th>UPDATED</th></tr></thead><tbody id="oddsBoard"><tr><td colspan="7" class="empty">No sportsbook data requested yet.</td></tr></tbody></table></div>
  </section>
 
@@ -214,7 +213,7 @@ function setAPIStatus(message, color) {
     }
 
     if (data.live !== true) {
-      setAPIStatus("API ONLINE • Live NBA prop feed not connected. Manual analyzer is available.", "var(--yellow)");
+      setAPIStatus("API ONLINE • Independent NBA projections are not connected. Manual analyzer is available.", "var(--yellow)");
       console.info("LPPE API connected; live NBA data is not available yet.");
       return;
     }
@@ -385,8 +384,8 @@ async function loadSportsbookLines(){
  finally{clearTimeout(timer);btn.disabled=false}
 }
 
-document.getElementById("refreshPrizePicks").addEventListener("click", async event => {
- const button = event.currentTarget;
+async function loadPrizePicksLines() {
+ const button = document.getElementById("refreshPrizePicks");
  const status = document.getElementById("prizePicksStatus");
  const rows = document.getElementById("prizePicksRows");
  const table = document.getElementById("prizePicksTable");
@@ -431,10 +430,13 @@ document.getElementById("refreshPrizePicks").addEventListener("click", async eve
   clearTimeout(timer);
   button.disabled = false;
  }
-});
+}
 
+document.getElementById("refreshPrizePicks").addEventListener("click", loadPrizePicksLines);
 render();
 loadNBAProps();
+loadPrizePicksLines();
+loadSportsbookLines();
 </script>
 </body>
 </html>
