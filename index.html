@@ -118,6 +118,18 @@ h1{font-size:21px}
  </section>
 
 
+ <section class="section">
+  <h2>Today’s NBA Prop Rankings</h2>
+  <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
+  <button type="button" id="findTodayProps">Find Today’s Props</button>
+  <p id="todayPropsStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="todayPropsTable" hidden>
+   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th></tr></thead>
+    <tbody id="todayPropsRows"></tbody>
+   </table>
+  </div>
+ </section>
+
  <section class="section" aria-labelledby="prizePicksHeading">
   <h2 id="prizePicksHeading">NBA PrizePicks Lines</h2>
   <p class="sub">PrizePicks board lines via an independent data provider. Model inputs are entered in the Prop Analyzer.</p>
@@ -380,6 +392,7 @@ async function loadSportsbookLines(){
   sportsbookLines=data.lines.filter(p=>p&&typeof p.player==="string"&&typeof p.market==="string"&&typeof p.bookmaker==="string"&&Number.isFinite(p.line)&&Number.isFinite(p.americanOdds)&&(p.side==="MORE"||p.side==="LESS"));
   renderSportsbookLines();
   status.textContent=data.connected===false?(data.message||"Sportsbook feed not configured."):"Loaded "+sportsbookLines.length+" sportsbook outcomes. Not PrizePicks lines. No modeled edge or win probability.";
+  return data.connected===true ? sportsbookLines : undefined;
  }catch(e){status.textContent="Sportsbook feed unavailable: "+e.message+". The manual analyzer still works."}
  finally{clearTimeout(timer);btn.disabled=false}
 }
@@ -424,6 +437,7 @@ async function loadPrizePicksLines() {
   status.textContent = (data.lines.length ? data.lines.length + " PrizePicks lines shown." : "No PrizePicks lines returned.") +
    (data.partial ? " This view shows the first page of the board." : "") +
    (Number.isFinite(observed) ? " Observed " + new Date(observed).toLocaleString() + "." : "");
+  return data;
  } catch {
   status.textContent = "PrizePicks lines are temporarily unavailable.";
  } finally {
@@ -433,10 +447,100 @@ async function loadPrizePicksLines() {
 }
 
 document.getElementById("refreshPrizePicks").addEventListener("click", loadPrizePicksLines);
+const supportedMarkets = new Map([
+ ["points","points"],["rebounds","rebounds"],["assists","assists"],
+ ["three-pointers","three-pointers"],["3-pt made","three-pointers"]
+]);
+const pacificDay = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angeles",dateStyle:"short"});
+const maxQuoteAge = 30 * 60 * 1000;
+
+function rankMarketProps(prizePicks, sportsbook, now = Date.now()) {
+ const today = pacificDay.format(now);
+ const key = line => JSON.stringify([line.player.trim().toLowerCase(),
+  supportedMarkets.get(line.market.trim().toLowerCase()),line.line,Date.parse(line.eventStart)]);
+ const fresh = value => {
+  const age = now - Date.parse(value);
+  return age >= 0 && age <= maxQuoteAge;
+ };
+ const indexed = new Map();
+ for (const quote of sportsbook) {
+  if (!fresh(quote.updatedAt) || !quote.eventId || Math.abs(quote.americanOdds) < 100) continue;
+  const match = key(quote);
+  if (!indexed.has(match)) indexed.set(match, []);
+  indexed.get(match).push(quote);
+ }
+ const implied = odds => odds > 0 ? 100 / (odds + 100) : -odds / (100 - odds);
+ const ranked = [];
+ for (const prop of prizePicks) {
+  const starts = Date.parse(prop.eventStart);
+  if (!(starts > now) || pacificDay.format(starts) !== today || !fresh(prop.observedAt) ||
+      prop.period.toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.toLowerCase())) continue;
+  const quotes = indexed.get(key(prop)) || [];
+  if (new Set(quotes.map(quote => quote.eventId)).size !== 1) continue;
+  const books = new Map();
+  for (const quote of quotes) {
+   if (!books.has(quote.bookmaker)) books.set(quote.bookmaker,{MORE:new Set(),LESS:new Set()});
+   books.get(quote.bookmaker)[quote.side].add(quote.americanOdds);
+  }
+  const estimates = [];
+  for (const book of books.values()) {
+   if (book.MORE.size !== 1 || book.LESS.size !== 1) continue;
+   const more = implied([...book.MORE][0]), less = implied([...book.LESS][0]);
+   estimates.push(more/(more+less));
+  }
+  if (estimates.length < 2) continue;
+  const more = estimates.reduce((sum,value) => sum+value,0)/estimates.length;
+  for (const item of prop.sides) {
+   const chance = item.side === "more" ? more : 1-more;
+   if (chance <= 0.5) continue;
+   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length});
+  }
+ }
+ return ranked.sort((a,b)=>b.chance-a.chance || b.books-a.books);
+}
+
+const rankButton = document.getElementById("findTodayProps");
+rankButton.addEventListener("click", async () => {
+ const status = document.getElementById("todayPropsStatus");
+ const body = document.getElementById("todayPropsRows");
+ const table = document.getElementById("todayPropsTable");
+ rankButton.disabled = true;
+ table.hidden = true;
+ status.textContent = "Checking both feeds…";
+ try {
+  await initialLineLoads;
+  const [prizePicks,sportsbook] = await Promise.all([loadPrizePicksLines(),loadSportsbookLines()]);
+  if (!prizePicks || !sportsbook) {
+   status.textContent = "Both feeds must be available to compare props.";
+   return;
+  }
+  if (prizePicks.lines.length && !prizePicks.lines.some(line=>line.eventStart && line.observedAt)) {
+   status.textContent = "The Worker needs the game-matching update before props can be ranked.";
+   return;
+  }
+  const ranked = rankMarketProps(prizePicks.lines,sportsbook).slice(0,10);
+  body.replaceChildren();
+  for (const prop of ranked) {
+   const row = body.insertRow();
+   const estimate = (prop.chance*100).toFixed(1) + "%" + (Number.isInteger(prop.line) ? " if no tie" : "");
+   for (const value of [prop.player,prop.market,prop.line,prop.side,prop.tier,estimate,prop.books]) {
+    row.insertCell().textContent = value;
+   }
+  }
+  table.hidden = !ranked.length;
+  status.textContent = ranked.length ? "Showing " + ranked.length + " strongest matches for upcoming games today."
+    : "No upcoming props met the freshness and matching requirements.";
+  if (prizePicks.partial) status.textContent += " Checked the first page of the PrizePicks board.";
+ } catch {
+  status.textContent = "The prop comparison is temporarily unavailable.";
+ } finally {
+  rankButton.disabled = false;
+ }
+});
+
 render();
 loadNBAProps();
-loadPrizePicksLines();
-loadSportsbookLines();
+const initialLineLoads = Promise.all([loadPrizePicksLines(),loadSportsbookLines()]);
 </script>
 </body>
 </html>
