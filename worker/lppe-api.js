@@ -52,6 +52,48 @@ async function sportsbookLines(env) {
   return {connected:true,source:"the_odds_api",count:lines.length,lines,
     message:"Sportsbook odds only. No independent projections or model probabilities."};
 }
+async function prizePicksLines(request, env) {
+  const source = "prizepicksapi.com";
+  if (!env.PRIZEPICKS_API_KEY) return json({connected:false,source,lines:[]});
+  const cache = caches.default;
+  const key = new Request(new URL("/api/prizepicks", request.url));
+  try {
+    const cached = await cache.match(key);
+    if (cached) return cached;
+    const response = await fetch("https://prizepicksapi.com/api/v1/projections?league=NBA&status=active&limit=200", {
+      headers: {Authorization: `Bearer ${env.PRIZEPICKS_API_KEY}`, Accept:"application/json",
+        "X-User-Request":"Load NBA PrizePicks lines for LPPE"}
+    });
+    if (response.status === 429) return json({error:"PrizePicks provider limit reached"},429);
+    if (!response.ok) return json({error:"PrizePicks provider unavailable"},502);
+    const data = await response.json();
+    if (data.meta?.mode !== "live" || !Array.isArray(data.data)) {
+      return json({error:"PrizePicks provider returned an unexpected response"},502);
+    }
+    const lines = [];
+    for (const prop of data.data) {
+      if (prop?.source !== "prizepicks" || prop.is_demo !== false || prop.league !== "NBA" ||
+          prop.status !== "active" || typeof prop.player?.name !== "string" ||
+          typeof prop.market?.stat !== "string" || !Number.isFinite(prop.line)) continue;
+      const sides = Array.isArray(prop.selections) ? prop.selections.filter(side =>
+        side?.available === true && ["more","less"].includes(side.side)).map(side => ({
+          side:side.side, tier:typeof side.tier === "string" ? side.tier : ""
+        })) : [];
+      if (!sides.length) continue;
+      lines.push({player:prop.player.name, market:prop.market.stat, line:prop.line, sides,
+        period:typeof prop.market.period === "string" ? prop.market.period : ""});
+    }
+    const out = json({connected:true,source,lines,partial:Boolean(data.meta.next_cursor),
+      observedAt:typeof data.meta.observed_at === "string" ? data.meta.observed_at : null});
+    const cachedResponse = out.clone();
+    cachedResponse.headers.set("Cache-Control","public, max-age=900");
+    try { await cache.put(key,cachedResponse); } catch {}
+    return out;
+  } catch {
+    return json({error:"PrizePicks feed unavailable"},502);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, {status:204,
@@ -65,6 +107,7 @@ export default {
     if (path === "/api/props") return json({sport:"NBA",live:false,
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});
+    if (path === "/api/prizepicks") return prizePicksLines(request, env);
     if (path === "/api/lines") {
       // Cache successful results for 15 minutes to reduce paid provider requests.
       const cache = caches.default;
