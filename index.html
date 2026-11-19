@@ -119,6 +119,17 @@ h1{font-size:21px}
  </section>
 
 
+ <section class="section" aria-labelledby="prizePicksHeading">
+  <h2 id="prizePicksHeading">NBA PrizePicks Lines</h2>
+  <p class="sub">PrizePicks board lines via an independent data provider. Model inputs are entered in the Prop Analyzer.</p>
+  <div class="toolbar"><button type="button" class="secondary" id="refreshPrizePicks">Load PrizePicks lines</button></div>
+  <p id="prizePicksStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="prizePicksTable" hidden>
+   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>PERIOD</th><th>LINE</th><th>AVAILABLE SIDES</th></tr></thead>
+   <tbody id="prizePicksRows"></tbody></table>
+  </div>
+ </section>
+
  <section class="section" id="sportsbookSection">
   <h2>NBA Sportsbook Lines</h2>
   <p class="sub">Live sportsbook lines from The Odds API, when available. These are NOT PrizePicks lines or independent projections. Odds do not establish a model edge.</p>
@@ -373,6 +384,54 @@ async function loadSportsbookLines(){
  }catch(e){status.textContent="Sportsbook feed unavailable: "+e.message+". The manual analyzer still works."}
  finally{clearTimeout(timer);btn.disabled=false}
 }
+
+document.getElementById("refreshPrizePicks").addEventListener("click", async event => {
+ const button = event.currentTarget;
+ const status = document.getElementById("prizePicksStatus");
+ const rows = document.getElementById("prizePicksRows");
+ const table = document.getElementById("prizePicksTable");
+ button.disabled = true;
+ table.hidden = true;
+ status.textContent = "Loading NBA PrizePicks lines…";
+ const controller = new AbortController();
+ const timer = setTimeout(() => controller.abort(), 15000);
+ try {
+  const response = await fetch(API_URL + "/api/prizepicks", {signal:controller.signal});
+  if (response.status === 429) {
+   status.textContent = "PrizePicks provider limit reached. Try again later.";
+   return;
+  }
+  if (!response.ok) throw new Error("PrizePicks request failed");
+  const data = await response.json();
+  if (data.connected === false) {
+   status.textContent = "The PrizePicks feed is awaiting configuration.";
+   return;
+  }
+  if (data.connected !== true || !Array.isArray(data.lines)) throw new Error("Invalid response");
+  const fragment = document.createDocumentFragment();
+  for (const line of data.lines) {
+   const row = document.createElement("tr");
+   const sides = line.sides.map(item => item.side.toUpperCase() + (item.tier ? " (" + item.tier + ")" : "")).join(", ");
+   for (const value of [line.player,line.market,line.period,line.line,sides]) {
+    const cell = document.createElement("td");
+    cell.textContent = value;
+    row.append(cell);
+   }
+   fragment.append(row);
+  }
+  rows.replaceChildren(fragment);
+  table.hidden = !data.lines.length;
+  const observed = Date.parse(data.observedAt);
+  status.textContent = (data.lines.length ? data.lines.length + " PrizePicks lines shown." : "No PrizePicks lines returned.") +
+   (data.partial ? " This view shows the first page of the board." : "") +
+   (Number.isFinite(observed) ? " Observed " + new Date(observed).toLocaleString() + "." : "");
+ } catch {
+  status.textContent = "PrizePicks lines are temporarily unavailable.";
+ } finally {
+  clearTimeout(timer);
+  button.disabled = false;
+ }
+});
 
 render();
 loadNBAProps();
