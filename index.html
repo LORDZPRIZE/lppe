@@ -135,6 +135,13 @@ h1{font-size:21px}
  <section class="section" aria-labelledby="entryCompareHeading">
   <h2 id="entryCompareHeading">Compare PrizePicks Entries</h2>
   <p class="sub">Select 2 to 6 ranked props from different games, then enter the total return shown for each paying outcome on PrizePicks. Estimates assume independent games and full settlement. Whole-number lines are excluded because they can tie.</p>
+  <div class="toolbar">
+   <label>Number of picks <select id="suggestEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
+   <button type="button" id="findBestEntries">Find Best Entries</button>
+  </div>
+  <p class="sub">Suggestions use market estimates and a limited search. Enter the actual PrizePicks payout to compare expected returns.</p>
+  <p id="entrySuggestionStatus" class="sub" role="status"></p>
+  <ol id="entrySuggestions"></ol>
   <div id="entrySelections"></div>
   <form id="entryCompareForm" hidden>
    <label>Entry format <select id="entryFormat"><option value="power">Power</option><option value="flex">Flex</option></select></label>
@@ -662,7 +669,80 @@ compareForm.addEventListener("submit",event=>{
 });
 
 const rankButton = document.getElementById("findTodayProps");
-rankButton.addEventListener("click", async () => {
+function suggestEntries(candidates, size) {
+ const byGame = new Map();
+ for (const [index,prop] of candidates.entries()) {
+  if (!prop.gameId || !Number.isFinite(prop.chance) || prop.chance <= 0 || prop.chance > 1) continue;
+  if (!byGame.has(prop.gameId)) byGame.set(prop.gameId,[]);
+  byGame.get(prop.gameId).push({index,prop});
+ }
+ const best = Array.from({length:size+1},()=>[]);
+ best[0].push({indices:[],players:[],chance:1});
+ for (const game of byGame.values()) {
+  for (let count = size; count >= 1; count--) {
+   const options = [...best[count]];
+   for (const entry of best[count-1]) {
+    for (const {index,prop} of game) {
+     const player = prop.player.trim().toLowerCase();
+     if (entry.players.includes(player)) continue;
+     options.push({indices:[...entry.indices,index],players:[...entry.players,player],chance:entry.chance*prop.chance});
+    }
+   }
+   best[count] = options.sort((a,b)=>b.chance-a.chance).slice(0,30);
+  }
+ }
+ return best[size].slice(0,5);
+}
+
+const findEntries = document.getElementById("findBestEntries");
+const entrySuggestions = document.getElementById("entrySuggestions");
+const entrySuggestionStatus = document.getElementById("entrySuggestionStatus");
+const entrySize = document.getElementById("suggestEntrySize");
+
+findEntries.addEventListener("click",async () => {
+ const size = Number(entrySize.value);
+ findEntries.disabled = true;
+ entrySize.disabled = true;
+ try {
+  const scanned = await scanAndRankProps();
+  if (!scanned) {
+   entrySuggestionStatus.textContent = "The scan did not complete. Check the prop ranking status and try again.";
+   return;
+  }
+  const suggestions = suggestEntries(entryCandidates,size);
+  entrySuggestionStatus.textContent = suggestions.length
+   ? "Showing " + suggestions.length + " suggestions for " + size + " picks."
+   : "This scan did not find " + size + " eligible props from different games and players.";
+  for (const suggestion of suggestions) {
+   const item = document.createElement("li");
+   item.textContent = suggestion.indices.map(index=>{
+    const p = entryCandidates[index];
+    return p.player+" "+p.side+" "+p.line+" "+p.market+" ("+p.tier+")";
+   }).join(" · ") + " | " + (suggestion.chance*100).toFixed(1) + "% estimated all-hit chance ";
+   const compare = document.createElement("button");
+   compare.type = "button";
+   compare.className = "secondary";
+   compare.textContent = "Use in payout comparison";
+   compare.addEventListener("click",()=>{
+    for (const input of entrySelections.querySelectorAll("input")) {
+     input.checked = suggestion.indices.includes(Number(input.value));
+    }
+    renderPayoutFields();
+    entryFormat.focus();
+   });
+   item.append(compare);
+   entrySuggestions.append(item);
+  }
+ } finally {
+  findEntries.disabled = false;
+  entrySize.disabled = false;
+ }
+});
+
+async function scanAndRankProps() {
+ if (rankButton.disabled) return false;
+ entrySuggestions.replaceChildren();
+ entrySuggestionStatus.textContent = "";
  const status = document.getElementById("todayPropsStatus");
  const body = document.getElementById("todayPropsRows");
  const table = document.getElementById("todayPropsTable");
@@ -721,12 +801,14 @@ rankButton.addEventListener("click", async () => {
    games.size + " identified upcoming games today. Found " + matches.length + " eligible sides.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
+  return true;
  } catch (error) {
   status.textContent = error.message || "The prop comparison is temporarily unavailable.";
  } finally {
   rankButton.disabled = false;
  }
-});
+}
+rankButton.addEventListener("click",scanAndRankProps);
 
 render();
 loadNBAProps();
