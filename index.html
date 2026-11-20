@@ -125,6 +125,7 @@ h1{font-size:21px}
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
   <p class="sub">A scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
+  <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%.</p>
   <p id="todayPropsStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="todayPropsTable" hidden>
    <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>DETAILS</th></tr></thead>
@@ -768,19 +769,20 @@ async function scanAndRankProps() {
   const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
   const matches = rankMarketProps(prizePicks.lines,sportsbook,now,filters);
   refreshEntryCandidates(matches);
-  const ranked = matches.slice(0,10);
-  const isGoblinMore = prop => prop.tier?.trim().toLowerCase() === "goblin" && prop.side === "MORE";
-  if (filters.tier === "all" && filters.side === "all" && ranked.length && ranked.every(isGoblinMore)) {
-   const alternative = matches.find(prop => !isGoblinMore(prop));
-   if (alternative) ranked[ranked.length-1] = alternative;
-  }
+  const ranked = matches;
   body.replaceChildren();
   for (const prop of ranked) {
    const row = body.insertRow();
    const estimate = (prop.chance*100).toFixed(1) + "%" + (Number.isInteger(prop.line) ? " if no tie" : "");
-   for (const value of [prop.player,prop.market,prop.line,prop.side,prop.tier,estimate,prop.books]) {
+   for (const value of [prop.player,prop.market,prop.line,prop.side,prop.tier]) {
     row.insertCell().textContent = value;
    }
+   const marketGrade = grade(prop.chance);
+   const badge = document.createElement("span");
+   badge.className = "badge " + marketGrade;
+   badge.textContent = marketGrade + " · " + estimate;
+   row.insertCell().append(badge);
+   row.insertCell().textContent = prop.books;
    const details = document.createElement("details");
    const summary = document.createElement("summary");
    summary.textContent = "Why this prop?";
