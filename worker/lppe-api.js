@@ -56,7 +56,7 @@ async function prizePicksLines(request, env) {
   const source = "prizepicksapi.com";
   if (!env.PRIZEPICKS_API_KEY) return json({connected:false,source,lines:[]});
   const cache = caches.default;
-  const key = new Request(new URL("/api/prizepicks", request.url));
+  const key = new Request(new URL("/api/prizepicks-cache-v2", request.url));
   try {
     const cached = await cache.match(key);
     if (cached) return cached;
@@ -81,7 +81,12 @@ async function prizePicksLines(request, env) {
         })) : [];
       if (!sides.length) continue;
       lines.push({player:prop.player.name, market:prop.market.stat, line:prop.line, sides,
-        period:typeof prop.market.period === "string" ? prop.market.period : ""});
+        period:typeof prop.market.period === "string" ? prop.market.period : "",
+        id:typeof prop.id === "string" ? prop.id : null,
+        team:typeof prop.player.team === "string" ? prop.player.team : null,
+        opponent:typeof prop.event?.opponent === "string" ? prop.event.opponent : null,
+        eventStart:typeof prop.event?.starts_at === "string" ? prop.event.starts_at : null,
+        observedAt:typeof prop.observed_at === "string" ? prop.observed_at : null});
     }
     const out = json({connected:true,source,lines,partial:Boolean(data.meta.next_cursor),
       observedAt:typeof data.meta.observed_at === "string" ? data.meta.observed_at : null});
