@@ -132,6 +132,19 @@ h1{font-size:21px}
   </div>
  </section>
 
+ <section class="section" aria-labelledby="entryCompareHeading">
+  <h2 id="entryCompareHeading">Compare PrizePicks Entries</h2>
+  <p class="sub">Select 2 to 6 ranked props from different games, then enter the total return shown for each paying outcome on PrizePicks. Estimates assume independent games and full settlement. Whole-number lines are excluded because they can tie.</p>
+  <div id="entrySelections"></div>
+  <form id="entryCompareForm" hidden>
+   <label>Entry format <select id="entryFormat"><option value="power">Power</option><option value="flex">Flex</option></select></label>
+   <div id="entryPayouts" class="formgrid"></div>
+   <button type="submit">Estimate and compare</button>
+  </form>
+  <p id="entryCompareStatus" class="sub" role="status">Run Find Today’s Props to get started.</p>
+  <div id="entryComparisons" class="tablewrap"></div>
+ </section>
+
  <section class="section" aria-labelledby="prizePicksHeading">
   <h2 id="prizePicksHeading">NBA PrizePicks Lines</h2>
   <p class="sub">PrizePicks board lines via an independent data provider. Model inputs are entered in the Prop Analyzer.</p>
@@ -482,7 +495,9 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), standardOnly 
    const bookStart = Date.parse(quote.eventStart);
    return bookStart > now && Math.abs(bookStart - starts) <= maxTipoffDifference;
   });
-  if (new Set(quotes.map(quote => quote.eventId)).size !== 1) continue;
+  const gameIds = new Set(quotes.map(quote => quote.eventId));
+  if (gameIds.size !== 1) continue;
+  const [gameId] = gameIds;
   const books = new Map();
   for (const quote of quotes) {
    if (!books.has(quote.bookmaker)) books.set(quote.bookmaker,{MORE:new Set(),LESS:new Set()});
@@ -502,7 +517,7 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), standardOnly 
    if (item.tier?.trim().toLowerCase() === "demon" && item.side !== "more") continue;
    const chance = item.side === "more" ? more : 1-more;
    if (chance <= 0.5) continue;
-   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates});
+   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,rankedAt:now});
   }
  }
  return ranked.sort((a,b)=>b.chance-a.chance || b.books-a.books);
@@ -523,6 +538,129 @@ async function scanPrizePicks() {
  }
 }
 
+function hitDistribution(probabilities) {
+ let distribution = [1];
+ for (const p of probabilities) {
+  const next = Array(distribution.length+1).fill(0);
+  for (const [hits,weight] of distribution.entries()) {
+   next[hits] += weight*(1-p);
+   next[hits+1] += weight*p;
+  }
+  distribution = next;
+ }
+ return distribution;
+}
+
+const compareForm = document.getElementById("entryCompareForm");
+const entryFormat = document.getElementById("entryFormat");
+const entryPayouts = document.getElementById("entryPayouts");
+const entryCompareStatus = document.getElementById("entryCompareStatus");
+const entrySelections = document.getElementById("entrySelections");
+let entryCandidates = [];
+const entryResults = new Map();
+
+function selectedEntryProps() {
+ return Array.from(entrySelections.querySelectorAll("input:checked"),input=>entryCandidates[Number(input.value)]);
+}
+
+function renderPayoutFields() {
+ const picks = selectedEntryProps();
+ const count = picks.length;
+ const valid = count >= 2 && count <= 6 &&
+   new Set(picks.map(p=>p.gameId)).size === count &&
+   new Set(picks.map(p=>p.player.trim().toLowerCase())).size === count;
+ compareForm.hidden = !valid;
+ entryPayouts.replaceChildren();
+ if (!valid) {
+  entryCompareStatus.textContent = "Select 2 to 6 props from different games and different players.";
+  return;
+ }
+ const hits = entryFormat.value === "power" ? [count] : Array.from({length:count+1},(_,i)=>count-i);
+ for (const correct of hits) {
+  const label = document.createElement("label");
+  const amount = document.createElement("input");
+  label.textContent = correct + " correct · total return multiplier";
+  amount.type = "number";
+  amount.min = correct === count ? "0.01" : "0";
+  amount.step = "any";
+  amount.required = true;
+  amount.dataset.hits = correct;
+  if (correct !== count) amount.value = "0";
+  label.append(amount);
+  entryPayouts.append(label);
+ }
+ entryCompareStatus.textContent = "Enter the return for this exact entry. Use 0 for outcomes that pay nothing.";
+}
+
+function refreshEntryCandidates(matches) {
+ entryCandidates = matches.filter(p=>!Number.isInteger(p.line));
+ entrySelections.replaceChildren();
+ compareForm.hidden = true;
+ if (!entryCandidates.length) {
+  entryCompareStatus.textContent = "No eligible half-point lines are available for entry comparison.";
+  return;
+ }
+ const list = document.createElement("details");
+ const summary = document.createElement("summary");
+ summary.textContent = "Choose ranked props (" + entryCandidates.length + ")";
+ list.append(summary);
+ for (const [index,prop] of entryCandidates.entries()) {
+  const item = document.createElement("div");
+  const label = document.createElement("label");
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.value = index;
+  label.append(toggle," "+prop.player+" · "+prop.side+" "+prop.line+" "+prop.market+" · "+prop.tier);
+  item.append(label);
+  list.append(item);
+ }
+ entrySelections.append(list);
+ entryCompareStatus.textContent = new Set(entryCandidates.map(prop=>prop.gameId)).size < 2
+  ? "The scan found eligible lines in fewer than two games, so entry comparison is unavailable for this scan."
+  : "Select 2 to 6 props from different games and different players.";
+}
+
+entrySelections.addEventListener("change",renderPayoutFields);
+entryFormat.addEventListener("change",renderPayoutFields);
+compareForm.addEventListener("submit",event=>{
+ event.preventDefault();
+ const picks = selectedEntryProps();
+ const now = Date.now();
+ if (picks.some(p=>Date.parse(p.eventStart)<=now || now-p.rankedAt>maxQuoteAge)) {
+  entryCompareStatus.textContent = "Run Find Today’s Props again to refresh expired estimates.";
+  return;
+ }
+ const distribution = hitDistribution(picks.map(p=>p.chance));
+ const payout = Array(distribution.length).fill(0);
+ for (const input of entryPayouts.querySelectorAll("input")) payout[Number(input.dataset.hits)] = Number(input.value);
+ const expected = distribution.reduce((sum,probability,hits)=>sum+probability*payout[hits],0);
+ if (!Number.isFinite(expected)) {
+  entryCompareStatus.textContent = "Enter finite payout multipliers.";
+  return;
+ }
+ const descriptions = picks.map(p=>p.player+" "+p.side+" "+p.line+" "+p.market+" ("+p.tier+")").sort();
+ const format = entryFormat.options[entryFormat.selectedIndex].text;
+ entryResults.set(JSON.stringify([format,descriptions]),{format,descriptions,allHit:distribution.at(-1),expected,asOf:now});
+ const table = document.createElement("table");
+ const head = table.createTHead().insertRow();
+ for (const title of ["ENTRY","ALL-HIT ESTIMATE","EXPECTED TOTAL RETURN","ESTIMATED RETURN AFTER ENTRY COST","CHECKED"]) {
+  const cell = document.createElement("th");
+  cell.textContent = title;
+  head.append(cell);
+ }
+ const body = table.createTBody();
+ for (const result of [...entryResults.values()].sort((a,b)=>b.expected-a.expected)) {
+  const row = body.insertRow();
+  for (const value of [result.format+" · "+result.descriptions.join(" / "),
+   (result.allHit*100).toFixed(1)+"%",result.expected.toFixed(2)+"×",
+   ((result.expected-1)*100).toFixed(1)+"%",new Date(result.asOf).toLocaleTimeString()]) {
+   row.insertCell().textContent = value;
+  }
+ }
+ document.getElementById("entryComparisons").replaceChildren(table);
+ entryCompareStatus.textContent = "Compared "+entryResults.size+" entries using the payouts entered above.";
+});
+
 const rankButton = document.getElementById("findTodayProps");
 rankButton.addEventListener("click", async () => {
  const status = document.getElementById("todayPropsStatus");
@@ -531,6 +669,7 @@ rankButton.addEventListener("click", async () => {
  rankButton.disabled = true;
  table.hidden = true;
  status.textContent = "Checking both feeds…";
+ refreshEntryCandidates([]);
  try {
   await initialLineLoads;
   const [prizePicks,sportsbook] = await Promise.all([scanPrizePicks(),loadSportsbookLines()]);
@@ -544,6 +683,7 @@ rankButton.addEventListener("click", async () => {
   }
   const now = Date.now();
   const matches = rankMarketProps(prizePicks.lines,sportsbook,now,document.getElementById("standardPropsOnly").checked);
+  refreshEntryCandidates(matches);
   const ranked = matches.slice(0,10);
   body.replaceChildren();
   for (const prop of ranked) {
