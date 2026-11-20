@@ -122,9 +122,11 @@ h1{font-size:21px}
   <h2>Today’s NBA Prop Rankings</h2>
   <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
   <button type="button" id="findTodayProps">Find Today’s Props</button>
+  <label><input type="checkbox" id="standardPropsOnly"> Standard only</label>
+  <p class="sub">A scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
   <p id="todayPropsStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="todayPropsTable" hidden>
-   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th></tr></thead>
+   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>DETAILS</th></tr></thead>
     <tbody id="todayPropsRows"></tbody>
    </table>
   </div>
@@ -455,7 +457,7 @@ const pacificDay = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angele
 const maxQuoteAge = 30 * 60 * 1000;
 const maxTipoffDifference = 15 * 60 * 1000;
 
-function rankMarketProps(prizePicks, sportsbook, now = Date.now()) {
+function rankMarketProps(prizePicks, sportsbook, now = Date.now(), standardOnly = false) {
  const today = pacificDay.format(now);
  const key = line => JSON.stringify([line.player.trim().toLowerCase(),
   supportedMarkets.get(line.market.trim().toLowerCase()),line.line]);
@@ -487,21 +489,38 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now()) {
    books.get(quote.bookmaker)[quote.side].add(quote.americanOdds);
   }
   const estimates = [];
-  for (const book of books.values()) {
+  for (const [bookmaker,book] of books) {
    if (book.MORE.size !== 1 || book.LESS.size !== 1) continue;
-   const more = implied([...book.MORE][0]), less = implied([...book.LESS][0]);
-   estimates.push(more/(more+less));
+   const moreOdds = [...book.MORE][0], lessOdds = [...book.LESS][0];
+   const more = implied(moreOdds), less = implied(lessOdds);
+   estimates.push({bookmaker,moreOdds,lessOdds,more:more/(more+less)});
   }
   if (estimates.length < 2) continue;
-  const more = estimates.reduce((sum,value) => sum+value,0)/estimates.length;
+  const more = estimates.reduce((sum,value) => sum+value.more,0)/estimates.length;
   for (const item of prop.sides) {
+   if (standardOnly && item.tier?.trim().toLowerCase() !== "standard") continue;
    if (item.tier?.trim().toLowerCase() === "demon" && item.side !== "more") continue;
    const chance = item.side === "more" ? more : 1-more;
    if (chance <= 0.5) continue;
-   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length});
+   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates});
   }
  }
  return ranked.sort((a,b)=>b.chance-a.chance || b.books-a.books);
+}
+
+async function scanPrizePicks() {
+ const controller = new AbortController();
+ const timer = setTimeout(()=>controller.abort(),20000);
+ try {
+  const response = await fetch(API_URL+"/api/prizepicks/scan",{signal:controller.signal});
+  if (response.status === 429) throw new Error("PrizePicks provider limit reached.");
+  if (!response.ok) throw new Error("The broader PrizePicks scan is unavailable.");
+  const data = await response.json();
+  if (data.connected !== true || !Array.isArray(data.lines)) throw new Error("PrizePicks feed is unavailable.");
+  return data;
+ } finally {
+  clearTimeout(timer);
+ }
 }
 
 const rankButton = document.getElementById("findTodayProps");
@@ -514,7 +533,7 @@ rankButton.addEventListener("click", async () => {
  status.textContent = "Checking both feeds…";
  try {
   await initialLineLoads;
-  const [prizePicks,sportsbook] = await Promise.all([loadPrizePicksLines(),loadSportsbookLines()]);
+  const [prizePicks,sportsbook] = await Promise.all([scanPrizePicks(),loadSportsbookLines()]);
   if (!prizePicks || !sportsbook) {
    status.textContent = "Both feeds must be available to compare props.";
    return;
@@ -523,7 +542,9 @@ rankButton.addEventListener("click", async () => {
    status.textContent = "The Worker needs the game-matching update before props can be ranked.";
    return;
   }
-  const ranked = rankMarketProps(prizePicks.lines,sportsbook).slice(0,10);
+  const now = Date.now();
+  const matches = rankMarketProps(prizePicks.lines,sportsbook,now,document.getElementById("standardPropsOnly").checked);
+  const ranked = matches.slice(0,10);
   body.replaceChildren();
   for (const prop of ranked) {
    const row = body.insertRow();
@@ -531,13 +552,37 @@ rankButton.addEventListener("click", async () => {
    for (const value of [prop.player,prop.market,prop.line,prop.side,prop.tier,estimate,prop.books]) {
     row.insertCell().textContent = value;
    }
+   const details = document.createElement("details");
+   const summary = document.createElement("summary");
+   summary.textContent = "Why this prop?";
+   details.append(summary);
+   const formatOdds = odds => odds > 0 ? "+" + odds : String(odds);
+   for (const quote of prop.estimates) {
+    const item = document.createElement("p");
+    item.textContent = quote.bookmaker + " · MORE " + formatOdds(quote.moreOdds) +
+     " · LESS " + formatOdds(quote.lessOdds);
+    details.append(item);
+   }
+   if (Number.isFinite(prop.openingLine)) {
+    const movement = document.createElement("p");
+    movement.textContent = "PrizePicks line: " + prop.openingLine + " at opening → " + prop.line + " at scan.";
+    details.append(movement);
+   }
+   row.insertCell().append(details);
   }
   table.hidden = !ranked.length;
   status.textContent = ranked.length ? "Showing " + ranked.length + " strongest matches for upcoming games today."
     : "No upcoming props met the freshness and matching requirements.";
-  if (prizePicks.partial) status.textContent += " Checked the first page of the PrizePicks board.";
- } catch {
-  status.textContent = "The prop comparison is temporarily unavailable.";
+  const games = new Set(prizePicks.lines.filter(line => {
+   const start = Date.parse(line.eventStart);
+   return start > now && pacificDay.format(start) === pacificDay.format(now) && line.team && line.opponent;
+  }).map(line=>JSON.stringify([line.eventStart,[line.team,line.opponent].sort()])));
+  status.textContent += " Scanned " + prizePicks.lines.length + " PrizePicks offers across " +
+   games.size + " identified upcoming games today. Found " + matches.length + " eligible sides.";
+  if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
+   ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
+ } catch (error) {
+  status.textContent = error.message || "The prop comparison is temporarily unavailable.";
  } finally {
   rankButton.disabled = false;
  }
