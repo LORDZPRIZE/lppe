@@ -125,7 +125,7 @@ h1{font-size:21px}
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
   <p class="sub">A scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
-  <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%.</p>
+  <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%, Gray when a market estimate is unavailable.</p>
   <p id="todayPropsStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="todayPropsTable" hidden>
    <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>DETAILS</th></tr></thead>
@@ -498,17 +498,22 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all"
  const ranked = [];
  for (const prop of prizePicks) {
   const starts = Date.parse(prop.eventStart);
-  if (!(starts > now) || pacificDay.format(starts) !== today || !fresh(prop.observedAt) ||
-      prop.period.toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.toLowerCase())) continue;
-  const quotes = (indexed.get(key(prop)) || []).filter(quote => {
+  let unavailable = "";
+  if (!Number.isFinite(starts)) unavailable = "Game time is unavailable.";
+  else if (starts <= now || pacificDay.format(starts) !== today) unavailable = "Game is outside today’s upcoming slate.";
+  else if (!fresh(prop.observedAt)) unavailable = "The PrizePicks line is outside the freshness window.";
+  else if (prop.period.toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.toLowerCase())) {
+   unavailable = "This market or period is outside sportsbook comparison coverage.";
+  }
+  const quotes = (unavailable ? [] : indexed.get(key(prop)) || []).filter(quote => {
    const bookStart = Date.parse(quote.eventStart);
    return bookStart > now && Math.abs(bookStart - starts) <= maxTipoffDifference;
   });
   const gameIds = new Set(quotes.map(quote => quote.eventId));
-  if (gameIds.size !== 1) continue;
-  const [gameId] = gameIds;
+  if (gameIds.size > 1) unavailable = "Multiple sportsbook games matched.";
+  const gameId = gameIds.size === 1 ? quotes[0].eventId : null;
   const books = new Map();
-  for (const quote of quotes) {
+  for (const quote of gameId ? quotes : []) {
    if (!books.has(quote.bookmaker)) books.set(quote.bookmaker,{MORE:new Set(),LESS:new Set()});
    books.get(quote.bookmaker)[quote.side].add(quote.americanOdds);
   }
@@ -519,19 +524,18 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all"
    const more = implied(moreOdds), less = implied(lessOdds);
    estimates.push({bookmaker,moreOdds,lessOdds,more:more/(more+less)});
   }
-  if (estimates.length < 2) continue;
-  const more = estimates.reduce((sum,value) => sum+value.more,0)/estimates.length;
+  if (!unavailable && estimates.length < 2) unavailable = "Fewer than two fresh, two-sided sportsbook matches.";
+  const more = unavailable ? null : estimates.reduce((sum,value) => sum+value.more,0)/estimates.length;
   for (const item of prop.sides) {
    const pickTier = item.tier?.trim().toLowerCase();
    if (side !== "all" && item.side !== side) continue;
    if (tier === "no-goblins" ? pickTier === "goblin" : tier !== "all" && pickTier !== tier) continue;
    if (pickTier === "demon" && item.side !== "more") continue;
-   const chance = item.side === "more" ? more : 1-more;
-   if (chance <= 0.5) continue;
-   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,rankedAt:now});
+   const chance = more === null ? null : item.side === "more" ? more : 1-more;
+   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,rankedAt:now,unavailable});
   }
  }
- return ranked.sort((a,b)=>b.chance-a.chance || b.books-a.books);
+ return ranked.sort((a,b)=>(b.chance ?? -1)-(a.chance ?? -1) || b.books-a.books);
 }
 
 async function scanPrizePicks() {
@@ -757,23 +761,14 @@ async function scanAndRankProps() {
  try {
   await initialLineLoads;
   const [prizePicks,sportsbook] = await Promise.all([scanPrizePicks(),loadSportsbookLines()]);
-  if (!prizePicks || !sportsbook) {
-   status.textContent = "Both feeds must be available to compare props.";
-   return;
-  }
-  if (prizePicks.lines.length && !prizePicks.lines.some(line=>line.eventStart && line.observedAt)) {
-   status.textContent = "The Worker needs the game-matching update before props can be ranked.";
-   return;
-  }
-  const now = Date.now();
   const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
-  const matches = rankMarketProps(prizePicks.lines,sportsbook,now,filters);
+  const ranked = rankMarketProps(prizePicks.lines,sportsbook || [],now,filters);
+  const matches = ranked.filter(prop=>prop.chance !== null && prop.chance > 0.5);
   refreshEntryCandidates(matches);
-  const ranked = matches;
   body.replaceChildren();
   for (const prop of ranked) {
    const row = body.insertRow();
-   const estimate = (prop.chance*100).toFixed(1) + "%" + (Number.isInteger(prop.line) ? " if no tie" : "");
+   const estimate = prop.chance === null ? "N/A" : (prop.chance*100).toFixed(1) + "%" + (Number.isInteger(prop.line) ? " if no tie" : "");
    for (const value of [prop.player,prop.market,prop.line,prop.side,prop.tier]) {
     row.insertCell().textContent = value;
    }
@@ -787,6 +782,11 @@ async function scanAndRankProps() {
    const summary = document.createElement("summary");
    summary.textContent = "Why this prop?";
    details.append(summary);
+   if (prop.unavailable) {
+    const reason = document.createElement("p");
+    reason.textContent = prop.unavailable;
+    details.append(reason);
+   }
    const formatOdds = odds => odds > 0 ? "+" + odds : String(odds);
    for (const quote of prop.estimates) {
     const item = document.createElement("p");
@@ -802,14 +802,15 @@ async function scanAndRankProps() {
    row.insertCell().append(details);
   }
   table.hidden = !ranked.length;
-  status.textContent = ranked.length ? "Showing " + ranked.length + " ranked matches for upcoming games today."
-    : "No upcoming props met the freshness and matching requirements.";
+  status.textContent = ranked.length ? "Showing " + ranked.length + " available sides from the scan."
+    : "No available sides match the selected filters.";
   const games = new Set(prizePicks.lines.filter(line => {
    const start = Date.parse(line.eventStart);
    return start > now && pacificDay.format(start) === pacificDay.format(now) && line.team && line.opponent;
   }).map(line=>JSON.stringify([line.eventStart,[line.team,line.opponent].sort()])));
   status.textContent += " Scanned " + prizePicks.lines.length + " PrizePicks offers across " +
    games.size + " identified upcoming games today. Found " + matches.length + " eligible sides.";
+  if (!sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
   return true;
