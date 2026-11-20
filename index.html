@@ -453,11 +453,12 @@ const supportedMarkets = new Map([
 ]);
 const pacificDay = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angeles",dateStyle:"short"});
 const maxQuoteAge = 30 * 60 * 1000;
+const maxTipoffDifference = 15 * 60 * 1000;
 
 function rankMarketProps(prizePicks, sportsbook, now = Date.now()) {
  const today = pacificDay.format(now);
  const key = line => JSON.stringify([line.player.trim().toLowerCase(),
-  supportedMarkets.get(line.market.trim().toLowerCase()),line.line,Date.parse(line.eventStart)]);
+  supportedMarkets.get(line.market.trim().toLowerCase()),line.line]);
  const fresh = value => {
   const age = now - Date.parse(value);
   return age >= 0 && age <= maxQuoteAge;
@@ -475,7 +476,10 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now()) {
   const starts = Date.parse(prop.eventStart);
   if (!(starts > now) || pacificDay.format(starts) !== today || !fresh(prop.observedAt) ||
       prop.period.toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.toLowerCase())) continue;
-  const quotes = indexed.get(key(prop)) || [];
+  const quotes = (indexed.get(key(prop)) || []).filter(quote => {
+   const bookStart = Date.parse(quote.eventStart);
+   return bookStart > now && Math.abs(bookStart - starts) <= maxTipoffDifference;
+  });
   if (new Set(quotes.map(quote => quote.eventId)).size !== 1) continue;
   const books = new Map();
   for (const quote of quotes) {
