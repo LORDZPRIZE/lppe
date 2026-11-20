@@ -122,7 +122,8 @@ h1{font-size:21px}
   <h2>Today’s NBA Prop Rankings</h2>
   <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
   <button type="button" id="findTodayProps">Find Today’s Props</button>
-  <label><input type="checkbox" id="standardPropsOnly"> Standard only</label>
+  <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
+  <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
   <p class="sub">A scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
   <p id="todayPropsStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="todayPropsTable" hidden>
@@ -477,7 +478,7 @@ const pacificDay = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angele
 const maxQuoteAge = 30 * 60 * 1000;
 const maxTipoffDifference = 15 * 60 * 1000;
 
-function rankMarketProps(prizePicks, sportsbook, now = Date.now(), standardOnly = false) {
+function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all", side = "all"} = {}) {
  const today = pacificDay.format(now);
  const key = line => JSON.stringify([line.player.trim().toLowerCase(),
   supportedMarkets.get(line.market.trim().toLowerCase()),line.line]);
@@ -520,8 +521,10 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), standardOnly 
   if (estimates.length < 2) continue;
   const more = estimates.reduce((sum,value) => sum+value.more,0)/estimates.length;
   for (const item of prop.sides) {
-   if (standardOnly && item.tier?.trim().toLowerCase() !== "standard") continue;
-   if (item.tier?.trim().toLowerCase() === "demon" && item.side !== "more") continue;
+   const pickTier = item.tier?.trim().toLowerCase();
+   if (side !== "all" && item.side !== side) continue;
+   if (tier === "no-goblins" ? pickTier === "goblin" : tier !== "all" && pickTier !== tier) continue;
+   if (pickTier === "demon" && item.side !== "more") continue;
    const chance = item.side === "more" ? more : 1-more;
    if (chance <= 0.5) continue;
    ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,rankedAt:now});
@@ -762,9 +765,15 @@ async function scanAndRankProps() {
    return;
   }
   const now = Date.now();
-  const matches = rankMarketProps(prizePicks.lines,sportsbook,now,document.getElementById("standardPropsOnly").checked);
+  const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
+  const matches = rankMarketProps(prizePicks.lines,sportsbook,now,filters);
   refreshEntryCandidates(matches);
   const ranked = matches.slice(0,10);
+  const isGoblinMore = prop => prop.tier?.trim().toLowerCase() === "goblin" && prop.side === "MORE";
+  if (filters.tier === "all" && filters.side === "all" && ranked.length && ranked.every(isGoblinMore)) {
+   const alternative = matches.find(prop => !isGoblinMore(prop));
+   if (alternative) ranked[ranked.length-1] = alternative;
+  }
   body.replaceChildren();
   for (const prop of ranked) {
    const row = body.insertRow();
@@ -791,7 +800,7 @@ async function scanAndRankProps() {
    row.insertCell().append(details);
   }
   table.hidden = !ranked.length;
-  status.textContent = ranked.length ? "Showing " + ranked.length + " strongest matches for upcoming games today."
+  status.textContent = ranked.length ? "Showing " + ranked.length + " ranked matches for upcoming games today."
     : "No upcoming props met the freshness and matching requirements.";
   const games = new Set(prizePicks.lines.filter(line => {
    const start = Date.parse(line.eventStart);
