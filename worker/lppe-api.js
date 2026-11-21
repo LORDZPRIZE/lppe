@@ -94,7 +94,7 @@ async function refreshPrizePicksBoard(request, env) {
     const headers = {Authorization: `Bearer ${env.PRIZEPICKS_API_KEY}`, Accept:"application/json",
       "X-User-Request":"Load NBA PrizePicks lines for LPPE"};
     if (saved?.etag) headers["If-None-Match"] = saved.etag;
-    const response = await fetch(url,{headers});
+    const response = await fetch(url,{headers,signal:AbortSignal.timeout(15000)});
     if (response.status === 304 && saved?.board) {
       await remember(boardKey,saved.board,900);
       return json(saved.board);
@@ -109,7 +109,9 @@ async function refreshPrizePicksBoard(request, env) {
       await env.PRIZEPICKS_BOARD.put("cooldown",JSON.stringify(details));
       return limited(details,saved);
     }
-    if (!response.ok) return json({error:"PrizePicks provider unavailable"},502);
+    if (!response.ok) {
+      return json({error:"PrizePicks provider unavailable",upstreamStatus:response.status},502);
+    }
     const data = await response.json();
     if (data.meta?.mode !== "live" || data.meta.is_demo === true || !Array.isArray(data.data)) {
       return json({error:"PrizePicks provider returned an unexpected response"},502);
@@ -155,25 +157,41 @@ async function prizePicksLines(env) {
   if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) {
     return json({connected:false,source:"prizepicksapi.com",lines:[]});
   }
-  const [board,cooldown] = await Promise.all([
+  const [board,cooldown,refresh] = await Promise.all([
     env.PRIZEPICKS_BOARD.get("board","json"),
-    env.PRIZEPICKS_BOARD.get("cooldown","json")
+    env.PRIZEPICKS_BOARD.get("cooldown","json"),
+    env.PRIZEPICKS_BOARD.get("refresh","json")
   ]);
   if (cooldown && Date.parse(cooldown.retryAt) > Date.now()) {
-    return board ? json({...board,...cooldown,savedBoard:true}) :
-      json({error:"PrizePicks provider limit reached",...cooldown},429);
+    return board ? json({...board,...cooldown,savedBoard:true,refresh}) :
+      json({error:"PrizePicks provider limit reached",...cooldown,refresh},429);
   }
-  return json(board ?? {connected:true,source:"prizepicksapi.com",lines:[],scheduled:true});
+  return json({...(
+    board ?? {connected:true,source:"prizepicksapi.com",lines:[],scheduled:true}
+  ),refresh});
 }
 
 export default {
   async scheduled(controller,env) {
-    if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) return;
+    if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) {
+      console.warn("PrizePicks scheduled refresh skipped: feed configuration missing");
+      return;
+    }
+    const attemptedAt = new Date(controller.scheduledTime ?? Date.now()).toISOString();
     const request = new Request("https://lppe-api.lord-joseph.workers.dev/api/prizepicks");
     const response = await refreshPrizePicksBoard(request,env);
-    if (!response.ok) return;
-    const board = await response.json();
-    if (!board.savedBoard) await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(board));
+    const result = await response.json();
+    const status = !response.ok || result.savedBoard ? "failed" : "saved";
+    const refresh = {attemptedAt,status};
+    if (status === "saved") {
+      await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(result));
+      refresh.lineCount = result.lines.length;
+    } else {
+      refresh.reason = result.providerCode || result.error;
+      if (Number.isInteger(result.upstreamStatus)) refresh.upstreamStatus = result.upstreamStatus;
+    }
+    await env.PRIZEPICKS_BOARD.put("refresh",JSON.stringify(refresh));
+    console.log("PrizePicks scheduled refresh",refresh);
   },
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, {status:204,
