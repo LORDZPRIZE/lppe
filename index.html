@@ -129,7 +129,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 .outside-card strong,.outside-card small{display:block}
 .outside-status{background:#263957;color:#e9f2ff;border-radius:10px;padding:7px 10px;font-size:.9rem;overflow-wrap:anywhere}
 .outside-status[data-green="true"]{background:#173d36;color:#a3f4cd}
-#outsideEntries li{background:#172641;border:1px solid #354d73;border-radius:14px;padding:13px;color:#d5e3f8}
+#outsideEntries>li{background:#172641;border:1px solid #354d73;border-radius:14px;padding:13px;color:#d5e3f8}
 @media(max-width:600px){.outside-form{grid-template-columns:repeat(2,minmax(0,1fr))}.outside-form .outside-primary{grid-column:1/-1}.outside-card .outside-status{flex-basis:100%}}
 [data-view] [id]{scroll-margin-top:72px}
 [data-view]>.section:first-child{margin-top:0}
@@ -521,7 +521,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
   </details>
   <h3>Saved picks</h3>
   <ul id="outsideRows" class="outside-cards"></ul>
-  <h3>GREEN entries</h3>
+  <h3>6-pick GREEN entry</h3>
   <ul id="outsideEntries" class="outside-cards"></ul>
  </section>
 </div>
@@ -2387,22 +2387,25 @@ function renderOutsideOptimizer() {
  const picks = [...candidates.values()];
  document.getElementById("outsideStatus").textContent = outsidePicks.length +
   " saved · " + picks.length + " GREEN matches" + (fresh.length ? "." : " · Waiting for fresh PrizePicks lines.");
- for (let size=2; size<=6; size++) {
-  const [best] = suggestEntries(picks,size,1);
-  if (!best) continue;
-  const item = document.createElement("li");
-  item.textContent = size + " picks · " + best.indices.map(index => {
-   const prop = picks[index];
-   return prop.player + " " + prop.side + " " + prop.line + " " + prop.market;
-  }).join(" + ") + " · Estimated all-hit " + formatPickEstimate(best.chance) +
+ const entrySize = 6;
+ const [best] = suggestEntries(picks,entrySize,1);
+ const summary = document.createElement("li");
+ if (best) {
+  summary.textContent = "Estimated all-hit " + formatPickEstimate(best.chance) +
    " · Power break-even " + powerBreakEven(best.chance);
-  entries.append(item);
+  const legs = document.createElement("ol");
+  for (const index of best.indices) {
+   const prop = picks[index];
+   const leg = document.createElement("li");
+   leg.textContent = prop.player + " · " + prop.side + " " + prop.line + " " + prop.market;
+   legs.append(leg);
+  }
+  summary.append(legs);
+ } else {
+  const available = [5,4,3,2,1].find(size => suggestEntries(picks,size,1).length) ?? 0;
+  summary.textContent = available + " of 6 eligible slots filled. Each pick needs a different player and game.";
  }
- if (!entries.children.length) {
-  const item = document.createElement("li");
-  item.textContent = "No entry with at least two qualifying picks from different games.";
-  entries.append(item);
- }
+ entries.append(summary);
  if (picks.length) {
   outsideExpiry = setTimeout(renderOutsideOptimizer,Math.max(1,Math.min(...picks.map(prop => prop.expiresAt))-now));
  }
