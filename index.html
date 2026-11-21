@@ -241,6 +241,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 <nav class="app-nav" aria-label="Dashboard">
  <a href="#today" aria-current="page">Today</a>
  <a href="#nbaPropRankings">Board</a>
+ <a href="#outsideOptimizer">Outside picks</a>
  <a href="#builder">Builder <span id="navBuilderCount" aria-label="selected picks">0</span></a>
  <a href="#watchlist">Watchlist</a>
 </nav>
@@ -477,6 +478,27 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
   </div>
  </section>
 </div>
+<div data-view="outsideOptimizer">
+ <section class="section" id="outsideOptimizer">
+  <h2>Outside Picks Optimizer</h2>
+  <p class="sub">Compares dated outside picks with fresh LPPE PrizePicks offers and builds GREEN entries from exact matches.</p>
+  <details>
+   <summary>Source picks</summary>
+   <p class="sub">One pick per line: Pacific slate date | source | player | market | line | MORE or LESS</p>
+   <textarea id="outsidePickInput" rows="5" style="width:100%" aria-label="Outside picks"></textarea>
+   <button id="saveOutsidePicks" type="button" class="secondary">Save source picks</button>
+   <p id="outsideInputStatus" role="status"></p>
+  </details>
+  <p id="outsideStatus" class="sub" role="status"></p>
+  <div class="table-wrap"><table>
+   <thead><tr><th>Source</th><th>Pick</th><th>LPPE comparison</th></tr></thead>
+   <tbody id="outsideRows"></tbody>
+  </table></div>
+  <h3>Automatic GREEN entries</h3>
+  <ul id="outsideEntries"></ul>
+ </section>
+</div>
+
 <div data-view="watchlist">
  <section class="section" id="watchlist" aria-labelledby="watchlistHeading">
   <h2 id="watchlistHeading">Prop Watchlist</h2>
@@ -913,11 +935,11 @@ function renderPayoutFields() {
 }
 
 function refreshEntryCandidates(matches) {
- entryCandidates = matches.filter(p=>!Number.isInteger(p.line));
+ entryCandidates = matches.filter(p=>grade(p.chance) === "GREEN" && !Number.isInteger(p.line) && !availabilityHold(p));
  entrySelections.replaceChildren();
  compareForm.hidden = true;
  if (!entryCandidates.length) {
-  entryCompareStatus.textContent = "No eligible half-point lines are available for entry comparison.";
+  entryCompareStatus.textContent = "No fresh GREEN half-point lines are available for entry comparison.";
   return;
  }
  const list = document.createElement("details");
@@ -1233,7 +1255,9 @@ function renderSizeComparison() {
    row.insertCell().textContent = entry;
    row.insertCell().textContent = picks.map(prop=>prop.player+" "+prop.side+" "+prop.line+" "+prop.market+" ("+prop.tier+")").join(" · ");
    row.insertCell().textContent = (distribution.at(-1)*100).toFixed(1) + "%";
-   row.insertCell().textContent = format === "power" ? powerBreakEven(distribution.at(-1)) : "—";
+   const breakEven = row.insertCell();
+   breakEven.textContent = format === "power" ? powerBreakEven(distribution.at(-1)) : "—";
+   if (format === "power") breakEven.title = "Minimum all-hit payout before the probability buffer";
    const inputs = sizePayoutFields(entry,format,size,row.insertCell());
    sizeComparison.push({entry,distribution,probabilities,inputs,output:row.insertCell(),
     stress:row.insertCell(),decision:row.insertCell(),expiresAt:Math.min(...picks.map(prop=>prop.expiresAt))});
@@ -1251,7 +1275,8 @@ document.addEventListener("visibilitychange",() => {
 });
 
 const estimateSource = document.getElementById("estimateSource");
-try { estimateSource.value = localStorage.getItem("lppe-estimate-source") === "auto" ? "auto" : "stats"; } catch {}
+estimateSource.value = "auto";
+try { if (localStorage.getItem("lppe-estimate-source") === "stats") estimateSource.value = "stats"; } catch {}
 estimateSource.addEventListener("change",() => {
  try { localStorage.setItem("lppe-estimate-source",estimateSource.value); } catch {}
  scanAndRankProps();
@@ -1272,11 +1297,49 @@ const modelPlayerKey = player => player.trim().normalize("NFD").replace(/\p{Mark
  .toLowerCase().replace(/[^a-z0-9]/g,"");
 const modelTeamKey = team => ({NY:"NYK",NO:"NOP",SA:"SAS",GS:"GSW",UTAH:"UTA",WSH:"WAS",BKN:"BKN",BRK:"BKN",PHO:"PHX"})[team] || team;
 
+let nbaAvailability = null;
+const availabilityKey = (player,team) => modelPlayerKey(player) + ":" + modelTeamKey(team.trim().toUpperCase());
+
+async function loadNBAAvailability() {
+ try {
+  const response = await fetch("/api/nba/model?availability=1",{signal:AbortSignal.timeout(7000)});
+  if (!response.ok) return null;
+  const {reports} = await response.json();
+  if (!Array.isArray(reports)) return null;
+  const recent = new Map();
+  for (const report of reports) {
+   const key = availabilityKey(report.player,report.team);
+   if (!recent.has(key) || Date.parse(report.updatedAt) > Date.parse(recent.get(key).updatedAt)) {
+    recent.set(key,report);
+   }
+  }
+  return recent;
+ } catch {
+  return null;
+ }
+}
+
+function availabilityReport(prop) {
+ return prop.team ? nbaAvailability?.get(availabilityKey(prop.player,prop.team)) : undefined;
+}
+
+function availabilityHold(prop) {
+ const report = availabilityReport(prop);
+ if (!report || !/^(out|doubtful|questionable|day.to.day)$/i.test(report.status)) return false;
+ const age = Date.now()-Date.parse(report.updatedAt);
+ const start = Date.parse(prop.eventStart);
+ const returnAt = Date.parse(report.returnDate);
+ return age >= 0 && (age <= 36*60*60*1000 ||
+  (/^out$/i.test(report.status) && returnAt > start && age < 30*86400000));
+}
+
 function estimateNBAProps(data,prizePicks,now,filters) {
  const byPlayer = new Map();
  const projections = [];
  for (const player of data.players) {
-  const games = player.games.filter(game => Date.parse(game.date) < now && now - Date.parse(game.date) <= 11*86400000);
+  const completed = player.games.filter(game => Date.parse(game.date) < now)
+   .sort((a,b) => Date.parse(b.date)-Date.parse(a.date));
+  const games = completed.filter(game => now - Date.parse(game.date) <= 11*86400000);
   if (games.length < 4) continue;
   const minutes = games.reduce((sum,game) => sum + game.minutes,0) / games.length;
   const key = modelPlayerKey(player.player) + ":" + modelTeamKey(player.team);
@@ -1288,6 +1351,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    const values = games.map(game => nbaStatValue(game.values,market));
    return {player:player.player,team:player.team,market,minutes,games:games.length,values,
     recentMinutes:games.map(game => game.minutes),
+    researchGames:completed.map(game => ({value:nbaStatValue(game.values,market),minutes:game.minutes,opponent:game.opponent})),
     projection:values.reduce((sum,value) => sum + value,0) / values.length};
   });
   byPlayer.set(key,markets);
@@ -1310,7 +1374,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    if (tier === "demon" && item.side !== "more") continue;
    const hits = item.side === "more" ? more : less;
    sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,
-    observedAt:prop.observedAt,openingLine:prop.openingLine,tier:item.tier,side:item.side.toUpperCase(),
+    observedAt:prop.observedAt,openingLine:prop.openingLine,opponent:prop.opponent,tier:item.tier,side:item.side.toUpperCase(),
     hits,ties:model.games-more-less,chance:(hits+2)/(more+less+4)});
   }
  }
@@ -1408,7 +1472,26 @@ function resultDateFor(time) {
  return parts.year + parts.month + parts.day;
 }
 
-function recordNBAEstimates(ledger,props,source,now) {
+function pregameResultAnalysis(prop,market,model) {
+ const report = availabilityReport(prop);
+ const opponent = prop.opponent || model?.opponent || market?.opponent;
+ const games = model?.researchGames ?? [];
+ const matchupGames = opponent ? games.filter(game =>
+  modelTeamKey(game.opponent) === modelTeamKey(opponent)) : [];
+ return {
+  availability:report?.status ?? (nbaAvailability ? "No ESPN listing found" : "ESPN feed unavailable"),
+  availabilityUpdatedAt:report?.updatedAt,
+  opponent,
+  openingLine:prop.openingLine,
+  marketChance:market?.chance,
+  books:market?.books,
+  modelChance:model?.chance,
+  recent:recentPropResearch(games,prop.side,prop.line).filter(row => row.count),
+  matchup:recentPropResearch(matchupGames,prop.side,prop.line)[1]
+ };
+}
+
+function recordNBAEstimates(ledger,props,source,now,marketByPick,modelByPick) {
  for (const prop of props) {
   const start = Date.parse(prop.eventStart);
   const observed = Date.parse(prop.observedAt);
@@ -1419,8 +1502,13 @@ function recordNBAEstimates(ledger,props,source,now) {
   const key = JSON.stringify([source,start,modelPlayerKey(prop.player),modelTeamKey(team),market,prop.line,prop.side,prop.tier]);
   const entry = ledger.entries[key] ??= {source,player:prop.player,team,market,line:prop.line,
    tier:prop.tier,side:prop.side,chance:prop.chance,start,observed,saved:now};
-  if (prop.chance >= .6 && !entry.green) {
-   entry.green = {chance:prop.chance,observed,saved:now};
+  if (prop.chance >= .6 && !entry.green && !availabilityHold(prop)) {
+   const exactPick = pickKey(prop);
+   entry.green = {chance:prop.chance,observed,saved:now,
+    analysis:pregameResultAnalysis(prop,marketByPick.get(exactPick),modelByPick.get(exactPick))};
+  }
+  if (entry.green && source === "Sportsbook" && now > entry.green.saved && now >= start-15*60*1000) {
+   entry.nearTipoff = {chance:prop.chance,saved:now};
   }
  }
 }
@@ -1476,7 +1564,34 @@ function renderResultsLedger(ledger,warning = "") {
   const result = Number.isFinite(row.value) ? " (" + row.value + ")" : "";
   item.textContent = row.player + " · " + row.side + " " + row.line + " " + row.market + tier +
    " · " + (row.chance*100).toFixed(1) + "% · " + row.source +
-   " · Recorded " + new Date(row.saved).toLocaleString() + " · " + outcome + result;
+   " · Recorded " + new Date(row.saved).toLocaleString() + " · " + outcome + result +
+   (row.nearTipoff ? " · Same-line consensus near tipoff " + (row.nearTipoff.chance*100).toFixed(1) + "%" : "");
+  if (row.analysis) {
+   const analysis = row.analysis;
+   const details = document.createElement("details");
+   const summary = document.createElement("summary");
+   summary.textContent = "Pregame analysis";
+   const fields = [
+    "Availability: " + analysis.availability + (analysis.availabilityUpdatedAt ?
+     " · Updated " + new Date(analysis.availabilityUpdatedAt).toLocaleString() : ""),
+    analysis.opponent && "Opponent: " + analysis.opponent,
+    Number.isFinite(analysis.openingLine) && "Opening line: " + analysis.openingLine + " · Recorded line: " + row.line,
+    Number.isFinite(analysis.marketChance) && "Sportsbook consensus: " + formatPickEstimate(analysis.marketChance) + " · " + analysis.books + " books",
+    Number.isFinite(analysis.modelChance) && "Stats model: " + formatPickEstimate(analysis.modelChance),
+    ...analysis.recent.map(window => "Last " + window.limit + ": " + window.hits + "/" + window.count +
+     " hits · " + window.pushes + " pushes" +
+     (window.averageMinutes === null ? "" : " · " + window.averageMinutes.toFixed(1) + " avg min")),
+    analysis.matchup.count > 0 && "Available matchups: " + analysis.matchup.hits + "/" + analysis.matchup.count +
+     " hits · " + analysis.matchup.pushes + " pushes"
+   ];
+   details.append(summary);
+   for (const field of fields.filter(Boolean)) {
+    const note = document.createElement("p");
+    note.textContent = field;
+    details.append(note);
+   }
+   item.append(details);
+  }
   log.append(item);
  }
  if (!recent.length) {
@@ -1519,8 +1634,12 @@ function captureNBAResults(prizePicks,sportsbook,model) {
   if (now-checked > 15*dayMillis) delete ledger.checked[date];
  }
  if (prizePicks && !prizePicks.savedBoard) {
-  if (sportsbook?.length) recordNBAEstimates(ledger,rankMarketProps(prizePicks.lines,sportsbook,now),"Sportsbook",now);
-  if (model) recordNBAEstimates(ledger,estimateNBAProps(model,prizePicks,now,{tier:"all",side:"all"}).sides,"Stats model",now);
+  const marketSides = sportsbook?.length ? rankMarketProps(prizePicks.lines,sportsbook,now) : [];
+  const modelSides = model ? estimateNBAProps(model,prizePicks,now,{tier:"all",side:"all"}).sides : [];
+  const marketByPick = new Map(marketSides.filter(prop => Number.isFinite(prop.chance)).map(prop => [pickKey(prop),prop]));
+  const modelByPick = new Map(modelSides.map(prop => [pickKey(prop),prop]));
+  recordNBAEstimates(ledger,marketSides,"Sportsbook",now,marketByPick,modelByPick);
+  recordNBAEstimates(ledger,modelSides,"Stats model",now,marketByPick,modelByPick);
  }
  const entries = Object.entries(ledger.entries);
  if (entries.length > 8000) {
@@ -1533,12 +1652,27 @@ function captureNBAResults(prizePicks,sportsbook,model) {
 
 function makeGreenBenchmarkCSV(entries,market) {
  const rows = [["Platform","Sport","Source","Player","Team","Market","Line","Side","Tier",
-  "Estimated probability","Line observed UTC","First GREEN UTC","Game start UTC","Outcome","Final stat"]];
+  "Estimated probability","Line observed UTC","First GREEN UTC","Game start UTC","Outcome","Final stat",
+  "Same-line consensus near tipoff","Consensus recorded UTC","Availability at capture","Availability updated UTC",
+  "Opponent","Opening line","Sportsbook probability at capture","Sportsbook count","Stats model probability at capture",
+  "Last 5 hits","Last 5 sample","Last 5 pushes","Last 5 average minutes",
+  "Last 10 hits","Last 10 sample","Last 10 pushes","Last 10 average minutes",
+  "Matchup hits","Matchup sample","Matchup pushes"]];
  for (const row of Object.values(entries)) {
   if (!row.green || (market && row.market !== market)) continue;
+  const analysis = row.green.analysis;
+  const recent = limit => {
+   const window = analysis?.recent.find(item => item.limit === limit);
+   return [window?.hits,window?.count,window?.pushes,window?.averageMinutes];
+  };
   rows.push(["PrizePicks","NBA",row.source,row.player,row.team,row.market,row.line,row.side,row.tier,
    row.green.chance,new Date(row.green.observed).toISOString(),new Date(row.green.saved).toISOString(),
-   new Date(row.start).toISOString(),row.outcome === "tie" ? "push" : row.outcome ?? "ungraded",row.value ?? ""]);
+   new Date(row.start).toISOString(),row.outcome === "tie" ? "push" : row.outcome ?? "ungraded",row.value ?? "",
+   row.nearTipoff?.chance ?? "",row.nearTipoff ? new Date(row.nearTipoff.saved).toISOString() : "",
+   analysis?.availability,analysis?.availabilityUpdatedAt,analysis?.opponent,analysis?.openingLine,
+   analysis?.marketChance,analysis?.books,analysis?.modelChance,...recent(5),...recent(10),
+   analysis?.matchup?.count ? analysis.matchup.hits : "",analysis?.matchup?.count,
+   analysis?.matchup?.count ? analysis.matchup.pushes : ""]);
  }
  return rows.map(row => row.map(value => {
   const cell = String(value ?? "");
@@ -1913,6 +2047,17 @@ function updateSlateStats(freshLines,greenPicks) {
  document.getElementById("slateGreenPicks").textContent = greenPicks;
 }
 
+function recentPropResearch(games,side,line) {
+ return [5,10].map(limit => {
+  const sample = games.filter(game => Number.isFinite(game.value)).slice(0,limit);
+  const hits = sample.filter(game => side === "MORE" ? game.value > line : game.value < line).length;
+  const pushes = sample.filter(game => game.value === line).length;
+  const minutes = sample.map(game => game.minutes).filter(Number.isFinite);
+  const averageMinutes = minutes.length ? minutes.reduce((sum,value) => sum+value,0)/minutes.length : null;
+  return {limit,count:sample.length,hits,pushes,averageMinutes};
+ });
+}
+
 function renderTodayPicks() {
  clearTimeout(todayPicksExpiry);
  const status = document.getElementById("todayPicksStatus");
@@ -1950,7 +2095,7 @@ function renderTodayPicks() {
  const player = modelPlayerKey(document.getElementById("picksPlayer").value);
  const marketFilter = document.getElementById("picksMarket").value;
  const minMinutes = Number(document.getElementById("picksMinutes").value);
- const picks = primary.filter(prop => prop.chance > .5 &&
+ const picks = primary.filter(prop => prop.chance > .5 && !availabilityHold(prop) &&
   modelPlayerKey(prop.player).includes(player) &&
   (!marketFilter || supportedMarkets.get(prop.market.trim().toLowerCase()) === marketFilter) &&
   (!minMinutes || (models.get(pickKey(prop))?.minutes ?? 0) >= minMinutes)).slice(0,todayPicksLimit);
@@ -2010,6 +2155,21 @@ function renderTodayPicks() {
    model.projection.toFixed(1) + " · " + model.minutes.toFixed(1) + " minutes per game over " + model.games + " games." :
    "Stats model estimate unavailable.";
   details.append(summary,marketNote,modelNote);
+  const availability = availabilityReport(pick);
+  if (availability || !nbaAvailability) {
+   const note = document.createElement("p");
+   note.textContent = availability ? "ESPN injury listing: " + availability.status + " · Updated " +
+    new Date(availability.updatedAt).toLocaleString() : "ESPN availability feed unavailable.";
+   details.append(note);
+  }
+  if (pick.opponent) {
+   const opponent = document.createElement("p");
+   opponent.textContent = "Opponent: " + pick.opponent;
+   const matchups = model?.researchGames.filter(game => modelTeamKey(game.opponent) === modelTeamKey(pick.opponent));
+   const matchup = matchups?.length ? recentPropResearch(matchups,pick.side,pick.line)[1] : null;
+   if (matchup?.count) opponent.textContent += " · " + matchup.hits + "/" + matchup.count + " cleared this side in available matchups";
+   details.append(opponent);
+  }
   if (model) {
    const recent = document.createElement("p");
    recent.textContent = "Historical results at " + pick.line + ": cleared this side in " +
@@ -2025,6 +2185,14 @@ function renderTodayPicks() {
     games.append(game);
    }
    details.append(recent,games);
+   for (const window of recentPropResearch(model.researchGames,pick.side,pick.line)) {
+    if (!window.count) continue;
+    const note = document.createElement("p");
+    note.textContent = "Last " + window.limit + " · " + window.hits + "/" + window.count +
+     " cleared " + pick.side + " " + pick.line + " · " + window.pushes + " pushes" +
+     (window.averageMinutes === null ? "" : " · " + window.averageMinutes.toFixed(1) + " avg min");
+    details.append(note);
+   }
   }
   if (market && model && (market.chance-.5)*(model.chance-.5) < 0) {
    const disagreement = document.createElement("p");
@@ -2060,7 +2228,7 @@ function renderTodayPicks() {
     const expiresAt = Math.min(Date.parse(pick.observedAt) + maxQuoteAge,Date.parse(pick.eventStart),
      pick.expiresAt ?? Infinity);
     let prop = props.find(item => item.offer && item.pickKey === key);
-    if (!selected.includes(prop?.id) && Date.now() >= expiresAt) {
+    if (!selected.includes(prop?.id) && (Date.now() >= expiresAt || availabilityHold(pick))) {
      renderTodayPicks();
      return;
     }
@@ -2091,7 +2259,128 @@ function renderTodayPicks() {
  todayPicksExpiry = setTimeout(renderTodayPicks,Math.max(1,nextExpiry-now+1));
 }
 
+const outsidePicksKey = "lppe-outside-picks-v1";
+const outsideExample = [
+ "2026-11-21 | Betting Buddha | Victor Wembanyama | rebounds | 11.5 | MORE",
+ "2026-11-21 | Betravon trend | Domantas Sabonis | rebounds | 11.5 | MORE",
+ "2026-11-21 | Betting Buddha | Jalen Brunson | points | 27.5 | MORE"
+].join("\n");
+const outsideInput = document.getElementById("outsidePickInput");
+outsideInput.value = outsideExample;
+try { outsideInput.value = localStorage.getItem(outsidePicksKey) ?? outsideExample; } catch {}
+
+function parseOutsidePicks(value) {
+ const picks = [];
+ const rows = value.split(/\r?\n/).filter(row => row.trim());
+ if (rows.length > 200) throw new Error("Enter up to 200 source picks.");
+ for (const [index,row] of rows.entries()) {
+  const fields = row.split("|").map(field => field.trim());
+  const [date,source,player,market,lineText,rawSide] = fields;
+  const line = Number(lineText);
+  const side = rawSide?.toUpperCase();
+  const stat = supportedMarkets.get(market?.toLowerCase());
+  if (fields.length !== 6 || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date ||
+      !source || !player || !stat || !lineText || !Number.isFinite(line) || line < 0 ||
+      !["MORE","LESS"].includes(side)) {
+   throw new Error("Check the date, source, supported market, line and side on row " + (index+1) + ".");
+  }
+  picks.push({date,source,player,market:stat,line,side});
+ }
+ return picks;
+}
+
+let outsidePicks = [];
+try { outsidePicks = parseOutsidePicks(outsideInput.value); } catch {}
+let outsideExpiry;
+const outsideDate = new Intl.DateTimeFormat("en-US",{timeZone:"America/Los_Angeles",year:"numeric",month:"2-digit",day:"2-digit"});
+
+function outsideSlateDate(now) {
+ const date = Object.fromEntries(outsideDate.formatToParts(now).map(part => [part.type,part.value]));
+ return date.year + "-" + date.month + "-" + date.day;
+}
+
+function renderOutsideOptimizer() {
+ clearTimeout(outsideExpiry);
+ const now = Date.now();
+ const today = outsideSlateDate(now);
+ const rows = document.getElementById("outsideRows");
+ const entries = document.getElementById("outsideEntries");
+ rows.replaceChildren();
+ entries.replaceChildren();
+ const board = latestBoard?.prizePicks;
+ const fresh = board && !board.savedBoard ? board.lines.filter(prop => !comparisonIssue(prop,now,pacificDay.format(now))) : [];
+ const ranked = fresh.length && latestBoard.sportsbook?.length ?
+  rankMarketProps(fresh,latestBoard.sportsbook,now) : [];
+ const minBooks = Number(document.getElementById("minBooks").value);
+ const candidates = new Map();
+ for (const pick of outsidePicks) {
+  const sameProp = prop => modelPlayerKey(prop.player) === modelPlayerKey(pick.player) &&
+   supportedMarkets.get(prop.market.trim().toLowerCase()) === pick.market;
+  const available = pick.date === today ? fresh.filter(sameProp) : [];
+  const offerings = available.filter(prop => prop.line === pick.line &&
+   prop.sides.some(side => side.side.toUpperCase() === pick.side));
+  const exact = ranked.filter(prop => sameProp(prop) && prop.line === pick.line && prop.side === pick.side);
+  const pickGames = new Set(offerings.map(prop => Date.parse(prop.eventStart)));
+  const candidate = exact.find(prop => prop.chance !== null && prop.books >= minBooks && grade(prop.chance) === "GREEN" &&
+   prop.tier?.trim().toLowerCase() === "standard" && !Number.isInteger(prop.line) && !availabilityHold(prop));
+  let decision = "No exact line and side on the fresh board";
+  if (pick.date !== today) decision = "Archived slate · " + pick.date;
+  else if (!fresh.length) decision = "Waiting for fresh LPPE lines";
+  else if (pickGames.size > 1) decision = "Multiple games matched";
+  else if (candidate) {
+   candidates.set(pickKey(candidate),candidate);
+   decision = "GREEN · " + formatPickEstimate(candidate.chance) + " · " + candidate.books + " books";
+  } else if (offerings.length) {
+   decision = "Exact match · no eligible GREEN standard line";
+  } else if (available.length) {
+   decision += " · available lines " + [...new Set(available.map(prop => prop.line))].join(", ");
+  }
+  const row = rows.insertRow();
+  for (const value of [pick.source,pick.player + " · " + pick.side + " " + pick.line + " " + pick.market,decision]) {
+   row.insertCell().textContent = value;
+  }
+ }
+ const picks = [...candidates.values()];
+ document.getElementById("outsideStatus").textContent = outsidePicks.length +
+  " source picks · " + picks.length + " eligible GREEN matches. Source picks update when you save them.";
+ for (let size=2; size<=6; size++) {
+  const [best] = suggestEntries(picks,size,1);
+  if (!best) continue;
+  const item = document.createElement("li");
+  item.textContent = size + " picks · " + best.indices.map(index => {
+   const prop = picks[index];
+   return prop.player + " " + prop.side + " " + prop.line + " " + prop.market;
+  }).join(" + ") + " · Estimated all-hit " + formatPickEstimate(best.chance) +
+   " · Power break-even " + powerBreakEven(best.chance);
+  entries.append(item);
+ }
+ if (!entries.children.length) {
+  const item = document.createElement("li");
+  item.textContent = "No entry with at least two qualifying picks from different games.";
+  entries.append(item);
+ }
+ if (picks.length) {
+  outsideExpiry = setTimeout(renderOutsideOptimizer,Math.max(1,Math.min(...picks.map(prop => prop.expiresAt))-now));
+ }
+}
+
+document.getElementById("saveOutsidePicks").addEventListener("click",() => {
+ const status = document.getElementById("outsideInputStatus");
+ try {
+  const picks = parseOutsidePicks(outsideInput.value);
+  localStorage.setItem(outsidePicksKey,outsideInput.value);
+  outsidePicks = picks;
+  status.textContent = "Source picks saved in this browser.";
+  renderOutsideOptimizer();
+  if (latestBoard?.prizePicks && !latestBoard.sportsbook?.length) scanAndRankProps();
+ } catch (error) {
+  status.textContent = error.message;
+ }
+});
+
 function useLatestBoard() {
+ renderOutsideOptimizer();
  renderTodayPicks();
  renderWatchlist();
  if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds);
@@ -2140,16 +2429,19 @@ async function scanAndRankProps() {
  document.getElementById("todayPicksStatus").textContent = "Checking for fresh PrizePicks lines…";
  estimateSource.disabled = true;
  const modelRequest = loadNBAModel();
+ const availabilityRequest = loadNBAAvailability();
  try {
   const prizePicks = await loadPrizePicksLines(true);
   if (!prizePicks) status.textContent = document.getElementById("prizePicksStatus").textContent;
   const now = Date.now();
   const today = pacificDay.format(now);
-  const needsOdds = estimateSource.value === "auto" && prizePicks && !prizePicks.savedBoard &&
+  const hasOutsideSlate = outsidePicks.some(pick => pick.date === outsideSlateDate(now));
+  const needsOdds = (estimateSource.value === "auto" || hasOutsideSlate) && prizePicks && !prizePicks.savedBoard &&
    prizePicks.lines.some(prop => !comparisonIssue(prop,now,today) &&
     modelMarketColumns[supportedMarkets.get(prop.market.toLowerCase())].length === 1);
   if (needsOdds) status.textContent = "Checking sportsbook quotes…";
   const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
+  nbaAvailability = await availabilityRequest;
   if (prizePicks) latestBoard = {prizePicks,sportsbook,needsOdds};
   useLatestBoard();
   updatePrizePicksHealth(prizePicks);
@@ -2260,6 +2552,8 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds,{searchOnly = false} 
    " PrizePicks offers across " + games.size + " identified upcoming games. Market estimates cover " + pricedGames.size +
    " of those games under the current filters.";
   if (prizePicks.savedBoard) status.textContent += " Provider limit reached. Showing saved lines for reference only.";
+  if (!nbaAvailability) status.textContent += " ESPN availability could not be checked.";
+  else if (matches.some(availabilityHold)) status.textContent += " Recent ESPN injury flags excluded affected players from automatic entries.";
   if (needsOdds && !sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
