@@ -6,38 +6,53 @@
 <title>Lord's PrizePicks Prop Engine</title>
 <style>
 :root {
-  --bg:#0b1020; --panel:#141c30; --panel2:#1b2740;
-  --line:#293650; --text:#f4f7ff; --muted:#9aa9c1;
-  --green:#20c982; --yellow:#f2bd45; --red:#ef626b;
-  --blue:#69a7ff;
+  color-scheme:dark;
+  --bg:#100f1c; --panel:#1a192b; --panel2:#25233a;
+  --line:#3c3756; --text:#f9f7ff; --muted:#b9b4ce;
+  --green:#6af2b2; --yellow:#ffd477; --red:#ff8f9d;
+  --blue:#cbb9ff; --accent:#d4baff; --ink:#211238;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
-font-family:Arial,sans-serif}
-header{padding:24px 5%;border-bottom:1px solid var(--line);
-background:#10182b}
-.brand{color:var(--green);font-size:12px;font-weight:bold;
-letter-spacing:2px}
-h1{font-size:26px;margin:8px 0}
+font-family:system-ui,sans-serif;line-height:1.45}
+header{
+ border-bottom:1px solid var(--line);
+ background:radial-gradient(ellipse at 92% 0%,#443476,transparent 62%),#171528
+}
+.masthead{
+ max-width:1250px;margin:auto;padding:22px 5%;display:flex;align-items:center;
+ justify-content:space-between;gap:16px;flex-wrap:wrap
+}
+.brand{color:var(--green);font-size:11px;font-weight:800;letter-spacing:.16em}
+h1{font-size:clamp(20px,4vw,32px);letter-spacing:-.045em;margin:3px 0 0;line-height:1.15}
+.dfs-link{
+ display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 14px;border-radius:10px;
+ border:1px solid #665785;color:var(--text);background:#27223e;font-size:13px;font-weight:700;text-decoration:none
+}
+.dfs-link:hover{border-color:var(--accent);background:#352a50}
 .sub{color:var(--muted);font-size:13px}
 main{max-width:1250px;margin:auto;padding:24px 5%}
-.notice{padding:13px;background:#202b40;border:1px solid var(--line);
-border-radius:9px;color:var(--yellow);font-size:12px;margin-bottom:20px}
+.notice{
+ display:flex;align-items:center;gap:8px;margin-bottom:18px;color:var(--yellow);
+ font-size:12px;font-weight:650
+}
+.notice::before{content:"";width:7px;height:7px;flex:none;border-radius:50%;background:currentColor}
 .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .card{background:var(--panel);border:1px solid var(--line);
-border-radius:12px;padding:17px}
+border-radius:16px;padding:18px}
 .card small{color:var(--muted)}
 .value{font-size:25px;font-weight:bold;margin-top:9px}
 .section{margin-top:27px}
-h2{font-size:17px;margin-bottom:14px}
+h2{font-size:clamp(19px,3vw,25px);line-height:1.18;letter-spacing:-.025em;margin-bottom:14px}
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px}
-input,select{background:var(--panel2);color:white;border:1px solid var(--line);
-padding:11px;border-radius:7px;min-width:0}
-input::placeholder{color:#8492aa}
-button{background:var(--green);color:#07150f;border:0;
-padding:11px 16px;border-radius:7px;font-weight:bold;cursor:pointer}
-button.secondary{background:var(--panel2);color:white;
-border:1px solid var(--line)}
+input,select{background:#151425;color:var(--text);border:1px solid #51486d;
+padding:11px;border-radius:10px;min-width:0;font:inherit;font-size:14px}
+input::placeholder{color:#aaa3c3}
+button{background:var(--accent);color:var(--ink);border:1px solid transparent;
+padding:11px 16px;border-radius:10px;font:inherit;font-size:13px;font-weight:800;cursor:pointer}
+button:not(:disabled):hover{background:#e4d3ff}
+button.secondary{background:var(--panel2);color:var(--text);border-color:#51486d}
+button.secondary:not(:disabled):hover{background:#352a50;border-color:var(--accent)}
 button:disabled{opacity:.4;cursor:not-allowed}
 .tablewrap{overflow-x:auto;background:var(--panel);
 border:1px solid var(--line);border-radius:10px}
@@ -46,11 +61,11 @@ th,td{text-align:left;padding:13px;border-bottom:1px solid var(--line);
 font-size:12px}
 th{color:var(--muted);font-weight:normal}
 td{font-size:13px}
-.badge{padding:5px 8px;border-radius:5px;font-weight:bold;font-size:11px}
-.GREEN{background:#123e31;color:#43e6a3}
-.YELLOW{background:#44371b;color:#ffd16b}
-.RED{background:#48252c;color:#ff8990}
-.GRAY{background:#303b4c;color:#bdc8d8}
+.badge{padding:5px 9px;border-radius:99px;font-weight:800;font-size:11px;border:1px solid currentColor}
+.GREEN{background:#13392e;color:var(--green)}
+.YELLOW{background:#3f321a;color:var(--yellow)}
+.RED{background:#412332;color:var(--red)}
+.GRAY{background:#302c43;color:#cbc5dd}
 .formgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-size:12px;color:var(--muted)}
@@ -65,8 +80,11 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 h1{font-size:21px}
 }
 .pick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(245px,100%),1fr));gap:12px}
-.pick-grid .card{min-width:0}
-.pick-grid h3{font-size:16px;margin:0 0 8px;overflow-wrap:anywhere}
+.pick-grid .card{
+ min-width:0;background:linear-gradient(150deg,#232039,var(--panel) 75%);
+ box-shadow:inset 0 2px 0 #5a4c81
+}
+.pick-grid h3{font-size:18px;margin:0 0 8px;overflow-wrap:anywhere;letter-spacing:-.02em}
 .pick-grid p{margin:8px 0}
 .pick-grid details{margin-top:12px}
 .pick-grid .tablewrap{margin-top:8px}
@@ -75,16 +93,33 @@ h1{font-size:21px}
 .pick-grid summary{cursor:pointer;color:var(--blue)}
 
 .app-nav{position:sticky;top:0;z-index:5;display:flex;justify-content:center;gap:8px;
- padding:8px 5%;background:var(--bg);border-bottom:1px solid var(--line)}
+ padding:8px 5%;background:#151323;border-bottom:1px solid var(--line)}
 .app-nav a{display:flex;align-items:center;justify-content:center;gap:5px;min-height:44px;
  padding:0 18px;border-radius:10px;color:var(--muted);text-decoration:none;font-weight:bold}
-.app-nav a[aria-current]{background:var(--panel2);color:var(--text)}
-#navBuilderCount{color:var(--green);font-size:.8em}
+.app-nav a:hover{color:var(--text);background:var(--panel)}
+.app-nav a[aria-current]{background:#433264;color:#f3eaff;box-shadow:inset 0 -2px 0 var(--accent)}
+#navBuilderCount{
+ display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 4px;
+ border-radius:99px;background:#1d3d33;color:var(--green);font-size:.75em
+}
 [data-view][hidden]{display:none}
 [data-view] [id]{scroll-margin-top:72px}
 [data-view]>.section:first-child{margin-top:0}
 .section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.section-heading h2{margin:0;font-size:clamp(20px,4vw,28px)}
+.section-heading h2{margin:0;font-size:clamp(24px,5vw,35px)}
+.today-controls{
+ padding:clamp(14px,3vw,26px);margin-bottom:16px;border:1px solid #51436f;border-radius:20px;
+ background:radial-gradient(ellipse at 100% 0%,#372953,transparent 68%),var(--panel)
+}
+.today-controls .quick-filters{margin:15px 0 0}
+.today-controls .disclosure{margin:10px 0 0}
+.feed-state{margin-top:16px;padding:12px 14px;border-left:3px solid #b499f9;border-radius:8px;background:#161424}
+#todayPicksStatus{color:var(--text);font-size:14px;font-weight:700;margin:0}
+#todayPicksTiming{margin:4px 0 0}
+#builder>.card{background:linear-gradient(150deg,#282139,var(--panel) 75%);border-color:#594773}
+#builderProbability{font-variant-numeric:tabular-nums}
+#todayPropsTable th{background:#252039}
+#todayPropsTable tbody tr:hover{background:#211e34}
 .quick-filters label,.board-search,.disclosure>label{display:grid;gap:5px;color:var(--muted);font-size:13px}
 .quick-filters label{flex:1 1 140px;min-width:0}
 .quick-filters input,.quick-filters select,.board-search input{width:100%}
@@ -102,13 +137,19 @@ h1{font-size:21px}
 .pick-grid .add-to-entry{display:block;margin-top:12px}
 :focus-visible{outline:2px solid var(--blue);outline-offset:3px}
 @media(max-width:700px){
- header{padding:16px 4%}
+ .masthead{padding:13px 4%;gap:8px}
+ .dfs-link{min-height:44px;padding:0 10px}
  main{padding:16px 4% calc(76px + env(safe-area-inset-bottom))}
  .app-nav{position:fixed;inset:auto 0 0;gap:4px;border:0;border-top:1px solid var(--line);
   padding:6px 4% calc(6px + env(safe-area-inset-bottom))}
  .app-nav a{flex:1;padding:0 3px;font-size:13px}
  [data-view] [id]{scroll-margin-top:16px}
  .section-heading button{flex-shrink:0}
+ .today-controls .section-heading{align-items:flex-start;flex-wrap:wrap}
+ .today-controls .section-heading button{width:100%}
+ .quick-filters{gap:8px}
+ .quick-filters label{flex-basis:120px}
+ .formgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
  button,input,select,summary{min-height:44px}
  input,select{font-size:16px;max-width:100%}
  .pick-grid{grid-template-columns:minmax(0,1fr)}
@@ -123,13 +164,71 @@ h1{font-size:21px}
  #todayPropsRows td[data-label]::before{content:attr(data-label);display:block;color:var(--muted);font-size:11px;margin-bottom:3px}
  #todayPropsRows summary{color:var(--blue);padding:12px 0;cursor:pointer}
 }
+
+.today-controls{padding:0;overflow:hidden;background:var(--panel)}
+.slate-hero{position:relative;isolation:isolate;overflow:hidden;padding:clamp(18px,4vw,34px);
+ background:linear-gradient(112deg,#252045 8%,#382663 60%,#542a82);border-bottom:1px solid #66518c}
+.slate-hero::before{
+ content:"";position:absolute;z-index:-1;inset:0;opacity:.4;pointer-events:none;
+ background:repeating-linear-gradient(120deg,transparent 0 27px,#bea1ff20 28px 29px)
+}
+.slate-hero::after{
+ content:"";position:absolute;z-index:-1;width:260px;aspect-ratio:1;right:-72px;top:-105px;
+ border-radius:50%;border:2px solid #d7bcff55;box-shadow:0 0 0 27px #c587ff14,0 0 0 54px #c587ff0e;
+ background:linear-gradient(45deg,transparent 49%,#d7bcff55 49% 51%,transparent 51%),
+ radial-gradient(ellipse at 50% 120%,transparent 56%,#d7bcff55 57% 58%,transparent 59%)
+}
+.slate-hero .section-heading h2{font-size:clamp(32px,6vw,57px);letter-spacing:-.064em;line-height:.98;max-width:12ch}
+.slate-hero .section-heading button{background:var(--green);color:#0c2a21;box-shadow:0 4px 0 #317c5e}
+.slate-hero .section-heading button:active:not(:disabled){transform:translateY(2px);box-shadow:0 2px 0 #317c5e}
+.slate-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:clamp(15px,3vw,24px) 0 0}
+.slate-stats>div{display:flex;flex-direction:column-reverse;gap:5px;padding:10px 12px;border:1px solid #8a71b4;
+ border-radius:12px;background:#211836}
+.slate-stats dt{font-size:clamp(10px,2.6vw,12px);color:#ded2f2}
+.slate-stats dd{margin:0;color:#fff;font-size:clamp(22px,5vw,35px);font-weight:850;line-height:1;
+ letter-spacing:-.06em;font-variant-numeric:tabular-nums}
+.slate-stats>div:nth-child(2) dd{color:var(--green)}
+.slate-hero .feed-state{background:#181329;border-color:var(--accent)}
+.slate-filters{padding:2px clamp(14px,3vw,24px) 14px}
+.pick-grid .card{padding:19px;border-radius:18px}
+.pick-grid .pick-quote{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.pick-grid .pick-quote strong{display:block;font-size:clamp(24px,5vw,33px);letter-spacing:-.05em}
+.pick-grid .pick-market{display:block;color:var(--muted);font-size:12px}
+.pick-grid .pick-estimate{color:var(--blue);text-align:right}
+.pick-grid .pick-estimate[data-grade="GREEN"]{color:var(--green)}
+.pick-grid .pick-estimate[data-grade="YELLOW"]{color:var(--yellow)}
+.pick-grid .pick-estimate[data-grade="RED"]{color:var(--red)}
+.pick-grid .pick-meter{height:5px;width:100%;appearance:none;overflow:hidden;border:0;border-radius:99px;
+ background:#3b3453;accent-color:currentColor;display:block;margin:12px 0 4px}
+.pick-grid .pick-meter::-webkit-progress-bar{background:#3b3453}
+.pick-grid .pick-meter::-webkit-progress-value{background:currentColor}
+.pick-grid .pick-meter::-moz-progress-bar{background:currentColor}
+.pick-grid .card:has(.pick-estimate[data-grade="GREEN"]) .pick-meter{color:var(--green)}
+.pick-grid .card:has(.pick-estimate[data-grade="YELLOW"]) .pick-meter{color:var(--yellow)}
+.pick-grid .card:has(.pick-estimate[data-grade="RED"]) .pick-meter{color:var(--red)}
+.pick-grid .card:has(.pick-estimate[data-grade="GREEN"]){box-shadow:inset 0 2px 0 #43b984}
+.pick-grid button[aria-pressed="true"]{border-color:var(--green);color:var(--green)}
+@media (max-width:700px){
+ .slate-hero .section-heading button{width:auto}
+ .slate-hero .section-heading h2{max-width:none}
+ .slate-stats>div{padding:9px 7px}
+}
+@media (prefers-reduced-motion:no-preference){
+ button,.app-nav a{transition:background-color .16s,border-color .16s,transform .16s}
+ .slate-hero .section-heading button:disabled{animation:checking 1.3s ease-in-out infinite alternate}
+ @keyframes checking{from{opacity:.55}to{opacity:.82}}
+}
 </style>
 </head>
 <body>
 <header>
- <div class="brand">LORD'S SPORTS ANALYTICS</div>
- <h1>Lord's PrizePicks Prop Engine</h1>
- <p><a href="/fanduel.html" style="color:var(--blue)">FanDuel DFS Optimizer</a></p>
+ <div class="masthead">
+  <div>
+   <div class="brand">LORD'S SPORTS ANALYTICS</div>
+   <h1>Lord's PrizePicks Prop Engine</h1>
+  </div>
+  <a class="dfs-link" href="/fanduel.html">FanDuel DFS Optimizer <span aria-hidden="true">↗</span></a>
+ </div>
 </header>
 
 <nav class="app-nav" aria-label="Dashboard">
@@ -143,20 +242,33 @@ h1{font-size:21px}
 
 <div data-view="today">
  <section class="section" id="today" aria-labelledby="todayPicksHeading">
-  <div class="section-heading">
-  <h2 id="todayPicksHeading">Today’s NBA Picks</h2>
-  <button type="button" id="findTodayProps">Check for picks</button>
+  <div class="today-controls">
+   <div class="slate-hero">
+   <div class="section-heading">
+   <h2 id="todayPicksHeading">Today’s NBA Picks</h2>
+   <button type="button" id="findTodayProps">Check for picks</button>
+   </div>
+   <dl class="slate-stats">
+    <div><dt>Fresh lines</dt><dd id="slateFreshLines">—</dd></div>
+    <div><dt>GREEN on screen</dt><dd id="slateGreenPicks">—</dd></div>
+    <div><dt>In Builder</dt><dd id="slateBuilderCount">0/6</dd></div>
+   </dl>
+   <div class="feed-state">
+   <p id="todayPicksStatus" class="sub" role="status">Checking for fresh PrizePicks lines…</p>
+   <p id="todayPicksTiming" class="sub" hidden></p>
+   </div>
+   </div>
+   <div class="slate-filters">
+   <div class="toolbar quick-filters">
+    <label>Player <input id="picksPlayer" type="search" placeholder="Search player"></label>
+    <label>Market <select id="picksMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
+   </div>
+   <details class="disclosure">
+    <summary>Filters</summary>
+    <label>Recent minutes <select id="picksMinutes"><option value="0">Any</option><option value="20">20+ per game</option><option value="25">25+ per game</option><option value="30">30+ per game</option><option value="35">35+ per game</option></select></label>
+   </details>
+   </div>
   </div>
-  <p id="todayPicksStatus" class="sub" role="status">Checking for fresh PrizePicks lines…</p>
-  <p id="todayPicksTiming" class="sub" hidden></p>
-  <div class="toolbar quick-filters">
-   <label>Player <input id="picksPlayer" type="search" placeholder="Search player"></label>
-   <label>Market <select id="picksMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
-  </div>
-  <details class="disclosure">
-   <summary>Filters</summary>
-   <label>Recent minutes <select id="picksMinutes"><option value="0">Any</option><option value="20">20+ per game</option><option value="25">25+ per game</option><option value="30">30+ per game</option><option value="35">35+ per game</option></select></label>
-  </details>
   <div id="todayPicksCards" class="pick-grid"></div>
   <p class="sub"><a href="#nbaPropRankings" style="color:var(--blue)">Filters and full prop board</a> · <a href="https://prizepicksapi.com/?ref=attribution" style="color:var(--blue)">Data by PrizePicks API</a></p>
  </section>
@@ -513,6 +625,7 @@ function render(){
  (props.reduce((s,p)=>s+p.probability,0)/props.length*100).toFixed(1)+"%":"--";
  document.getElementById("builderCount").textContent=selected.length+"/6";
  document.getElementById("navBuilderCount").textContent = selected.length;
+ document.getElementById("slateBuilderCount").textContent = selected.length + "/" + MAX_PICKS;
  recheckBuilderButton.disabled = recheckingBuilder || selected.length === 0;
  for (const button of document.querySelectorAll(".add-to-entry")) {
   const active = selected.some(id => String(id) === button.dataset.propId);
@@ -1678,6 +1791,11 @@ function renderAlternateLines(pick,groups) {
  return details;
 }
 
+function updateSlateStats(freshLines,greenPicks) {
+ document.getElementById("slateFreshLines").textContent = freshLines;
+ document.getElementById("slateGreenPicks").textContent = greenPicks;
+}
+
 function renderTodayPicks() {
  clearTimeout(todayPicksExpiry);
  const status = document.getElementById("todayPicksStatus");
@@ -1688,6 +1806,7 @@ function renderTodayPicks() {
  const board = latestBoard?.prizePicks;
  const now = Date.now();
  if (!board || board.savedBoard || board.scheduled) {
+  updateSlateStats(board?.scheduled ? 0 : "—",0);
   status.textContent = board?.scheduled ? "Waiting for PrizePicks lines." :
    document.getElementById("prizePicksStatus").textContent || "Waiting for PrizePicks lines.";
   showNextPrizePicksSnapshot(timing,now);
@@ -1698,6 +1817,7 @@ function renderTodayPicks() {
  const today = pacificDay.format(now);
  const fresh = board.lines.filter(prop => !comparisonIssue(prop,now,today));
  if (!fresh.length) {
+  updateSlateStats(0,0);
   status.textContent = "No fresh, supported PrizePicks lines for upcoming games today.";
   showNextPrizePicksSnapshot(timing,now);
   return;
@@ -1717,6 +1837,7 @@ function renderTodayPicks() {
   modelPlayerKey(prop.player).includes(player) &&
   (!marketFilter || supportedMarkets.get(prop.market.trim().toLowerCase()) === marketFilter) &&
   (!minMinutes || (models.get(pickKey(prop))?.minutes ?? 0) >= minMinutes)).slice(0,todayPicksLimit);
+ updateSlateStats(fresh.length,picks.filter(pick => grade(pick.chance) === "GREEN").length);
  status.textContent = picks.length ?
   "Showing " + picks.length + " sides above 50%, ranked by " + primaryName.toLowerCase() + ". Estimates are before payouts." :
   "No comparable sides above 50% for these filters yet.";
@@ -1736,12 +1857,31 @@ function renderTodayPicks() {
   card.className = "card";
   const title = document.createElement("h3");
   title.textContent = pick.player + (pick.team ? " · " + pick.team : "");
-  const line = document.createElement("p");
-  line.textContent = pick.side + " " + pick.line + " " + pick.market + (pick.tier ? " · " + pick.tier : "");
-  const badge = document.createElement("span");
-  badge.className = "badge " + grade(pick.chance);
-  badge.textContent = primaryName + " · " + formatPickEstimate(pick.chance) +
+  const quote = document.createElement("div");
+  quote.className = "pick-quote";
+  const line = document.createElement("div");
+  const lineValue = document.createElement("strong");
+  lineValue.textContent = pick.side + " " + pick.line;
+  const marketLabel = document.createElement("span");
+  marketLabel.className = "pick-market";
+  marketLabel.textContent = pick.market + (pick.tier ? " · " + pick.tier : "");
+  line.append(lineValue,marketLabel);
+  const estimate = document.createElement("div");
+  estimate.className = "pick-estimate";
+  estimate.dataset.grade = grade(pick.chance);
+  const estimateValue = document.createElement("strong");
+  estimateValue.textContent = formatPickEstimate(pick.chance);
+  const estimateLabel = document.createElement("span");
+  estimateLabel.className = "pick-market";
+  estimateLabel.textContent = primaryName + " · " + estimate.dataset.grade +
    (Number.isInteger(pick.line) ? " if no tie" : "");
+  estimate.append(estimateValue,estimateLabel);
+  quote.append(line,estimate);
+  const meter = document.createElement("progress");
+  meter.className = "pick-meter";
+  meter.max = 1;
+  meter.value = pick.chance;
+  meter.setAttribute("aria-label",primaryName);
   const details = document.createElement("details");
   const summary = document.createElement("summary");
   summary.textContent = "Why this pick?";
@@ -1788,7 +1928,7 @@ function renderTodayPicks() {
    if (!watchlistWarning) watch.textContent = "Watching";
   });
   details.append(watch);
-  card.append(title,line,badge,details);
+  card.append(title,quote,meter,details);
   if (grade(pick.chance) === "GREEN" && !Number.isInteger(pick.line)) {
    const add = document.createElement("button");
    add.type = "button";
@@ -1864,6 +2004,8 @@ async function scanAndRankProps() {
  const status = document.getElementById("todayPropsStatus");
  const table = document.getElementById("todayPropsTable");
  rankButton.disabled = true;
+ rankButton.textContent = "Checking…";
+ updateSlateStats("—","—");
  sizeRecheck.disabled = true;
  findEntries.disabled = true;
  generateDifferent.disabled = true;
@@ -1903,6 +2045,7 @@ async function scanAndRankProps() {
   captureNBAResults(latestBoard?.prizePicks,latestBoard?.sportsbook,latestModel);
   checkNBAResults();
   rankButton.disabled = false;
+  rankButton.textContent = "Check for picks";
   sizeRecheck.disabled = false;
   estimateSource.disabled = false;
   findEntries.disabled = false;
