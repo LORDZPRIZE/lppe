@@ -826,7 +826,7 @@ async function loadNBAModel() {
  const controller = new AbortController();
  const timer = setTimeout(() => controller.abort(),40000);
  try {
-  const response = await fetch(API_URL+"/api/nba/model",{signal:controller.signal});
+  const response = await fetch("/api/nba/model",{signal:controller.signal});
   if (!response.ok) throw new Error("Model unavailable");
   const data = await response.json();
   if (!Array.isArray(data.players)) throw new Error("Unexpected response");
