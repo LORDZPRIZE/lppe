@@ -1816,6 +1816,15 @@ function renderTodayPicks() {
   updateSlateStats(board?.scheduled ? 0 : "—",0);
   status.textContent = board?.scheduled ? "Waiting for PrizePicks lines." :
    document.getElementById("prizePicksStatus").textContent || "Waiting for PrizePicks lines.";
+  if (board?.refresh?.status === "failed") {
+   const attemptedAt = new Date(board.refresh.attemptedAt);
+   if (Number.isFinite(attemptedAt.getTime())) {
+    status.textContent = "The scheduled PrizePicks refresh at " + attemptedAt.toLocaleTimeString([],{
+     hour:"numeric",minute:"2-digit",timeZoneName:"short"
+    }) + " failed. " + (board.refresh.reason || "No fresh lines were saved.") +
+     (board.refresh.upstreamStatus ? " (Provider HTTP " + board.refresh.upstreamStatus + ")" : "");
+   }
+  }
   showNextPrizePicksSnapshot(timing,now);
   return;
  }
