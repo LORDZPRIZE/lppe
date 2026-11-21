@@ -147,6 +147,7 @@ h1{font-size:21px}
   <div class="toolbar">
    <label>Number of picks <select id="suggestEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
    <button type="button" id="findBestEntries">Find Best Entries</button>
+   <button type="button" id="generateDifferentEntries" class="secondary" disabled>Generate Different Entries</button>
   </div>
   <p class="sub">Power break-even is the minimum all-hit total payout, rounded up to 0.01×, needed to cover the entry cost under these estimates. Flex uses the payout comparison below. Enter the actual PrizePicks payout to compare expected returns.</p>
   <p id="entrySuggestionStatus" class="sub" role="status"></p>
@@ -744,7 +745,7 @@ compareForm.addEventListener("submit",event=>{
 });
 
 const rankButton = document.getElementById("findTodayProps");
-function suggestEntries(candidates, size) {
+function suggestEntries(candidates, size, limit = 5) {
  const byGame = new Map();
  for (const [index,prop] of candidates.entries()) {
   if (prop.expiresAt <= Date.now() || !prop.gameId || !Number.isFinite(prop.chance) || prop.chance <= 0 || prop.chance > 1) continue;
@@ -766,7 +767,7 @@ function suggestEntries(candidates, size) {
    best[count] = options.sort((a,b)=>b.chance-a.chance).slice(0,30);
   }
  }
- return best[size].slice(0,5);
+ return best[size].slice(0,limit);
 }
 
 const findEntries = document.getElementById("findBestEntries");
@@ -774,13 +775,81 @@ const entrySuggestions = document.getElementById("entrySuggestions");
 const entrySuggestionStatus = document.getElementById("entrySuggestionStatus");
 const entrySize = document.getElementById("suggestEntrySize");
 
+const generateDifferent = document.getElementById("generateDifferentEntries");
+const entryBatchSize = 5;
+let suggestionPool = [];
+let shownSuggestions = [];
+let previousSuggestions = [];
+
+function distinctSuggestions(candidates,suggestions) {
+ const seen = new Set();
+ return suggestions.filter(suggestion => {
+  const key = JSON.stringify(suggestion.indices.map(index => {
+   const {player,market,side,line,tier} = candidates[index];
+   return JSON.stringify([player.trim().toLowerCase(),market.trim().toLowerCase(),side,line,tier]);
+  }).sort());
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+ });
+}
+
+function diversityBatch(remaining,previous,limit) {
+ const available = [...remaining];
+ const chosen = [];
+ while (chosen.length < limit && available.length) {
+  let bestIndex = 0;
+  let bestOverlap = Infinity;
+  for (const [index,suggestion] of available.entries()) {
+   const overlap = [...previous,...chosen].reduce((max,entry) =>
+    Math.max(max,suggestion.players.filter(player => entry.players.includes(player)).length),0);
+   if (overlap < bestOverlap) {
+    bestIndex = index;
+    bestOverlap = overlap;
+   }
+  }
+  chosen.push(...available.splice(bestIndex,1));
+ }
+ return chosen;
+}
+
+function unshownSuggestions(now) {
+ return suggestionPool.filter(suggestion => !shownSuggestions.includes(suggestion) &&
+  suggestion.indices.every(index => entryCandidates[index].expiresAt > now));
+}
+
 function renderSuggestions() {
+ suggestionPool = distinctSuggestions(entryCandidates,suggestEntries(entryCandidates,Number(entrySize.value),30));
+ shownSuggestions = [];
+ previousSuggestions = [];
+ showSuggestionBatch();
+}
+
+function showSuggestionBatch() {
+ const now = Date.now();
+ const remaining = unshownSuggestions(now);
+ if (!remaining.length && shownSuggestions.length) {
+  generateDifferent.disabled = true;
+  if (previousSuggestions.some(suggestion => suggestion.indices.some(index => entryCandidates[index].expiresAt <= now))) {
+   entrySuggestions.replaceChildren();
+   entrySuggestionStatus.textContent = "The available estimates have expired. Recheck the board for fresh lines.";
+  } else {
+   entrySuggestionStatus.textContent = "No more distinct suggestions were found in this scan.";
+  }
+  return;
+ }
+ const suggestions = shownSuggestions.length ? diversityBatch(remaining,previousSuggestions,entryBatchSize) :
+  remaining.slice(0,entryBatchSize);
+ shownSuggestions.push(...suggestions);
+ previousSuggestions = suggestions;
  entrySuggestions.replaceChildren();
  const size = Number(entrySize.value);
-  const suggestions = suggestEntries(entryCandidates,size);
-  entrySuggestionStatus.textContent = suggestions.length
-   ? "Showing " + suggestions.length + " suggestions for " + size + " picks."
-   : "This scan did not find " + size + " eligible props from different games and players.";
+ const remainingCount = unshownSuggestions(now).length;
+ generateDifferent.disabled = !remainingCount;
+ entrySuggestionStatus.textContent = suggestions.length ?
+  "Showing " + suggestions.length + " suggestions for " + size + " picks. " +
+   (remainingCount ? remainingCount + " additional combinations available from this scan." : "No more distinct combinations found in this scan.") :
+  "This scan did not find " + size + " eligible props from different games and players.";
   for (const suggestion of suggestions) {
    const item = document.createElement("li");
    item.textContent = suggestion.indices.map(index=>{
@@ -793,6 +862,10 @@ function renderSuggestions() {
    compare.className = "secondary";
    compare.textContent = "Use in payout comparison";
    compare.addEventListener("click",()=>{
+    if (suggestion.indices.some(index => entryCandidates[index].expiresAt <= Date.now())) {
+     entrySuggestionStatus.textContent = "That entry has expired. Recheck the board for fresh lines.";
+     return;
+    }
     for (const input of entrySelections.querySelectorAll("input")) {
      input.checked = suggestion.indices.includes(Number(input.value));
     }
@@ -1347,6 +1420,7 @@ for (const id of ["rankTier","rankSide","minBooks"]) {
 }
 findEntries.addEventListener("click",() => latestBoard ? useLatestBoard() : scanAndRankProps());
 entrySize.addEventListener("change",renderSuggestions);
+generateDifferent.addEventListener("click",showSuggestionBatch);
 
 async function scanAndRankProps() {
  if (rankButton.disabled) return false;
@@ -1357,6 +1431,7 @@ async function scanAndRankProps() {
  rankButton.disabled = true;
  sizeRecheck.disabled = true;
  findEntries.disabled = true;
+ generateDifferent.disabled = true;
  entrySize.disabled = true;
  table.hidden = true;
  status.textContent = "Checking PrizePicks for upcoming NBA lines…";
