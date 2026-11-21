@@ -54,7 +54,7 @@ function playerBoxScores(summary) {
 
 async function recentNBA(request, now = Date.now()) {
   const dates = [...new Set(Array.from({length:12},(_,day) => nbaDate(now + (1-day) * 86400000)))];
-  return cachedNBA(request,"model-v1/" + nbaDate(now) + "/" + encodeURIComponent(pacificSlate.format(now)),1800,async () => {
+  return cachedNBA(request,"model-v2/" + nbaDate(now) + "/" + encodeURIComponent(pacificSlate.format(now)),1800,async () => {
     const boards = await Promise.allSettled(dates.map(date => getJson(espnNBA + "/scoreboard?dates=" + date)));
     if (boards[1].status !== "fulfilled" || !Array.isArray(boards[1].value.events)) {
       throw new Error("NBA schedule unavailable");
@@ -85,8 +85,7 @@ async function recentNBA(request, now = Date.now()) {
     for (let offset = 0; offset < games.length; offset += 6) {
       await Promise.all(games.slice(offset,offset+6).map(async game => {
         try {
-          const rows = await cachedNBA(request,"box-v1/" + game.id,86400,async () =>
-            playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id))));
+          const rows = playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id)));
           for (const {id,player,team,minutes,values} of rows) {
             if (!teams.has(team)) continue;
             const key = id + ":" + team;

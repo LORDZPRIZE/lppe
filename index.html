@@ -274,52 +274,8 @@ function setAPIStatus(message, color) {
  el.textContent=message;
  el.style.color=color || "var(--muted)";
 }
- async function loadNBAProps() {
-  try {
-    setAPIStatus("Connecting to LPPE API…");
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    let response;
-    try { response = await fetch(API_URL + "/api/props", {signal:controller.signal}); }
-    finally { clearTimeout(timeout); }
 
-    if (!response.ok) {
-      throw new Error("API returned " + response.status);
-    }
 
-    const data = await response.json();
-
-    console.log("LPPE API response:", data);
-
-    if (!Array.isArray(data.props)) {
-      throw new Error("Invalid props response");
-    }
-
-    if (data.live !== true) {
-      setAPIStatus("API ONLINE • Independent NBA projections are not connected. Manual analyzer is available.", "var(--yellow)");
-      console.info("LPPE API connected; live NBA data is not available yet.");
-      return;
-    }
-    const incoming=data.props.filter(p=>p && typeof p.player==="string" && typeof p.market==="string" &&
-      Number.isFinite(p.line) && Number.isFinite(p.projection) && Number.isFinite(p.sd) && p.sd>0 &&
-      (p.side==="MORE" || p.side==="LESS"));
-    // Calculate estimates locally; never trust probability or HTML fields from a feed.
-    props=incoming.map((p,i)=>({
-      id:i+1,player:p.player,sport:"NBA",market:p.market,line:p.line,
-      projection:p.projection,sd:p.sd,side:p.side,
-      type:typeof p.type==="string"?p.type:"Standard",
-      source:typeof p.source==="string"?p.source:"API",
-      probability:calculate(p.line,p.projection,p.sd,p.side)
-    }));
-    selected = [];
-    render();
-    setAPIStatus("API ONLINE • "+props.length+" NBA props loaded. Estimates are not validated.", "var(--green)");
-  } catch (error) {
-    setAPIStatus("API UNAVAILABLE • Manual analyzer still works. Check connection and retry by refreshing.", "var(--red)");
-    console.error("LPPE API connection failed:", error);
-  }
-}
-  
 let props=[];
 let selected=[];
 let lastResult=null;
@@ -1096,6 +1052,7 @@ async function loadNBAModel() {
  section.hidden = false;
  document.getElementById("nbaModelTable").hidden = true;
  status.textContent = "Loading recent NBA box scores…";
+ setAPIStatus("Loading automatic NBA projections…");
  const controller = new AbortController();
  const timer = setTimeout(() => controller.abort(),40000);
  try {
@@ -1103,9 +1060,12 @@ async function loadNBAModel() {
   if (!response.ok) throw new Error("Model unavailable");
   const data = await response.json();
   if (!Array.isArray(data.players)) throw new Error("Unexpected response");
+  setAPIStatus(data.players.length ? "Automatic NBA projections loaded." :
+   "No automatic NBA projections available for the current slate.", data.players.length ? "var(--green)" : "var(--yellow)");
   return data;
  } catch {
   status.textContent = "NBA box scores are temporarily unavailable.";
+  setAPIStatus("Automatic NBA projections are temporarily unavailable.", "var(--yellow)");
  } finally {
   clearTimeout(timer);
  }
@@ -1441,7 +1401,7 @@ async function scanAndRankProps() {
  latestModel = null;
  renderWatchlist();
  estimateSource.disabled = true;
- document.getElementById("nbaModel").hidden = true;
+ const modelRequest = loadNBAModel();
  try {
   const prizePicks = await loadPrizePicksLines(true);
   if (!prizePicks) status.textContent = document.getElementById("prizePicksStatus").textContent;
@@ -1454,16 +1414,14 @@ async function scanAndRankProps() {
   if (prizePicks) latestBoard = {prizePicks,sportsbook,needsOdds};
   useLatestBoard();
   updatePrizePicksHealth(prizePicks);
-  if (!sportsbook?.length || !rankMarketProps(prizePicks.lines,sportsbook).some(prop => prop.chance !== null)) {
-   latestModel = await loadNBAModel();
-   if (latestModel) useLatestBoard();
-  }
-  captureNBAResults(prizePicks,sportsbook,latestModel);
-  checkNBAResults();
   return true;
  } catch (error) {
   status.textContent = error.message || "The prop comparison is temporarily unavailable.";
  } finally {
+  latestModel = await modelRequest;
+  if (latestModel) useLatestBoard();
+  captureNBAResults(latestBoard?.prizePicks,latestBoard?.sportsbook,latestModel);
+  checkNBAResults();
   rankButton.disabled = false;
   sizeRecheck.disabled = false;
   estimateSource.disabled = false;
@@ -1567,7 +1525,6 @@ renderResultsLedger(readResultsLedger());
 renderWatchlist();
 updatePrizePicksHealth();
 checkNBAResults();
-loadNBAProps();
 scanAndRankProps();
 setInterval(() => {
  if (!document.hidden && !entrySelections.querySelector("input:checked") &&
