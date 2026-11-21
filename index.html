@@ -64,6 +64,11 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 .formgrid{grid-template-columns:repeat(2,1fr)}
 h1{font-size:21px}
 }
+.pick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(245px,100%),1fr));gap:12px}
+.pick-grid .card{min-width:0}
+.pick-grid h3{font-size:16px;margin:0 0 8px;overflow-wrap:anywhere}
+.pick-grid p{margin:8px 0}
+.pick-grid summary{cursor:pointer;color:var(--blue)}
 </style>
 </head>
 <body>
@@ -76,7 +81,15 @@ h1{font-size:21px}
 <main>
  <div id="apiStatus" class="notice" role="status" aria-live="polite">Checking LPPE API connection…</div>
 
- <section class="section">
+ <section class="section" aria-labelledby="todayPicksHeading">
+  <h2 id="todayPicksHeading">Today’s NBA Picks</h2>
+  <p id="todayPicksStatus" class="sub" role="status">Checking for fresh PrizePicks lines…</p>
+  <p id="todayPicksTiming" class="sub" hidden></p>
+  <div id="todayPicksCards" class="pick-grid"></div>
+  <p><a href="#nbaPropRankings" style="color:var(--blue)">Filters and full prop board</a></p>
+ </section>
+
+ <section class="section" id="nbaPropRankings">
   <h2>Today’s NBA Prop Rankings</h2>
   <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
   <button type="button" id="findTodayProps">Find Today’s Props</button>
@@ -999,6 +1012,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
   const markets = modelMarkets.map((market,index) => {
    const values = games.map(game => game.values[index]);
    return {player:player.player,team:player.team,market,minutes,games:games.length,values,
+    recentMinutes:games.map(game => game.minutes),
     projection:values.reduce((sum,value) => sum + value,0) / values.length};
   });
   byPlayer.set(key,markets);
@@ -1020,7 +1034,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    if (filters.tier === "no-goblins" ? tier === "goblin" : filters.tier !== "all" && tier !== filters.tier) continue;
    if (tier === "demon" && item.side !== "more") continue;
    const hits = item.side === "more" ? more : less;
-   sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,observedAt:prop.observedAt,tier:item.tier,side:item.side.toUpperCase(),chance:(hits+2)/(more+less+4)});
+   sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,observedAt:prop.observedAt,tier:item.tier,side:item.side.toUpperCase(),hits,ties:model.games-more-less,chance:(hits+2)/(more+less+4)});
   }
  }
  return {sides:sides.sort((a,b) => b.chance-a.chance),
@@ -1369,7 +1383,103 @@ function renderWatchlist() {
  }
 }
 
+const todayPicksLimit = 8;
+let todayPicksExpiry;
+
+function pickKey(prop) {
+ return JSON.stringify([prop.id,modelPlayerKey(prop.player),modelTeamKey(prop.team?.trim().toUpperCase()),
+  supportedMarkets.get(prop.market.trim().toLowerCase()),prop.eventStart,prop.line,prop.side,
+  prop.tier?.trim().toLowerCase()]);
+}
+
+function formatPickEstimate(chance) {
+ return (chance*100).toFixed(1) + "%";
+}
+
+function renderTodayPicks() {
+ clearTimeout(todayPicksExpiry);
+ const status = document.getElementById("todayPicksStatus");
+ const timing = document.getElementById("todayPicksTiming");
+ const cards = document.getElementById("todayPicksCards");
+ cards.replaceChildren();
+ timing.hidden = true;
+ const board = latestBoard?.prizePicks;
+ if (!board || board.savedBoard || board.scheduled) {
+  status.textContent = "Waiting for fresh PrizePicks lines. " + document.getElementById("prizePicksStatus").textContent;
+  return;
+ }
+
+ const now = Date.now();
+ const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
+ const today = pacificDay.format(now);
+ const fresh = board.lines.filter(prop => !comparisonIssue(prop,now,today));
+ if (!fresh.length) {
+  status.textContent = "No fresh, supported lines for upcoming games today.";
+  return;
+ }
+ const modeled = latestModel ? estimateNBAProps(latestModel,{lines:fresh},now,filters).sides : [];
+ const priced = latestBoard.sportsbook?.length ?
+  rankMarketProps(fresh,latestBoard.sportsbook,now,filters).filter(prop => prop.chance !== null) : [];
+ const markets = new Map(priced.map(prop => [pickKey(prop),prop]));
+ const models = new Map(modeled.map(prop => [pickKey(prop),prop]));
+ const primary = estimateSource.value === "auto" && priced.length ? priced : modeled;
+ const primaryName = primary === priced ? "Market estimate" : "Stats model";
+ const picks = primary.filter(prop => prop.chance > .5).slice(0,todayPicksLimit);
+ status.textContent = picks.length ?
+  "Showing " + picks.length + " sides above 50%, ranked by " + primaryName.toLowerCase() + ". Estimates are before payouts." :
+  "No comparable sides above 50% for these filters yet.";
+ const latestLine = Math.max(...fresh.map(prop => Date.parse(prop.observedAt)));
+ timing.textContent = "Newest line in this scan: " + new Date(latestLine).toLocaleTimeString([],{
+  hour:"numeric",minute:"2-digit",timeZoneName:"short"
+ }) + ". Lines expire after 30 minutes or at tipoff. The open dashboard checks every five minutes.";
+ timing.hidden = false;
+
+ const expiries = fresh.map(prop => Math.min(Date.parse(prop.observedAt)+maxQuoteAge,Date.parse(prop.eventStart)));
+ for (const pick of picks) {
+  const market = markets.get(pickKey(pick));
+  const model = models.get(pickKey(pick));
+  if (market) expiries.push(market.expiresAt);
+  const card = document.createElement("article");
+  card.className = "card";
+  const title = document.createElement("h3");
+  title.textContent = pick.player + (pick.team ? " · " + pick.team : "");
+  const line = document.createElement("p");
+  line.textContent = pick.side + " " + pick.line + " " + pick.market + (pick.tier ? " · " + pick.tier : "");
+  const badge = document.createElement("span");
+  badge.className = "badge " + grade(pick.chance);
+  badge.textContent = primaryName + " · " + formatPickEstimate(pick.chance) +
+   (Number.isInteger(pick.line) ? " if no tie" : "");
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "Why this pick?";
+  const marketNote = document.createElement("p");
+  marketNote.textContent = market ? "Market: " + formatPickEstimate(market.chance) + " · " + market.books + " books" :
+   "Market estimate unavailable.";
+  const modelNote = document.createElement("p");
+  modelNote.textContent = model ? "Stats model: " + formatPickEstimate(model.chance) + " · projected " +
+   model.projection.toFixed(1) + " · " + model.minutes.toFixed(1) + " minutes per game over " + model.games + " games." :
+   "Stats model estimate unavailable.";
+  details.append(summary,marketNote,modelNote);
+  if (model) {
+   const recent = document.createElement("p");
+   recent.textContent = "Recent results: " + model.values.join(", ") + ". Minutes: " + model.recentMinutes.map(value => value.toFixed(0)).join(", ") + ". Cleared this side in " +
+    model.hits + " of " + model.games + " games" + (model.ties ? ", with " + model.ties + " ties." : ".");
+   details.append(recent);
+  }
+  if (market && model && (market.chance-.5)*(model.chance-.5) < 0) {
+   const disagreement = document.createElement("p");
+   disagreement.textContent = "The market and stats model disagree on this side.";
+   details.append(disagreement);
+  }
+  card.append(title,line,badge,details);
+  cards.append(card);
+ }
+ const nextExpiry = Math.min(...expiries);
+ todayPicksExpiry = setTimeout(renderTodayPicks,Math.max(1,nextExpiry-now+1));
+}
+
 function useLatestBoard() {
+ renderTodayPicks();
  renderWatchlist();
  if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds);
  if (latestModel) renderNBAModel(latestBoard?.prizePicks,{
@@ -1401,6 +1511,10 @@ async function scanAndRankProps() {
  latestBoard = null;
  latestModel = null;
  renderWatchlist();
+ clearTimeout(todayPicksExpiry);
+ document.getElementById("todayPicksCards").replaceChildren();
+ document.getElementById("todayPicksTiming").hidden = true;
+ document.getElementById("todayPicksStatus").textContent = "Checking for fresh PrizePicks lines…";
  estimateSource.disabled = true;
  const modelRequest = loadNBAModel();
  try {
@@ -1420,7 +1534,7 @@ async function scanAndRankProps() {
   status.textContent = error.message || "The prop comparison is temporarily unavailable.";
  } finally {
   latestModel = await modelRequest;
-  if (latestModel) useLatestBoard();
+  useLatestBoard();
   captureNBAResults(latestBoard?.prizePicks,latestBoard?.sportsbook,latestModel);
   checkNBAResults();
   rankButton.disabled = false;
