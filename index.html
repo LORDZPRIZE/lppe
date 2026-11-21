@@ -68,6 +68,10 @@ h1{font-size:21px}
 .pick-grid .card{min-width:0}
 .pick-grid h3{font-size:16px;margin:0 0 8px;overflow-wrap:anywhere}
 .pick-grid p{margin:8px 0}
+.pick-grid details{margin-top:12px}
+.pick-grid .tablewrap{margin-top:8px}
+.pick-grid table{min-width:0}
+.pick-grid td,.pick-grid th{padding:7px}
 .pick-grid summary{cursor:pointer;color:var(--blue)}
 </style>
 </head>
@@ -83,6 +87,11 @@ h1{font-size:21px}
 
  <section class="section" aria-labelledby="todayPicksHeading">
   <h2 id="todayPicksHeading">Today’s NBA Picks</h2>
+  <div class="toolbar">
+   <label>Player <input id="picksPlayer" type="search" placeholder="Search player"></label>
+   <label>Market <select id="picksMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
+   <label>Recent minutes <select id="picksMinutes"><option value="0">Any</option><option value="20">20+ per game</option><option value="25">25+ per game</option><option value="30">30+ per game</option><option value="35">35+ per game</option></select></label>
+  </div>
   <p id="todayPicksStatus" class="sub" role="status">Checking for fresh PrizePicks lines…</p>
   <p id="todayPicksTiming" class="sub" hidden></p>
   <div id="todayPicksCards" class="pick-grid"></div>
@@ -131,7 +140,7 @@ h1{font-size:21px}
  <section class="section" aria-labelledby="nbaResultsHeading">
   <h2 id="nbaResultsHeading">NBA Results Scorecard</h2>
   <p class="sub">This browser saves the first pregame estimate for each exact line and source during a scan. LPPE checks final NBA box scores while the dashboard is open. These are stat results. PrizePicks can apply its own void and payout rules.</p>
-  <label>Market <select id="nbaResultsMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option></select></label>
+  <label>Market <select id="nbaResultsMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
   <p class="sub">Calibration gap is observed hit rate minus average estimate. Forecast error averages the squared error for decided sides. Lower is better. A constant 50% forecast scores 0.250. Several sides can come from the same game.</p>
   <p id="nbaResultsStatus" class="sub" role="status"></p>
   <div class="tablewrap">
@@ -510,7 +519,11 @@ async function loadPrizePicksLines(scan = false) {
 document.getElementById("refreshPrizePicks").addEventListener("click", () => loadPrizePicksLines());
 const supportedMarkets = new Map([
  ["points","points"],["rebounds","rebounds"],["assists","assists"],
- ["three-pointers","three-pointers"],["3-pt made","three-pointers"]
+ ["three-pointers","three-pointers"],["3-pt made","three-pointers"],
+ ["points + rebounds + assists","points + rebounds + assists"],["pts+rebs+asts","points + rebounds + assists"],
+ ["points + rebounds","points + rebounds"],["pts+rebs","points + rebounds"],
+ ["points + assists","points + assists"],["pts+asts","points + assists"],
+ ["rebounds + assists","rebounds + assists"],["rebs+asts","rebounds + assists"]
 ]);
 const pacificDay = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angeles",dateStyle:"short"});
 const maxQuoteAge = 30 * 60 * 1000;
@@ -992,7 +1005,15 @@ estimateSource.addEventListener("change",() => {
 let latestBoard = null;
 let latestModel = null;
 
-const modelMarkets = ["points","rebounds","assists","three-pointers"];
+const modelMarketColumns = {
+ points:[0],rebounds:[1],assists:[2],"three-pointers":[3],
+ "points + rebounds + assists":[0,1,2],"points + rebounds":[0,1],
+ "points + assists":[0,2],"rebounds + assists":[1,2]
+};
+const modelMarkets = Object.keys(modelMarketColumns);
+function nbaStatValue(values,market) {
+ return modelMarketColumns[market]?.reduce((total,column) => total + values[column],0);
+}
 const modelPlayerKey = player => player.trim().normalize("NFD").replace(/\p{Mark}/gu,"")
  .toLowerCase().replace(/[^a-z0-9]/g,"");
 const modelTeamKey = team => ({NY:"NYK",NO:"NOP",SA:"SAS",GS:"GSW",UTAH:"UTA",WSH:"WAS",BKN:"BKN",BRK:"BKN",PHO:"PHX"})[team] || team;
@@ -1009,8 +1030,8 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    byPlayer.set(key,null);
    continue;
   }
-  const markets = modelMarkets.map((market,index) => {
-   const values = games.map(game => game.values[index]);
+  const markets = modelMarkets.map(market => {
+   const values = games.map(game => nbaStatValue(game.values,market));
    return {player:player.player,team:player.team,market,minutes,games:games.length,values,
     recentMinutes:games.map(game => game.minutes),
     projection:values.reduce((sum,value) => sum + value,0) / values.length};
@@ -1034,7 +1055,9 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    if (filters.tier === "no-goblins" ? tier === "goblin" : filters.tier !== "all" && tier !== filters.tier) continue;
    if (tier === "demon" && item.side !== "more") continue;
    const hits = item.side === "more" ? more : less;
-   sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,observedAt:prop.observedAt,tier:item.tier,side:item.side.toUpperCase(),hits,ties:model.games-more-less,chance:(hits+2)/(more+less+4)});
+   sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,
+    observedAt:prop.observedAt,openingLine:prop.openingLine,tier:item.tier,side:item.side.toUpperCase(),
+    hits,ties:model.games-more-less,chance:(hits+2)/(more+less+4)});
   }
  }
  return {sides:sides.sort((a,b) => b.chance-a.chance),
@@ -1151,7 +1174,7 @@ function gradeNBAEstimate(entry,results) {
   .flatMap(game => game.players.filter(player =>
    modelTeamKey(player.team) === modelTeamKey(entry.team) && modelPlayerKey(player.player) === modelPlayerKey(entry.player)));
  if (nearby.length !== 1) return;
- const value = nearby[0].values[modelMarkets.indexOf(entry.market)];
+ const value = nbaStatValue(nearby[0].values,entry.market);
  if (!Number.isFinite(value)) return;
  const outcome = value === entry.line ? "tie" :
   (entry.side === "MORE" ? value > entry.line : value < entry.line) ? "win" : "loss";
@@ -1396,6 +1419,59 @@ function formatPickEstimate(chance) {
  return (chance*100).toFixed(1) + "%";
 }
 
+function pickGroupKey(prop) {
+ return JSON.stringify([modelPlayerKey(prop.player),modelTeamKey(prop.team?.trim().toUpperCase()),
+  supportedMarkets.get(prop.market.trim().toLowerCase()),prop.eventStart]);
+}
+
+function alternateLineGroups(priced,modeled) {
+ const groups = new Map();
+ for (const [source,offers] of [["market",priced],["model",modeled]]) {
+  for (const offer of offers) {
+   const groupKey = pickGroupKey(offer);
+   if (!groups.has(groupKey)) groups.set(groupKey,new Map());
+   const lines = groups.get(groupKey);
+   const tier = offer.tier?.trim().toLowerCase() || "";
+   const lineKey = JSON.stringify([offer.line,offer.side,tier]);
+   if (!lines.has(lineKey)) lines.set(lineKey,{line:offer.line,side:offer.side,tier});
+   const row = lines.get(lineKey);
+   const estimate = row[source];
+   if (!estimate || Date.parse(offer.observedAt) > Date.parse(estimate.observedAt)) row[source] = offer;
+  }
+ }
+ return groups;
+}
+
+function renderAlternateLines(pick,groups) {
+ const offers = [...(groups.get(pickGroupKey(pick))?.values() || [])];
+ if (!offers.some(offer => offer.line !== pick.line)) return;
+ const details = document.createElement("details");
+ const summary = document.createElement("summary");
+ summary.textContent = "Compare available lines";
+ const wrap = document.createElement("div");
+ wrap.className = "tablewrap";
+ const table = document.createElement("table");
+ const headings = table.createTHead().insertRow();
+ for (const label of ["Line","Side","Tier","Market","Stats"]) {
+  const heading = document.createElement("th");
+  heading.scope = "col";
+  heading.textContent = label;
+  headings.append(heading);
+ }
+ const body = table.createTBody();
+ for (const offer of offers.sort((a,b) => a.line-b.line || a.side.localeCompare(b.side) || a.tier.localeCompare(b.tier))) {
+  const row = body.insertRow();
+  const estimate = source => source ? formatPickEstimate(source.chance) +
+   (Number.isInteger(offer.line) ? " if no tie" : "") : "—";
+  for (const value of [offer.line,offer.side,offer.tier || "—",estimate(offer.market),estimate(offer.model)]) {
+   row.insertCell().textContent = value;
+  }
+ }
+ wrap.append(table);
+ details.append(summary,wrap);
+ return details;
+}
+
 function renderTodayPicks() {
  clearTimeout(todayPicksExpiry);
  const status = document.getElementById("todayPicksStatus");
@@ -1424,7 +1500,14 @@ function renderTodayPicks() {
  const models = new Map(modeled.map(prop => [pickKey(prop),prop]));
  const primary = estimateSource.value === "auto" && priced.length ? priced : modeled;
  const primaryName = primary === priced ? "Market estimate" : "Stats model";
- const picks = primary.filter(prop => prop.chance > .5).slice(0,todayPicksLimit);
+ const alternateLines = alternateLineGroups(priced,modeled);
+ const player = modelPlayerKey(document.getElementById("picksPlayer").value);
+ const marketFilter = document.getElementById("picksMarket").value;
+ const minMinutes = Number(document.getElementById("picksMinutes").value);
+ const picks = primary.filter(prop => prop.chance > .5 &&
+  modelPlayerKey(prop.player).includes(player) &&
+  (!marketFilter || supportedMarkets.get(prop.market.trim().toLowerCase()) === marketFilter) &&
+  (!minMinutes || (models.get(pickKey(prop))?.minutes ?? 0) >= minMinutes)).slice(0,todayPicksLimit);
  status.textContent = picks.length ?
   "Showing " + picks.length + " sides above 50%, ranked by " + primaryName.toLowerCase() + ". Estimates are before payouts." :
   "No comparable sides above 50% for these filters yet.";
@@ -1435,10 +1518,11 @@ function renderTodayPicks() {
  timing.hidden = false;
 
  const expiries = fresh.map(prop => Math.min(Date.parse(prop.observedAt)+maxQuoteAge,Date.parse(prop.eventStart)));
+ expiries.push(...priced.map(prop => prop.expiresAt));
  for (const pick of picks) {
   const market = markets.get(pickKey(pick));
   const model = models.get(pickKey(pick));
-  if (market) expiries.push(market.expiresAt);
+
   const card = document.createElement("article");
   card.className = "card";
   const title = document.createElement("h3");
@@ -1471,7 +1555,14 @@ function renderTodayPicks() {
    disagreement.textContent = "The market and stats model disagree on this side.";
    details.append(disagreement);
   }
+  if (Number.isFinite(pick.openingLine)) {
+   const movement = document.createElement("p");
+   movement.textContent = "PrizePicks line: " + pick.openingLine + " at opening → " + pick.line + " at scan.";
+   details.append(movement);
+  }
   card.append(title,line,badge,details);
+  const alternates = renderAlternateLines(pick,alternateLines);
+  if (alternates) card.append(alternates);
   cards.append(card);
  }
  const nextExpiry = Math.min(...expiries);
@@ -1488,6 +1579,10 @@ function useLatestBoard() {
 }
 for (const id of ["rankTier","rankSide","minBooks"]) {
  document.getElementById(id).addEventListener("change",useLatestBoard);
+}
+document.getElementById("picksPlayer").addEventListener("input",renderTodayPicks);
+for (const id of ["picksMarket","picksMinutes"]) {
+ document.getElementById(id).addEventListener("change",renderTodayPicks);
 }
 findEntries.addEventListener("click",() => latestBoard ? useLatestBoard() : scanAndRankProps());
 entrySize.addEventListener("change",renderSuggestions);
@@ -1523,7 +1618,8 @@ async function scanAndRankProps() {
   const now = Date.now();
   const today = pacificDay.format(now);
   const needsOdds = estimateSource.value === "auto" && prizePicks && !prizePicks.savedBoard &&
-   prizePicks.lines.some(prop => !comparisonIssue(prop,now,today));
+   prizePicks.lines.some(prop => !comparisonIssue(prop,now,today) &&
+    modelMarketColumns[supportedMarkets.get(prop.market.toLowerCase())].length === 1);
   if (needsOdds) status.textContent = "Checking sportsbook quotes…";
   const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
   if (prizePicks) latestBoard = {prizePicks,sportsbook,needsOdds};
