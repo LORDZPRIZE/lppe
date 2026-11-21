@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FanDuel NBA Optimizer | LPPE</title>
+<style>
+:root{color-scheme:dark;font-family:Arial,sans-serif;background:#0b1020;color:#f4f7ff}
+*{box-sizing:border-box}body{margin:0}main,header{padding:22px max(5vw,16px)}
+header{background:#10182b;border-bottom:1px solid #293650}main{max-width:1200px;margin:auto}
+h1{font-size:clamp(24px,5vw,34px);margin:.55em 0}h2{font-size:19px}
+a{color:#9fc5ff}p{line-height:1.5}.muted{color:#aebbd2;font-size:.875rem}
+section{background:#141c30;border:1px solid #293650;border-radius:12px;padding:18px;margin-bottom:18px}
+.controls{display:flex;flex-wrap:wrap;gap:14px;align-items:end}label{display:grid;gap:6px;font-size:.875rem}
+input,select,button{font:inherit;color:inherit;background:#1b2740;border:1px solid #40516d;border-radius:8px;padding:9px;max-width:100%}
+input[type=number]{width:7.5em}button{cursor:pointer}button.primary{color:#07150f;background:#20c982;font-weight:bold}
+button:disabled{opacity:.45;cursor:default}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #9fc5ff;outline-offset:3px}
+.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:640px}
+td,th{text-align:left;padding:10px;border-bottom:1px solid #293650;font-size:.875rem}
+details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
+#fdStatus{min-height:1.5em}.results-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header>
+ <a href="/">← LPPE PrizePicks dashboard</a>
+ <h1>FanDuel NBA Classic Optimizer</h1>
+ <p class="muted">$60,000 cap · PG, SG, SF, PF, C, G/F, F/C and two UTIL slots</p>
+</header>
+<main>
+ <section aria-labelledby="fdImportHeading">
+  <h2 id="fdImportHeading">Import a FanDuel slate</h2>
+  <form id="fdImport" class="controls">
+   <label>FanDuel salary CSV <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>
+   <label>Projections CSV (optional) <input id="fdProjections" type="file" accept=".csv,text/csv"></label>
+   <button type="submit" class="primary">Load player pool</button>
+  </form>
+  <p class="muted">For custom projections, include <strong>Projection</strong> and either <strong>ID</strong> or <strong>Name</strong> and <strong>Team</strong>. You can download a CSV from <a href="https://www.fanduel.com/research/nba/fantasy/dfs-projections">FanDuel Research</a> and match it to the same slate. Without a custom projection, LPPE uses the salary file’s projection or historical FanDuel FPPG when available.</p>
+  <p id="fdStatus" role="status" aria-live="polite"></p>
+ </section>
+ <section id="fdPool" hidden aria-labelledby="fdPoolHeading">
+  <h2 id="fdPoolHeading">Player pool</h2>
+  <div class="controls">
+   <label>Find a player or team <input id="fdSearch" type="search"></label>
+   <label>Lineups <input id="fdCount" type="number" min="1" max="20" value="5" required></label>
+   <label>Minimum different players per lineup <input id="fdDifference" type="number" min="1" max="9" value="2" required></label>
+   <button id="fdBuild" class="primary" type="button">Build lineups</button>
+  </div>
+  <p class="muted">Lock or exclude players before building. Lineups use at most four players per team. Review current player availability before using a lineup.</p>
+  <div class="tablewrap"><table><thead><tr><th>Player</th><th>Position</th><th>Team</th><th>Salary</th><th>FPTS</th><th>Source</th><th>Injury status</th><th>Selection</th></tr></thead>
+   <tbody id="fdPlayers"></tbody></table></div>
+ </section>
+ <section id="fdResultsPanel" hidden aria-labelledby="fdResultsHeading">
+  <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdExport" disabled>Download review CSV</button></div>
+  <p id="fdBuildStatus" role="status"></p>
+  <div id="fdResults"></div>
+ </section>
+</main>
+<script type="module" src="/fanduel-ui.js"></script>
+</body>
+</html>
