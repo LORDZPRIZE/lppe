@@ -3,6 +3,7 @@ import { importPlayers, reviewCSV, roster } from "./fanduel-optimizer.js";
 const byId = id => document.getElementById(id);
 const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const importForm = byId("fdImport");
+const autoLoad = byId("fdAutoLoad");
 const salaries = byId("fdSalaries");
 const projections = byId("fdProjections");
 const search = byId("fdSearch");
@@ -13,6 +14,8 @@ const exportButton = byId("fdExport");
 let players = [];
 let lineups = [];
 let optimizer;
+let autoRequest;
+let slateLockAt = null;
 
 function clearLineups() {
   optimizer?.terminate();
@@ -54,6 +57,10 @@ function renderPlayers() {
 
 importForm.addEventListener("submit",async event => {
   event.preventDefault();
+  autoRequest?.abort();
+  autoRequest = undefined;
+  autoLoad.disabled = true;
+  slateLockAt = null;
   importForm.querySelector("button").disabled = true;
   clearLineups();
   byId("fdPool").hidden = true;
@@ -76,6 +83,7 @@ importForm.addEventListener("submit",async event => {
     byId("fdStatus").textContent = error.message || "Could not read the player pool.";
   } finally {
     importForm.querySelector("button").disabled = false;
+    autoLoad.disabled = false;
   }
 });
 
@@ -116,6 +124,11 @@ function renderLineups(result,requested) {
 }
 
 build.addEventListener("click",() => {
+  if (slateLockAt && slateLockAt <= Date.now()) {
+    clearLineups();
+    byId("fdStatus").textContent = "The automatically loaded slate has reached its first game start. Load another available pool or import a different contest.";
+    return;
+  }
   if (!count.reportValidity() || !difference.reportValidity()) return;
   clearLineups();
   byId("fdResultsPanel").hidden = false;
@@ -130,7 +143,9 @@ build.addEventListener("click",() => {
   optimizer = new Worker("/fanduel-worker.js",{type:"module"});
   optimizer.addEventListener("message",({data}) => {
     finish();
-    if (data.error) byId("fdBuildStatus").textContent = data.error;
+    if (slateLockAt && slateLockAt <= Date.now()) {
+      byId("fdBuildStatus").textContent = "The slate reached its first game start during the search.";
+    } else if (data.error) byId("fdBuildStatus").textContent = data.error;
     else renderLineups(data,requested);
   });
   optimizer.addEventListener("error",() => {
@@ -139,6 +154,45 @@ build.addEventListener("click",() => {
   });
   optimizer.postMessage({players,count:requested,difference:difference.valueAsNumber});
 });
+async function loadPublicPool() {
+  autoRequest?.abort();
+  const request = new AbortController();
+  autoRequest = request;
+  autoLoad.disabled = true;
+  byId("fdStatus").textContent = "Looking for an upcoming FanDuel player pool…";
+  const timeout = setTimeout(()=>request.abort(),25000);
+  try {
+    const response = await fetch("/api/nba/fanduel",{signal:request.signal});
+    const data = await response.json();
+    if (autoRequest !== request || request.signal.aborted) return;
+    if (!response.ok) throw new Error(data.error || "No public FanDuel player pool is available.");
+    if (!Array.isArray(data.players) || !(data.lockAt > Date.now())) throw new Error("The public pool has expired.");
+    clearLineups();
+    slateLockAt = data.lockAt;
+    players = data.players;
+    const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
+    const baseline = data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
+    byId("fdStatus").textContent = data.label+" · "+data.date+" · "+players.length+" players across "+data.gameCount+
+      " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+baseline;
+    byId("fdPool").hidden = false;
+    renderPlayers();
+    build.click();
+  } catch (error) {
+    if (autoRequest !== request) return;
+    byId("fdStatus").textContent = request.signal.aborted ? "Automatic slate loading timed out. You can import a FanDuel CSV." :
+      error.message || "Automatic slate loading is unavailable.";
+    if (!players.length) byId("fdManualImport").open = true;
+  } finally {
+    clearTimeout(timeout);
+    if (autoRequest === request) {
+      autoRequest = undefined;
+      autoLoad.disabled = false;
+    }
+  }
+}
+autoLoad.addEventListener("click",loadPublicPool);
+loadPublicPool();
+
 search.addEventListener("input",renderPlayers);
 count.addEventListener("change",clearLineups);
 difference.addEventListener("change",clearLineups);
