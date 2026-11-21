@@ -913,11 +913,11 @@ function renderPayoutFields() {
 }
 
 function refreshEntryCandidates(matches) {
- entryCandidates = matches.filter(p=>!Number.isInteger(p.line));
+ entryCandidates = matches.filter(p=>grade(p.chance) === "GREEN" && !Number.isInteger(p.line));
  entrySelections.replaceChildren();
  compareForm.hidden = true;
  if (!entryCandidates.length) {
-  entryCompareStatus.textContent = "No eligible half-point lines are available for entry comparison.";
+  entryCompareStatus.textContent = "No fresh GREEN half-point lines are available for entry comparison.";
   return;
  }
  const list = document.createElement("details");
@@ -1233,7 +1233,9 @@ function renderSizeComparison() {
    row.insertCell().textContent = entry;
    row.insertCell().textContent = picks.map(prop=>prop.player+" "+prop.side+" "+prop.line+" "+prop.market+" ("+prop.tier+")").join(" · ");
    row.insertCell().textContent = (distribution.at(-1)*100).toFixed(1) + "%";
-   row.insertCell().textContent = format === "power" ? powerBreakEven(distribution.at(-1)) : "—";
+   const breakEven = row.insertCell();
+   breakEven.textContent = format === "power" ? powerBreakEven(distribution.at(-1)) : "—";
+   if (format === "power") breakEven.title = "Minimum all-hit payout before the probability buffer";
    const inputs = sizePayoutFields(entry,format,size,row.insertCell());
    sizeComparison.push({entry,distribution,probabilities,inputs,output:row.insertCell(),
     stress:row.insertCell(),decision:row.insertCell(),expiresAt:Math.min(...picks.map(prop=>prop.expiresAt))});
@@ -1251,7 +1253,8 @@ document.addEventListener("visibilitychange",() => {
 });
 
 const estimateSource = document.getElementById("estimateSource");
-try { estimateSource.value = localStorage.getItem("lppe-estimate-source") === "auto" ? "auto" : "stats"; } catch {}
+estimateSource.value = "auto";
+try { if (localStorage.getItem("lppe-estimate-source") === "stats") estimateSource.value = "stats"; } catch {}
 estimateSource.addEventListener("change",() => {
  try { localStorage.setItem("lppe-estimate-source",estimateSource.value); } catch {}
  scanAndRankProps();
@@ -1276,7 +1279,9 @@ function estimateNBAProps(data,prizePicks,now,filters) {
  const byPlayer = new Map();
  const projections = [];
  for (const player of data.players) {
-  const games = player.games.filter(game => Date.parse(game.date) < now && now - Date.parse(game.date) <= 11*86400000);
+  const completed = player.games.filter(game => Date.parse(game.date) < now)
+   .sort((a,b) => Date.parse(b.date)-Date.parse(a.date));
+  const games = completed.filter(game => now - Date.parse(game.date) <= 11*86400000);
   if (games.length < 4) continue;
   const minutes = games.reduce((sum,game) => sum + game.minutes,0) / games.length;
   const key = modelPlayerKey(player.player) + ":" + modelTeamKey(player.team);
@@ -1288,6 +1293,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    const values = games.map(game => nbaStatValue(game.values,market));
    return {player:player.player,team:player.team,market,minutes,games:games.length,values,
     recentMinutes:games.map(game => game.minutes),
+    researchGames:completed.map(game => ({value:nbaStatValue(game.values,market),minutes:game.minutes})),
     projection:values.reduce((sum,value) => sum + value,0) / values.length};
   });
   byPlayer.set(key,markets);
@@ -1422,6 +1428,9 @@ function recordNBAEstimates(ledger,props,source,now) {
   if (prop.chance >= .6 && !entry.green) {
    entry.green = {chance:prop.chance,observed,saved:now};
   }
+  if (entry.green && source === "Sportsbook" && now > entry.green.saved && now >= start-15*60*1000) {
+   entry.nearTipoff = {chance:prop.chance,saved:now};
+  }
  }
 }
 
@@ -1476,7 +1485,8 @@ function renderResultsLedger(ledger,warning = "") {
   const result = Number.isFinite(row.value) ? " (" + row.value + ")" : "";
   item.textContent = row.player + " · " + row.side + " " + row.line + " " + row.market + tier +
    " · " + (row.chance*100).toFixed(1) + "% · " + row.source +
-   " · Recorded " + new Date(row.saved).toLocaleString() + " · " + outcome + result;
+   " · Recorded " + new Date(row.saved).toLocaleString() + " · " + outcome + result +
+   (row.nearTipoff ? " · Same-line consensus near tipoff " + (row.nearTipoff.chance*100).toFixed(1) + "%" : "");
   log.append(item);
  }
  if (!recent.length) {
@@ -1533,12 +1543,14 @@ function captureNBAResults(prizePicks,sportsbook,model) {
 
 function makeGreenBenchmarkCSV(entries,market) {
  const rows = [["Platform","Sport","Source","Player","Team","Market","Line","Side","Tier",
-  "Estimated probability","Line observed UTC","First GREEN UTC","Game start UTC","Outcome","Final stat"]];
+  "Estimated probability","Line observed UTC","First GREEN UTC","Game start UTC","Outcome","Final stat",
+  "Same-line consensus near tipoff","Consensus recorded UTC"]];
  for (const row of Object.values(entries)) {
   if (!row.green || (market && row.market !== market)) continue;
   rows.push(["PrizePicks","NBA",row.source,row.player,row.team,row.market,row.line,row.side,row.tier,
    row.green.chance,new Date(row.green.observed).toISOString(),new Date(row.green.saved).toISOString(),
-   new Date(row.start).toISOString(),row.outcome === "tie" ? "push" : row.outcome ?? "ungraded",row.value ?? ""]);
+   new Date(row.start).toISOString(),row.outcome === "tie" ? "push" : row.outcome ?? "ungraded",row.value ?? "",
+   row.nearTipoff?.chance ?? "",row.nearTipoff ? new Date(row.nearTipoff.saved).toISOString() : ""]);
  }
  return rows.map(row => row.map(value => {
   const cell = String(value ?? "");
@@ -1913,6 +1925,17 @@ function updateSlateStats(freshLines,greenPicks) {
  document.getElementById("slateGreenPicks").textContent = greenPicks;
 }
 
+function recentPropResearch(games,side,line) {
+ return [5,10].map(limit => {
+  const sample = games.filter(game => Number.isFinite(game.value)).slice(0,limit);
+  const hits = sample.filter(game => side === "MORE" ? game.value > line : game.value < line).length;
+  const pushes = sample.filter(game => game.value === line).length;
+  const minutes = sample.map(game => game.minutes).filter(Number.isFinite);
+  const averageMinutes = minutes.length ? minutes.reduce((sum,value) => sum+value,0)/minutes.length : null;
+  return {limit,count:sample.length,hits,pushes,averageMinutes};
+ });
+}
+
 function renderTodayPicks() {
  clearTimeout(todayPicksExpiry);
  const status = document.getElementById("todayPicksStatus");
@@ -2025,6 +2048,14 @@ function renderTodayPicks() {
     games.append(game);
    }
    details.append(recent,games);
+   for (const window of recentPropResearch(model.researchGames,pick.side,pick.line)) {
+    if (!window.count) continue;
+    const note = document.createElement("p");
+    note.textContent = "Last " + window.limit + " · " + window.hits + "/" + window.count +
+     " cleared " + pick.side + " " + pick.line + " · " + window.pushes + " pushes" +
+     (window.averageMinutes === null ? "" : " · " + window.averageMinutes.toFixed(1) + " avg min");
+    details.append(note);
+   }
   }
   if (market && model && (market.chance-.5)*(model.chance-.5) < 0) {
    const disagreement = document.createElement("p");
