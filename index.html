@@ -761,8 +761,10 @@ async function scanAndRankProps() {
  try {
   await initialLineLoads;
   const [prizePicks,sportsbook] = await Promise.all([scanPrizePicks(),loadSportsbookLines()]);
+  const now = Date.now();
   const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
   const ranked = rankMarketProps(prizePicks.lines,sportsbook || [],now,filters);
+  const pricedCount = ranked.filter(prop=>prop.chance !== null).length;
   const matches = ranked.filter(prop=>prop.chance !== null && prop.chance > 0.5);
   refreshEntryCandidates(matches);
   body.replaceChildren();
@@ -802,14 +804,15 @@ async function scanAndRankProps() {
    row.insertCell().append(details);
   }
   table.hidden = !ranked.length;
-  status.textContent = ranked.length ? "Showing " + ranked.length + " available sides from the scan."
+  status.textContent = ranked.length ? "Showing " + ranked.length + " sides. " + pricedCount +
+   " with market estimates, " + (ranked.length - pricedCount) + " without."
     : "No available sides match the selected filters.";
   const games = new Set(prizePicks.lines.filter(line => {
    const start = Date.parse(line.eventStart);
    return start > now && pacificDay.format(start) === pacificDay.format(now) && line.team && line.opponent;
   }).map(line=>JSON.stringify([line.eventStart,[line.team,line.opponent].sort()])));
   status.textContent += " Scanned " + prizePicks.lines.length + " PrizePicks offers across " +
-   games.size + " identified upcoming games today. Found " + matches.length + " eligible sides.";
+   games.size + " identified upcoming games today. " + matches.length + " sides had estimates above 50%.";
   if (!sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
