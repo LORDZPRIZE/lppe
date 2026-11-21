@@ -52,7 +52,6 @@ async function sportsbookLines(env) {
   return {connected:true,source:"the_odds_api",count:lines.length,lines,
     message:"Sportsbook odds only. No independent projections or model probabilities."};
 }
-let prizePicksRefresh;
 
 function providerRetryAt(response,code,now) {
   const reset = response.headers.get("X-Quota-Reset");
@@ -72,9 +71,8 @@ async function refreshPrizePicksBoard(request, env) {
   const source = "prizepicksapi.com";
   const cache = caches.default;
   const cacheKey = path => new Request(new URL(path, request.url));
-  const boardKey = cacheKey("/lppe-internal/prizepicks-compact-board-v1");
-  const snapshotKey = cacheKey("/lppe-internal/prizepicks-compact-snapshot-v1");
-  const cooldownKey = cacheKey("/lppe-internal/prizepicks-compact-cooldown-v1");
+  const boardKey = cacheKey("/lppe-internal/prizepicks-compact-board-v2");
+  const snapshotKey = cacheKey("/lppe-internal/prizepicks-compact-snapshot-v2");
   async function remember(key, body, seconds) {
     const response = json(body);
     response.headers.set("Cache-Control","public, max-age=" + seconds);
@@ -89,13 +87,10 @@ async function refreshPrizePicksBoard(request, env) {
     if (cached) return json(await cached.json());
     const snapshot = await cache.match(snapshotKey);
     const saved = snapshot ? await snapshot.json() : null;
-    const cooldown = await cache.match(cooldownKey);
-    if (cooldown) {
-      const details = await cooldown.json();
-      if (Date.parse(details.retryAt) > Date.now()) return limited(details,saved);
-    }
-    // The compact endpoint fits the previous four-page scan in one call.
-    const url = "https://prizepicksapi.com/api/v1/projections?league=NBA&status=active&view=compact&limit=800";
+    const cooldown = await env.PRIZEPICKS_BOARD.get("cooldown", "json");
+    if (cooldown && Date.parse(cooldown.retryAt) > Date.now()) return limited(cooldown,saved);
+    // Request at most one 100-row credit unit per scheduled refresh.
+    const url = "https://prizepicksapi.com/api/v1/projections?league=NBA&status=active&view=compact&limit=100";
     const headers = {Authorization: `Bearer ${env.PRIZEPICKS_API_KEY}`, Accept:"application/json",
       "X-User-Request":"Load NBA PrizePicks lines for LPPE"};
     if (saved?.etag) headers["If-None-Match"] = saved.etag;
@@ -111,7 +106,7 @@ async function refreshPrizePicksBoard(request, env) {
       const now = Date.now();
       const next = providerRetryAt(response,providerCode,now);
       const details = {providerCode,retryAt:new Date(next).toISOString()};
-      await remember(cooldownKey,details,Math.max(1,Math.ceil((next-now)/1000)));
+      await env.PRIZEPICKS_BOARD.put("cooldown",JSON.stringify(details));
       return limited(details,saved);
     }
     if (!response.ok) return json({error:"PrizePicks provider unavailable"},502);
@@ -156,15 +151,30 @@ async function refreshPrizePicksBoard(request, env) {
   }
 }
 
-export async function prizePicksLines(request,env) {
-  if (!env.PRIZEPICKS_API_KEY) return json({connected:false,source:"prizepicksapi.com",lines:[]});
-  if (!prizePicksRefresh) {
-    prizePicksRefresh = refreshPrizePicksBoard(request,env).finally(() => { prizePicksRefresh = null; });
+async function prizePicksLines(env) {
+  if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) {
+    return json({connected:false,source:"prizepicksapi.com",lines:[]});
   }
-  return (await prizePicksRefresh).clone();
+  const [board,cooldown] = await Promise.all([
+    env.PRIZEPICKS_BOARD.get("board","json"),
+    env.PRIZEPICKS_BOARD.get("cooldown","json")
+  ]);
+  if (cooldown && Date.parse(cooldown.retryAt) > Date.now()) {
+    return board ? json({...board,...cooldown,savedBoard:true}) :
+      json({error:"PrizePicks provider limit reached",...cooldown},429);
+  }
+  return json(board ?? {connected:true,source:"prizepicksapi.com",lines:[],scheduled:true});
 }
 
 export default {
+  async scheduled(controller,env) {
+    if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) return;
+    const request = new Request("https://lppe-api.lord-joseph.workers.dev/api/prizepicks");
+    const response = await refreshPrizePicksBoard(request,env);
+    if (!response.ok) return;
+    const board = await response.json();
+    if (!board.savedBoard) await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(board));
+  },
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, {status:204,
       headers:{"Access-Control-Allow-Origin":ORIGIN,
@@ -173,12 +183,12 @@ export default {
     if (request.method !== "GET") return json({error:"Method not allowed"},405);
     const path = new URL(request.url).pathname;
     if (path === "/" || path === "/health") return json({
-      app:"LPPE",status:"online",version:"0.3",message:"LPPE API is running"});
+      app:"LPPE",status:"online",version:"0.4",message:"LPPE API is running"});
     if (path === "/api/props") return json({sport:"NBA",live:false,
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});
-    if (path === "/api/prizepicks/scan") return prizePicksLines(request, env);
-    if (path === "/api/prizepicks") return prizePicksLines(request, env);
+    if (path === "/api/prizepicks/scan") return prizePicksLines(env);
+    if (path === "/api/prizepicks") return prizePicksLines(env);
     if (path === "/api/lines") {
       // Cache successful results for 15 minutes to reduce paid provider requests.
       const cache = caches.default;

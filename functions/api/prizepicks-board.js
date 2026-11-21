@@ -1,15 +1,11 @@
-import { prizePicksLines } from "../../worker/lppe-api.js";
-
 const workerOrigin = "https://lppe-api.lord-joseph.workers.dev";
 
-export async function onRequestGet({request,env}) {
+export async function onRequestGet({request}) {
   const scan = new URL(request.url).searchParams.get("scan") === "1";
   const path = scan ? "/api/prizepicks/scan" : "/api/prizepicks";
-  const backend = env.PRIZEPICKS_API_KEY ? "pages" : "worker";
+  const backend = "worker";
   try {
-    const result = backend === "pages"
-      ? await prizePicksLines(request,env)
-      : await fetch(workerOrigin + path,{signal:AbortSignal.timeout(18000)});
+    const result = await fetch(workerOrigin + path,{signal:AbortSignal.timeout(18000)});
     const headers = new Headers({
       "Content-Type":result.headers.get("Content-Type") || "application/json",
       "Cache-Control":"no-store",
