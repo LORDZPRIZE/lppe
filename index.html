@@ -82,11 +82,12 @@ h1{font-size:21px}
   <button type="button" id="findTodayProps">Find Today’s Props</button>
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
+  <label>Books required for entry suggestions <select id="minBooks"><option value="2">2 or more</option><option value="3">3 or more</option><option value="4">4 or more</option></select></label>
   <p class="sub">LPPE scans on opening and every five minutes while this tab is visible. Each scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
   <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%, Gray when a market estimate is unavailable.</p>
   <p id="todayPropsStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="todayPropsTable" hidden>
-   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>DETAILS</th></tr></thead>
+   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>BOOK ESTIMATE RANGE</th><th>DETAILS</th></tr></thead>
     <tbody id="todayPropsRows"></tbody>
    </table>
   </div>
@@ -99,7 +100,7 @@ h1{font-size:21px}
    <label>Number of picks <select id="suggestEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
    <button type="button" id="findBestEntries">Find Best Entries</button>
   </div>
-  <p class="sub">Suggestions use market estimates and a limited search. Enter the actual PrizePicks payout to compare expected returns.</p>
+  <p class="sub">Power break-even is the minimum all-hit total payout, rounded up to 0.01×, needed to cover the entry cost under these estimates. Flex uses the payout comparison below. Enter the actual PrizePicks payout to compare expected returns.</p>
   <p id="entrySuggestionStatus" class="sub" role="status"></p>
   <ol id="entrySuggestions"></ol>
   <div id="entrySelections"></div>
@@ -516,10 +517,12 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all"
    books.get(quote.bookmaker)[quote.side].add(quote.americanOdds);
   }
   const estimates = [];
+  let oldest = Date.parse(prop.observedAt);
   for (const [bookmaker,book] of books) {
    if (book.MORE.size !== 1 || book.LESS.size !== 1) continue;
    const moreOdds = [...book.MORE][0], lessOdds = [...book.LESS][0];
    const more = implied(moreOdds), less = implied(lessOdds);
+   oldest = Math.min(oldest,...quotes.filter(q=>q.bookmaker === bookmaker).map(q=>Date.parse(q.updatedAt)));
    estimates.push({bookmaker,moreOdds,lessOdds,more:more/(more+less)});
   }
   if (!unavailable && estimates.length < 2) unavailable = "Fewer than two fresh, two-sided sportsbook matches.";
@@ -530,7 +533,7 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all"
    if (tier === "no-goblins" ? pickTier === "goblin" : tier !== "all" && pickTier !== tier) continue;
    if (pickTier === "demon" && item.side !== "more") continue;
    const chance = more === null ? null : item.side === "more" ? more : 1-more;
-   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,rankedAt:now,unavailable});
+   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,expiresAt:Math.min(starts,oldest+maxQuoteAge),rankedAt:now,unavailable});
   }
  }
  return ranked.sort((a,b)=>(b.chance ?? -1)-(a.chance ?? -1) || b.books-a.books);
@@ -624,7 +627,7 @@ compareForm.addEventListener("submit",event=>{
  event.preventDefault();
  const picks = selectedEntryProps();
  const now = Date.now();
- if (picks.some(p=>Date.parse(p.eventStart)<=now || now-p.rankedAt>maxQuoteAge)) {
+ if (picks.some(p=>now >= p.expiresAt)) {
   entryCompareStatus.textContent = "Run Find Today’s Props again to refresh expired estimates.";
   return;
  }
@@ -663,7 +666,7 @@ const rankButton = document.getElementById("findTodayProps");
 function suggestEntries(candidates, size) {
  const byGame = new Map();
  for (const [index,prop] of candidates.entries()) {
-  if (!prop.gameId || !Number.isFinite(prop.chance) || prop.chance <= 0 || prop.chance > 1) continue;
+  if (prop.expiresAt <= Date.now() || !prop.gameId || !Number.isFinite(prop.chance) || prop.chance <= 0 || prop.chance > 1) continue;
   if (!byGame.has(prop.gameId)) byGame.set(prop.gameId,[]);
   byGame.get(prop.gameId).push({index,prop});
  }
@@ -702,7 +705,8 @@ function renderSuggestions() {
    item.textContent = suggestion.indices.map(index=>{
     const p = entryCandidates[index];
     return p.player+" "+p.side+" "+p.line+" "+p.market+" ("+p.tier+")";
-   }).join(" · ") + " | " + (suggestion.chance*100).toFixed(1) + "% estimated all-hit chance ";
+   }).join(" · ") + " | " + (suggestion.chance*100).toFixed(1) + "% estimated all-hit chance · Power break-even " +
+    (Math.ceil(100 / suggestion.chance) / 100).toFixed(2) + "× total payout ";
    const compare = document.createElement("button");
    compare.type = "button";
    compare.className = "secondary";
@@ -719,7 +723,14 @@ function renderSuggestions() {
   }
 }
 
-findEntries.addEventListener("click",scanAndRankProps);
+let latestBoard = null;
+function useLatestBoard() {
+ if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook);
+}
+for (const id of ["rankTier","rankSide","minBooks"]) {
+ document.getElementById(id).addEventListener("change",useLatestBoard);
+}
+findEntries.addEventListener("click",() => latestBoard ? useLatestBoard() : scanAndRankProps());
 entrySize.addEventListener("change",renderSuggestions);
 
 async function scanAndRankProps() {
@@ -727,7 +738,6 @@ async function scanAndRankProps() {
  entrySuggestions.replaceChildren();
  entrySuggestionStatus.textContent = "";
  const status = document.getElementById("todayPropsStatus");
- const body = document.getElementById("todayPropsRows");
  const table = document.getElementById("todayPropsTable");
  rankButton.disabled = true;
  findEntries.disabled = true;
@@ -735,15 +745,32 @@ async function scanAndRankProps() {
  table.hidden = true;
  status.textContent = "Checking both feeds…";
  refreshEntryCandidates([]);
+ latestBoard = null;
  try {
   const [prizePicks,sportsbook] = await Promise.all([loadPrizePicksLines(true),loadSportsbookLines()]);
   if (!prizePicks) throw new Error(document.getElementById("prizePicksStatus").textContent);
+  latestBoard = {prizePicks,sportsbook};
+  useLatestBoard();
+  return true;
+ } catch (error) {
+  status.textContent = error.message || "The prop comparison is temporarily unavailable.";
+ } finally {
+  rankButton.disabled = false;
+  findEntries.disabled = false;
+  entrySize.disabled = false;
+ }
+}
+function renderMarketBoard(prizePicks,sportsbook) {
+ const status = document.getElementById("todayPropsStatus");
+ const body = document.getElementById("todayPropsRows");
+ const table = document.getElementById("todayPropsTable");
   const now = Date.now();
   const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
   const ranked = rankMarketProps(prizePicks.lines,prizePicks.savedBoard ? [] : sportsbook || [],now,filters);
   const pricedCount = ranked.filter(prop=>prop.chance !== null).length;
   const matches = ranked.filter(prop=>prop.chance !== null && prop.chance > 0.5);
-  refreshEntryCandidates(matches);
+  const minBooks = Number(document.getElementById("minBooks").value);
+  refreshEntryCandidates(matches.filter(prop=>prop.books >= minBooks));
   renderSuggestions();
   body.replaceChildren();
   for (const prop of ranked) {
@@ -758,6 +785,9 @@ async function scanAndRankProps() {
    badge.textContent = marketGrade + " · " + estimate;
    row.insertCell().append(badge);
    row.insertCell().textContent = prop.books;
+   const prices = prop.estimates.map(q=>100*(prop.side === "MORE" ? q.more : 1-q.more));
+   row.insertCell().textContent = prop.chance === null ? "—" :
+    Math.min(...prices).toFixed(1) + "% – " + Math.max(...prices).toFixed(1) + "%";
    const details = document.createElement("details");
    const summary = document.createElement("summary");
    summary.textContent = "Why this prop?";
@@ -771,7 +801,8 @@ async function scanAndRankProps() {
    for (const quote of prop.estimates) {
     const item = document.createElement("p");
     item.textContent = quote.bookmaker + " · MORE " + formatOdds(quote.moreOdds) +
-     " · LESS " + formatOdds(quote.lessOdds);
+     " · LESS " + formatOdds(quote.lessOdds) + " · " + prop.side + " estimate " +
+     (100*(prop.side === "MORE" ? quote.more : 1-quote.more)).toFixed(1) + "%";
     details.append(item);
    }
    if (Number.isFinite(prop.openingLine)) {
@@ -795,14 +826,6 @@ async function scanAndRankProps() {
   if (!sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
-  return true;
- } catch (error) {
-  status.textContent = error.message || "The prop comparison is temporarily unavailable.";
- } finally {
-  rankButton.disabled = false;
-  findEntries.disabled = false;
-  entrySize.disabled = false;
- }
 }
 rankButton.addEventListener("click",scanAndRankProps);
 
