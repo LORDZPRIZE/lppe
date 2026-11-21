@@ -80,11 +80,11 @@ h1{font-size:21px}
   <h2>Today’s NBA Prop Rankings</h2>
   <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
   <button type="button" id="findTodayProps">Find Today’s Props</button>
-  <label>Estimate source <select id="estimateSource"><option value="auto">Automatic</option><option value="stats">Stats only (no sportsbook credits)</option></select></label>
+  <label>Estimate source <select id="estimateSource"><option value="auto">Automatic</option><option value="stats" selected>Stats only (no sportsbook credits)</option></select></label>
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
   <label>Books required for entry suggestions <select id="minBooks"><option value="2">2 or more</option><option value="3">3 or more</option><option value="4">4 or more</option></select></label>
-  <p class="sub">LPPE scans on opening and every five minutes while this tab is visible. Each scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
+  <p class="sub">LPPE scans on opening and every five minutes while this tab is visible. PrizePicks uses up to 100 offers per scheduled snapshot. Opening or refreshing the dashboard reads the latest snapshot.</p>
   <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%, Gray when a market estimate is unavailable.</p>
   <p id="todayPropsStatus" class="sub" role="status"></p>
   <p id="prizePicksFreshness" class="sub" hidden></p>
@@ -480,7 +480,8 @@ async function loadPrizePicksLines(scan = false) {
   rows.replaceChildren(fragment);
   table.hidden = !data.lines.length;
   const observed = Date.parse(data.observedAt);
-  status.textContent = (data.lines.length ? data.lines.length + " PrizePicks lines shown." : "No PrizePicks lines returned.") +
+  status.textContent = (data.scheduled ? "Waiting for the first scheduled PrizePicks snapshot." :
+   data.lines.length ? data.lines.length + " PrizePicks lines shown." : "No PrizePicks lines returned.") +
    (data.partial ? " This board has partial coverage." : "") +
    (Number.isFinite(observed) ? " Observed " + new Date(observed).toLocaleString() + "." : "");
   if (data.savedBoard) status.textContent = showPrizePicksLimit(data) + " Showing the last saved board. " + status.textContent;
@@ -970,7 +971,7 @@ document.addEventListener("visibilitychange",() => {
 });
 
 const estimateSource = document.getElementById("estimateSource");
-try { estimateSource.value = localStorage.getItem("lppe-estimate-source") === "stats" ? "stats" : "auto"; } catch {}
+try { estimateSource.value = localStorage.getItem("lppe-estimate-source") === "auto" ? "auto" : "stats"; } catch {}
 estimateSource.addEventListener("change",() => {
  try { localStorage.setItem("lppe-estimate-source",estimateSource.value); } catch {}
  scanAndRankProps();
