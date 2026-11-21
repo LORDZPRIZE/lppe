@@ -74,10 +74,43 @@ h1{font-size:21px}
 </header>
 
 <main>
- <div class="notice">
-  The Prop Analyzer uses independent projections and standard deviations to estimate probabilities.
- </div>
  <div id="apiStatus" class="notice" role="status" aria-live="polite">Checking LPPE API connection…</div>
+
+ <section class="section">
+  <h2>Today’s NBA Prop Rankings</h2>
+  <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
+  <button type="button" id="findTodayProps">Find Today’s Props</button>
+  <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
+  <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
+  <p class="sub">LPPE scans on opening and every five minutes while this tab is visible. Each scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
+  <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%, Gray when a market estimate is unavailable.</p>
+  <p id="todayPropsStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="todayPropsTable" hidden>
+   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>DETAILS</th></tr></thead>
+    <tbody id="todayPropsRows"></tbody>
+   </table>
+  </div>
+ </section>
+
+ <section class="section" aria-labelledby="entryCompareHeading">
+  <h2 id="entryCompareHeading">Compare PrizePicks Entries</h2>
+  <p class="sub">Select 2 to 6 ranked props from different games, then enter the total return shown for each paying outcome on PrizePicks. Estimates assume independent games and full settlement. Whole-number lines are excluded because they can tie.</p>
+  <div class="toolbar">
+   <label>Number of picks <select id="suggestEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
+   <button type="button" id="findBestEntries">Find Best Entries</button>
+  </div>
+  <p class="sub">Suggestions use market estimates and a limited search. Enter the actual PrizePicks payout to compare expected returns.</p>
+  <p id="entrySuggestionStatus" class="sub" role="status"></p>
+  <ol id="entrySuggestions"></ol>
+  <div id="entrySelections"></div>
+  <form id="entryCompareForm" hidden>
+   <label>Entry format <select id="entryFormat"><option value="power">Power</option><option value="flex">Flex</option></select></label>
+   <div id="entryPayouts" class="formgrid"></div>
+   <button type="submit">Estimate and compare</button>
+  </form>
+  <p id="entryCompareStatus" class="sub" role="status">Run Find Today’s Props to get started.</p>
+  <div id="entryComparisons" class="tablewrap"></div>
+ </section>
 
  <div class="grid">
   <div class="card"><small>Props Analyzed</small><div class="value" id="total">0</div></div>
@@ -87,7 +120,7 @@ h1{font-size:21px}
  </div>
 
  <section class="section">
-  <h2>Prop Analyzer</h2>
+  <h2>Manual Prop Analyzer</h2>
   <p class="sub">Enter an independent projection and standard deviation to estimate MORE or LESS probability.</p>
   <div class="formgrid">
    <div class="field"><label>Player</label><input id="player" placeholder="Player name"></div>
@@ -117,42 +150,6 @@ h1{font-size:21px}
   <div class="result" id="result"></div>
  </section>
 
-
- <section class="section">
-  <h2>Today’s NBA Prop Rankings</h2>
-  <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
-  <button type="button" id="findTodayProps">Find Today’s Props</button>
-  <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
-  <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
-  <p class="sub">A scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
-  <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%, Gray when a market estimate is unavailable.</p>
-  <p id="todayPropsStatus" class="sub" role="status"></p>
-  <div class="tablewrap" id="todayPropsTable" hidden>
-   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>DETAILS</th></tr></thead>
-    <tbody id="todayPropsRows"></tbody>
-   </table>
-  </div>
- </section>
-
- <section class="section" aria-labelledby="entryCompareHeading">
-  <h2 id="entryCompareHeading">Compare PrizePicks Entries</h2>
-  <p class="sub">Select 2 to 6 ranked props from different games, then enter the total return shown for each paying outcome on PrizePicks. Estimates assume independent games and full settlement. Whole-number lines are excluded because they can tie.</p>
-  <div class="toolbar">
-   <label>Number of picks <select id="suggestEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
-   <button type="button" id="findBestEntries">Find Best Entries</button>
-  </div>
-  <p class="sub">Suggestions use market estimates and a limited search. Enter the actual PrizePicks payout to compare expected returns.</p>
-  <p id="entrySuggestionStatus" class="sub" role="status"></p>
-  <ol id="entrySuggestions"></ol>
-  <div id="entrySelections"></div>
-  <form id="entryCompareForm" hidden>
-   <label>Entry format <select id="entryFormat"><option value="power">Power</option><option value="flex">Flex</option></select></label>
-   <div id="entryPayouts" class="formgrid"></div>
-   <button type="submit">Estimate and compare</button>
-  </form>
-  <p id="entryCompareStatus" class="sub" role="status">Run Find Today’s Props to get started.</p>
-  <div id="entryComparisons" class="tablewrap"></div>
- </section>
 
  <section class="section" aria-labelledby="prizePicksHeading">
   <h2 id="prizePicksHeading">NBA PrizePicks Lines</h2>
@@ -421,7 +418,7 @@ async function loadSportsbookLines(){
  finally{clearTimeout(timer);btn.disabled=false}
 }
 
-async function loadPrizePicksLines() {
+async function loadPrizePicksLines(scan = false) {
  const button = document.getElementById("refreshPrizePicks");
  const status = document.getElementById("prizePicksStatus");
  const rows = document.getElementById("prizePicksRows");
@@ -430,11 +427,11 @@ async function loadPrizePicksLines() {
  table.hidden = true;
  status.textContent = "Loading NBA PrizePicks lines…";
  const controller = new AbortController();
- const timer = setTimeout(() => controller.abort(), 15000);
+ const timer = setTimeout(() => controller.abort(), 20000);
  try {
-  const response = await fetch(API_URL + "/api/prizepicks", {signal:controller.signal});
+  const response = await fetch(API_URL + (scan ? "/api/prizepicks/scan" : "/api/prizepicks"), {signal:controller.signal});
   if (response.status === 429) {
-   status.textContent = "PrizePicks provider limit reached. Try again later.";
+   status.textContent = "PrizePicks provider limit reached. LPPE will retry on the next automatic scan.";
    return;
   }
   if (!response.ok) throw new Error("PrizePicks request failed");
@@ -471,7 +468,7 @@ async function loadPrizePicksLines() {
  }
 }
 
-document.getElementById("refreshPrizePicks").addEventListener("click", loadPrizePicksLines);
+document.getElementById("refreshPrizePicks").addEventListener("click", () => loadPrizePicksLines());
 const supportedMarkets = new Map([
  ["points","points"],["rebounds","rebounds"],["assists","assists"],
  ["three-pointers","three-pointers"],["3-pt made","three-pointers"]
@@ -537,21 +534,6 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all"
   }
  }
  return ranked.sort((a,b)=>(b.chance ?? -1)-(a.chance ?? -1) || b.books-a.books);
-}
-
-async function scanPrizePicks() {
- const controller = new AbortController();
- const timer = setTimeout(()=>controller.abort(),20000);
- try {
-  const response = await fetch(API_URL+"/api/prizepicks/scan",{signal:controller.signal});
-  if (response.status === 429) throw new Error("PrizePicks provider limit reached.");
-  if (!response.ok) throw new Error("The broader PrizePicks scan is unavailable.");
-  const data = await response.json();
-  if (data.connected !== true || !Array.isArray(data.lines)) throw new Error("PrizePicks feed is unavailable.");
-  return data;
- } finally {
-  clearTimeout(timer);
- }
 }
 
 function hitDistribution(probabilities) {
@@ -708,16 +690,9 @@ const entrySuggestions = document.getElementById("entrySuggestions");
 const entrySuggestionStatus = document.getElementById("entrySuggestionStatus");
 const entrySize = document.getElementById("suggestEntrySize");
 
-findEntries.addEventListener("click",async () => {
+function renderSuggestions() {
+ entrySuggestions.replaceChildren();
  const size = Number(entrySize.value);
- findEntries.disabled = true;
- entrySize.disabled = true;
- try {
-  const scanned = await scanAndRankProps();
-  if (!scanned) {
-   entrySuggestionStatus.textContent = "The scan did not complete. Check the prop ranking status and try again.";
-   return;
-  }
   const suggestions = suggestEntries(entryCandidates,size);
   entrySuggestionStatus.textContent = suggestions.length
    ? "Showing " + suggestions.length + " suggestions for " + size + " picks."
@@ -742,11 +717,10 @@ findEntries.addEventListener("click",async () => {
    item.append(compare);
    entrySuggestions.append(item);
   }
- } finally {
-  findEntries.disabled = false;
-  entrySize.disabled = false;
- }
-});
+}
+
+findEntries.addEventListener("click",scanAndRankProps);
+entrySize.addEventListener("change",renderSuggestions);
 
 async function scanAndRankProps() {
  if (rankButton.disabled) return false;
@@ -756,18 +730,21 @@ async function scanAndRankProps() {
  const body = document.getElementById("todayPropsRows");
  const table = document.getElementById("todayPropsTable");
  rankButton.disabled = true;
+ findEntries.disabled = true;
+ entrySize.disabled = true;
  table.hidden = true;
  status.textContent = "Checking both feeds…";
  refreshEntryCandidates([]);
  try {
-  await initialLineLoads;
-  const [prizePicks,sportsbook] = await Promise.all([scanPrizePicks(),loadSportsbookLines()]);
+  const [prizePicks,sportsbook] = await Promise.all([loadPrizePicksLines(true),loadSportsbookLines()]);
+  if (!prizePicks) throw new Error(document.getElementById("prizePicksStatus").textContent);
   const now = Date.now();
   const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
   const ranked = rankMarketProps(prizePicks.lines,prizePicks.savedBoard ? [] : sportsbook || [],now,filters);
   const pricedCount = ranked.filter(prop=>prop.chance !== null).length;
   const matches = ranked.filter(prop=>prop.chance !== null && prop.chance > 0.5);
   refreshEntryCandidates(matches);
+  renderSuggestions();
   body.replaceChildren();
   for (const prop of ranked) {
    const row = body.insertRow();
@@ -823,13 +800,18 @@ async function scanAndRankProps() {
   status.textContent = error.message || "The prop comparison is temporarily unavailable.";
  } finally {
   rankButton.disabled = false;
+  findEntries.disabled = false;
+  entrySize.disabled = false;
  }
 }
 rankButton.addEventListener("click",scanAndRankProps);
 
 render();
 loadNBAProps();
-const initialLineLoads = Promise.all([loadPrizePicksLines(),loadSportsbookLines()]);
+scanAndRankProps();
+setInterval(() => {
+ if (!document.hidden && !entrySelections.querySelector("input:checked")) scanAndRankProps();
+}, 5 * 60 * 1000);
 </script>
 </body>
 </html>
