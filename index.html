@@ -24,7 +24,15 @@ header{
  justify-content:space-between;gap:16px;flex-wrap:wrap
 }
 .brand{color:var(--green);font-size:11px;font-weight:800;letter-spacing:.16em}
-h1{font-size:clamp(20px,4vw,32px);letter-spacing:-.045em;margin:3px 0 0;line-height:1.15}
+.masthead h1{
+ display:flex;flex-wrap:wrap;align-items:baseline;column-gap:.45em;row-gap:3px;
+ margin:3px 0 0;font-size:clamp(18px,3.2vw,28px);line-height:1.15;letter-spacing:-.035em
+}
+.brand-word{
+ font-family:Georgia,"Times New Roman",serif;font-size:clamp(39px,6vw,62px);
+ font-style:italic;font-weight:700;line-height:1;letter-spacing:-.055em;color:#e7d6ff
+}
+.brand-title{font-weight:650}
 .dfs-link{
  display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 14px;border-radius:10px;
  border:1px solid #665785;color:var(--text);background:#27223e;font-size:13px;font-weight:700;text-decoration:none
@@ -77,7 +85,6 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 @media(max-width:700px){
 .grid{grid-template-columns:repeat(2,1fr)}
 .formgrid{grid-template-columns:repeat(2,1fr)}
-h1{font-size:21px}
 }
 .pick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(245px,100%),1fr));gap:12px}
 .pick-grid .card{
@@ -225,7 +232,7 @@ h1{font-size:21px}
  <div class="masthead">
   <div>
    <div class="brand">LORD'S SPORTS ANALYTICS</div>
-   <h1>Lord's PrizePicks Prop Engine</h1>
+   <h1><span class="brand-word">Lord’s</span> <span class="brand-title">PrizePicks Prop Engine</span></h1>
   </div>
   <a class="dfs-link" href="/fanduel.html">FanDuel DFS Optimizer <span aria-hidden="true">↗</span></a>
  </div>
