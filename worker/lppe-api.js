@@ -56,7 +56,21 @@ async function prizePicksLines(request, env, scan = false) {
   const source = "prizepicksapi.com";
   if (!env.PRIZEPICKS_API_KEY) return json({connected:false,source,lines:[]});
   const cache = caches.default;
-  const key = new Request(new URL(scan ? "/api/prizepicks-scan-cache-v1" : "/api/prizepicks-cache-v3", request.url));
+  const cacheKey = path => new Request(new URL(path, request.url));
+  const key = cacheKey(scan ? "/api/prizepicks-scan-v2" : "/api/prizepicks-board-v4");
+  const firstPageKey = cacheKey("/api/prizepicks-page-one-v1");
+  const cooldownKey = cacheKey("/api/prizepicks-provider-cooldown-v1");
+  const snapshotKey = cacheKey("/api/prizepicks-last-board-v1");
+  async function remember(key, response, seconds) {
+    const copy = new Response(response.clone().body, response);
+    copy.headers.set("Cache-Control","public, max-age=" + seconds);
+    try { await cache.put(key,copy); } catch {}
+  }
+  async function limited() {
+    const saved = await cache.match(snapshotKey);
+    if (saved) return json({...await saved.json(), savedBoard:true});
+    return json({error:"PrizePicks provider limit reached"},429);
+  }
   try {
     const cached = await cache.match(key);
     if (cached) return cached;
@@ -71,17 +85,28 @@ async function prizePicksLines(request, env, scan = false) {
     let scanStatus = "complete";
     const pageLimit = scan ? 4 : 1;
     do {
-      const response = await fetch(url, {headers});
-      if (response.status === 429 && pages) {
+      let response = pages === 0 ? await cache.match(firstPageKey) : null;
+      const reuse = Boolean(response);
+      if (!response && !(await cache.match(cooldownKey))) {
+        response = await fetch(url, {headers});
+        if (response.status === 429) {
+          const retry = response.headers.get("Retry-After");
+          const seconds = retry && /^\d+$/.test(retry) ? Number(retry) :
+            Math.ceil((Date.parse(retry) - Date.now()) / 1000);
+          await remember(cooldownKey,json({limited:true}),seconds > 0 ? seconds : 300);
+        }
+      }
+      if (!response || response.status === 429) {
+        if (!pages) return limited();
         scanStatus = "provider_limit";
         break;
       }
-      if (response.status === 429) return json({error:"PrizePicks provider limit reached"},429);
       if (!response.ok) return json({error:"PrizePicks provider unavailable"},502);
       const data = await response.json();
       if (data.meta?.mode !== "live" || !Array.isArray(data.data)) {
         return json({error:"PrizePicks provider returned an unexpected response"},502);
       }
+      if (!pages && !reuse) await remember(firstPageKey,json(data),900);
       offers.push(...data.data);
       pages++;
       if (pages === 1 && typeof data.meta.observed_at === "string") observedAt = data.meta.observed_at;
@@ -118,9 +143,8 @@ async function prizePicksLines(request, env, scan = false) {
     }
     const out = json({connected:true,source,lines,partial:Boolean(cursor),
       observedAt,pages,scanStatus});
-    const cachedResponse = out.clone();
-    cachedResponse.headers.set("Cache-Control","public, max-age=900");
-    try { await cache.put(key,cachedResponse); } catch {}
+    await remember(key,out,scanStatus === "provider_limit" ? 60 : 900);
+    if (!scan || pages > 1) await remember(snapshotKey,out,86400);
     return out;
   } catch {
     return json({error:"PrizePicks feed unavailable"},502);
