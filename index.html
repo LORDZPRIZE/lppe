@@ -108,9 +108,10 @@ h1{font-size:21px}
  <section class="section" aria-labelledby="nbaResultsHeading">
   <h2 id="nbaResultsHeading">NBA Results Tracker</h2>
   <p class="sub">This browser saves the first pregame estimate for each exact line and source during a scan. LPPE checks final NBA box scores while the dashboard is open. These are stat results. PrizePicks can apply its own void and payout rules.</p>
+  <label>Market <select id="nbaResultsMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option></select></label>
   <p id="nbaResultsStatus" class="sub" role="status"></p>
   <div class="tablewrap">
-   <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th></tr></thead>
+   <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>DECIDED SAMPLE</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th></tr></thead>
    <tbody id="nbaResultsRows"></tbody></table>
   </div>
  </section>
@@ -119,9 +120,12 @@ h1{font-size:21px}
   <h2 id="sizeComparisonHeading">Compare 2–6 Pick Sizes</h2>
   <p class="sub">LPPE shows the highest all-hit estimate it finds for each size. Enter the exact total payout for the listed picks. Expected returns assume independent games and full settlement.</p>
   <label>Format <select id="sizeComparisonFormat"><option value="power">Power</option><option value="flex">Flex</option><option value="both">Power and Flex</option></select></label>
+  <label>Probability buffer <select id="sizeProbabilityBuffer"><option value="0.02">2 points per pick</option><option value="0.03" selected>3 points per pick</option><option value="0.05">5 points per pick</option></select></label>
+  <button type="button" id="sizeRecheck" class="secondary">Recheck board</button>
+  <p class="sub">Rechecking refreshes suggestions and clears the entered payouts. The buffer tests lower hit probabilities. It does not establish a confidence interval.</p>
   <p id="sizeComparisonStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="sizeComparisonTable" hidden>
-   <table><thead><tr><th>ENTRY</th><th>SUGGESTED PICKS</th><th>ALL-HIT ESTIMATE</th><th>POWER BREAK-EVEN</th><th>TOTAL PAYOUTS</th><th>ESTIMATED NET RETURN</th></tr></thead>
+   <table><thead><tr><th>ENTRY</th><th>SUGGESTED PICKS</th><th>ALL-HIT ESTIMATE</th><th>POWER BREAK-EVEN</th><th>TOTAL PAYOUTS</th><th>ESTIMATED NET RETURN</th><th>LOWER-PROBABILITY RETURN</th><th>DECISION</th></tr></thead>
    <tbody id="sizeComparisonRows"></tbody></table>
   </div>
  </section>
@@ -819,16 +823,35 @@ function sizePayoutFields(entry,format,size,cell) {
  return inputs;
 }
 
+function stressedReturn(probabilities,payouts,buffer) {
+ let worst = Infinity;
+ // Each independent pick's expected payout is linear in its probability.
+ // The worst combination is at a corner of the per-pick probability ranges.
+ for (let scenario=0; scenario<(1<<probabilities.length); scenario++) {
+  const adjusted = probabilities.map((chance,index) =>
+   (scenario & (1<<index)) ? Math.max(0,chance-buffer) : chance);
+  worst = Math.min(worst,expectedTotalReturn(hitDistribution(adjusted),payouts));
+ }
+ return worst;
+}
+
+const sizeProbabilityBuffer = document.getElementById("sizeProbabilityBuffer");
+const sizeRecheck = document.getElementById("sizeRecheck");
+
 function updateSizeReturns() {
  clearTimeout(sizeExpiryTimer);
  const now = Date.now();
  let earliest = Infinity;
  const priced = [];
- for (const {entry,distribution,expiresAt,inputs,output} of sizeComparison) {
+ const buffer = Number(sizeProbabilityBuffer.value);
+ for (const {entry,distribution,probabilities,expiresAt,inputs,output,stress,decision} of sizeComparison) {
+  stress.textContent = "—";
+  decision.textContent = "—";
   const expired = now >= expiresAt;
   for (const {input} of inputs) input.disabled = expired;
   if (expired) {
    output.textContent = "Expired";
+   decision.textContent = "Recheck";
    continue;
   }
   earliest = Math.min(earliest,expiresAt);
@@ -843,22 +866,25 @@ function updateSizeReturns() {
    output.textContent = "Invalid payout";
    continue;
   }
+  const downside = stressedReturn(probabilities,payouts,buffer);
   output.textContent = ((expected-1)*100).toFixed(1) + "%";
-  priced.push({entry,expected});
+  stress.textContent = ((downside-1)*100).toFixed(1) + "%";
+  decision.textContent = downside > 1+1e-10 ? "Above break-even" : "Pass";
+  priced.push({entry,downside});
  }
  if (!sizeComparison.length) {
   sizeComparisonStatus.textContent = "A fresh scan needs eligible picks from at least two different games.";
  } else if (!Number.isFinite(earliest)) {
-  sizeComparisonStatus.textContent = "These estimates have expired. Run Find Today’s Props to refresh.";
- } else if (priced.length < 2) {
-  sizeComparisonStatus.textContent = "Enter exact payouts for at least two entries to compare them. Use 0 for outcomes that pay nothing.";
+  sizeComparisonStatus.textContent = "These estimates have expired. Recheck the board before comparing entries.";
+ } else if (!priced.length) {
+  sizeComparisonStatus.textContent = "Enter exact payouts to evaluate an entry. Use 0 for outcomes that pay nothing.";
  } else {
-  const best = Math.max(...priced.map(row=>row.expected));
-  const entries = priced.filter(row=>Math.abs(row.expected-best)<1e-10).map(row=>row.entry);
-  const net = ((best-1)*100).toFixed(1);
-  sizeComparisonStatus.textContent = "Highest estimated net return among " + priced.length + " priced entries: " +
-   entries.join(" and ") + " (" + net + "%)." +
-   (best <= 1 ? " None of these estimates shows a positive return." : "");
+  const best = Math.max(...priced.map(row=>row.downside));
+  const entries = priced.filter(row=>Math.abs(row.downside-best)<1e-10).map(row=>row.entry);
+  const label = priced.length === 1 ? "Only priced entry passes the buffer: " : "Best priced entry after the buffer: ";
+  sizeComparisonStatus.textContent = best > 1+1e-10 ? label + entries.join(" and ") +
+   " (" + ((best-1)*100).toFixed(1) + "% estimated net return under the buffer)." :
+   "Pass. No priced entry stays above break-even under the probability buffer.";
  }
  if (Number.isFinite(earliest)) sizeExpiryTimer = setTimeout(updateSizeReturns,Math.max(1,earliest-now));
 }
@@ -872,12 +898,13 @@ function renderSizeComparison() {
    const row = sizeComparisonRows.insertRow();
    row.insertCell().textContent = size;
    const unavailable = row.insertCell();
-   unavailable.colSpan = 5;
+   unavailable.colSpan = 7;
    unavailable.textContent = "Fewer than " + size + " eligible picks from different games and players.";
    continue;
   }
   const picks = suggestion.indices.map(index=>entryCandidates[index]);
-  const distribution = hitDistribution(picks.map(prop=>prop.chance));
+  const probabilities = picks.map(prop=>prop.chance);
+  const distribution = hitDistribution(probabilities);
   const formats = sizeComparisonFormat.value === "both" ? ["power","flex"] : [sizeComparisonFormat.value];
   for (const format of formats) {
    const entry = size + "-pick " + (format === "power" ? "Power" : "Flex");
@@ -887,7 +914,8 @@ function renderSizeComparison() {
    row.insertCell().textContent = (distribution.at(-1)*100).toFixed(1) + "%";
    row.insertCell().textContent = format === "power" ? powerBreakEven(distribution.at(-1)) : "—";
    const inputs = sizePayoutFields(entry,format,size,row.insertCell());
-   sizeComparison.push({entry,distribution,inputs,output:row.insertCell(),expiresAt:Math.min(...picks.map(prop=>prop.expiresAt))});
+   sizeComparison.push({entry,distribution,probabilities,inputs,output:row.insertCell(),
+    stress:row.insertCell(),decision:row.insertCell(),expiresAt:Math.min(...picks.map(prop=>prop.expiresAt))});
   }
  }
  sizeComparisonTable.hidden = !sizeComparison.length;
@@ -895,6 +923,8 @@ function renderSizeComparison() {
 }
 
 sizeComparisonFormat.addEventListener("change",renderSizeComparison);
+sizeProbabilityBuffer.addEventListener("change",updateSizeReturns);
+sizeRecheck.addEventListener("click",scanAndRankProps);
 document.addEventListener("visibilitychange",() => {
  if (!document.hidden) updateSizeReturns();
 });
@@ -1072,13 +1102,14 @@ function gradeNBAEstimate(entry,results) {
 function renderResultsLedger(ledger,warning = "") {
  const body = document.getElementById("nbaResultsRows");
  const status = document.getElementById("nbaResultsStatus");
- const rows = Object.values(ledger.entries);
+ const market = document.getElementById("nbaResultsMarket").value;
+ const rows = Object.values(ledger.entries).filter(row => !market || row.market === market);
  const now = Date.now();
  const unverified = rows.filter(row => !row.outcome && now-row.start > 14*dayMillis).length;
  const pending = rows.filter(row => !row.outcome).length - unverified;
  status.textContent = rows.length ?
   rows.length + " recorded sides · " + pending + " pending · " + unverified + " unverified. Keeps up to 8,000 sides for 90 days." :
-  "No estimates recorded yet. Fresh, comparable PrizePicks lines are required.";
+  market ? "No estimates recorded for this market yet." : "No estimates recorded yet. Fresh, comparable PrizePicks lines are required.";
  if (warning) status.textContent += " " + warning;
  body.replaceChildren();
  for (const source of ["Sportsbook","Stats model"]) {
@@ -1091,7 +1122,7 @@ function renderResultsLedger(ledger,warning = "") {
    const average = graded.reduce((sum,row) => sum + (row.outcome === "tie" ? 0 : row.chance),0);
    const percent = value => (value*100).toFixed(1) + "%";
    const row = body.insertRow();
-   for (const value of [source,label,wins,losses,graded.length-decided,
+   for (const value of [source,label,wins,losses,graded.length-decided,decided,
     decided ? percent(average/decided) : "—",decided ? percent(wins/decided) : "—"]) row.insertCell().textContent = value;
   }
  }
@@ -1173,6 +1204,7 @@ async function scanAndRankProps() {
  const status = document.getElementById("todayPropsStatus");
  const table = document.getElementById("todayPropsTable");
  rankButton.disabled = true;
+ sizeRecheck.disabled = true;
  findEntries.disabled = true;
  entrySize.disabled = true;
  table.hidden = true;
@@ -1206,6 +1238,7 @@ async function scanAndRankProps() {
   status.textContent = error.message || "The prop comparison is temporarily unavailable.";
  } finally {
   rankButton.disabled = false;
+  sizeRecheck.disabled = false;
   estimateSource.disabled = false;
   findEntries.disabled = false;
   entrySize.disabled = false;
@@ -1282,6 +1315,7 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
 rankButton.addEventListener("click",scanAndRankProps);
 
 render();
+document.getElementById("nbaResultsMarket").addEventListener("change",() => renderResultsLedger(readResultsLedger()));
 renderResultsLedger(readResultsLedger());
 updatePrizePicksHealth();
 checkNBAResults();
