@@ -52,74 +52,76 @@ async function sportsbookLines(env) {
   return {connected:true,source:"the_odds_api",count:lines.length,lines,
     message:"Sportsbook odds only. No independent projections or model probabilities."};
 }
-async function prizePicksLines(request, env, scan = false) {
+let prizePicksRefresh;
+
+function providerRetryAt(response,code,now) {
+  const reset = response.headers.get("X-Quota-Reset");
+  const retry = response.headers.get("Retry-After");
+  const retryAt = retry && /^\d+$/.test(retry) ? now + Number(retry)*1000 : Date.parse(retry);
+  if (code === "MONTHLY_QUOTA_EXCEEDED") {
+    const date = new Date(now);
+    const monthEnd = Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1);
+    const resetAt = reset && /^\d+$/.test(reset) ?
+      Number(reset) * (reset.length < 13 ? 1000 : 1) : Date.parse(reset);
+    return resetAt > now ? resetAt : monthEnd;
+  }
+  return retryAt > now ? retryAt : now + 300000;
+}
+
+async function refreshPrizePicksBoard(request, env) {
   const source = "prizepicksapi.com";
-  if (!env.PRIZEPICKS_API_KEY) return json({connected:false,source,lines:[]});
   const cache = caches.default;
   const cacheKey = path => new Request(new URL(path, request.url));
-  const key = cacheKey(scan ? "/api/prizepicks-scan-v2" : "/api/prizepicks-board-v4");
-  const firstPageKey = cacheKey("/api/prizepicks-page-one-v1");
-  const cooldownKey = cacheKey("/api/prizepicks-provider-cooldown-v1");
-  const snapshotKey = cacheKey("/api/prizepicks-last-board-v1");
-  async function remember(key, response, seconds) {
-    const copy = new Response(response.clone().body, response);
-    copy.headers.set("Cache-Control","public, max-age=" + seconds);
-    try { await cache.put(key,copy); } catch {}
+  const boardKey = cacheKey("/lppe-internal/prizepicks-compact-board-v1");
+  const snapshotKey = cacheKey("/lppe-internal/prizepicks-compact-snapshot-v1");
+  const cooldownKey = cacheKey("/lppe-internal/prizepicks-compact-cooldown-v1");
+  async function remember(key, body, seconds) {
+    const response = json(body);
+    response.headers.set("Cache-Control","public, max-age=" + seconds);
+    try { await cache.put(key,response); } catch {}
   }
-  async function limited() {
-    const saved = await cache.match(snapshotKey);
-    if (saved) return json({...await saved.json(), savedBoard:true});
-    return json({error:"PrizePicks provider limit reached"},429);
+  function limited(details,saved) {
+    if (saved?.board?.lines.length) return json({...saved.board,savedBoard:true,...details});
+    return json({error:"PrizePicks provider limit reached",...details},429);
   }
   try {
-    const cached = await cache.match(key);
-    if (cached) return cached;
-    const url = new URL("https://prizepicksapi.com/api/v1/projections?league=NBA&status=active&limit=200");
+    const cached = await cache.match(boardKey);
+    if (cached) return json(await cached.json());
+    const snapshot = await cache.match(snapshotKey);
+    const saved = snapshot ? await snapshot.json() : null;
+    const cooldown = await cache.match(cooldownKey);
+    if (cooldown) {
+      const details = await cooldown.json();
+      if (Date.parse(details.retryAt) > Date.now()) return limited(details,saved);
+    }
+    // The compact endpoint fits the previous four-page scan in one call.
+    const url = "https://prizepicksapi.com/api/v1/projections?league=NBA&status=active&view=compact&limit=800";
     const headers = {Authorization: `Bearer ${env.PRIZEPICKS_API_KEY}`, Accept:"application/json",
       "X-User-Request":"Load NBA PrizePicks lines for LPPE"};
-    const offers = [];
-    const seenCursors = new Set();
-    let cursor = null;
-    let observedAt = null;
-    let pages = 0;
-    let scanStatus = "complete";
-    const pageLimit = scan ? 4 : 1;
-    do {
-      let response = pages === 0 ? await cache.match(firstPageKey) : null;
-      const reuse = Boolean(response);
-      if (!response && !(await cache.match(cooldownKey))) {
-        response = await fetch(url, {headers});
-        if (response.status === 429) {
-          const retry = response.headers.get("Retry-After");
-          const seconds = retry && /^\d+$/.test(retry) ? Number(retry) :
-            Math.ceil((Date.parse(retry) - Date.now()) / 1000);
-          await remember(cooldownKey,json({limited:true}),seconds > 0 ? seconds : 300);
-        }
-      }
-      if (!response || response.status === 429) {
-        if (!pages) return limited();
-        scanStatus = "provider_limit";
-        break;
-      }
-      if (!response.ok) return json({error:"PrizePicks provider unavailable"},502);
-      const data = await response.json();
-      if (data.meta?.mode !== "live" || !Array.isArray(data.data)) {
-        return json({error:"PrizePicks provider returned an unexpected response"},502);
-      }
-      if (!pages && !reuse) await remember(firstPageKey,json(data),900);
-      offers.push(...data.data);
-      pages++;
-      if (pages === 1 && typeof data.meta.observed_at === "string") observedAt = data.meta.observed_at;
-      cursor = typeof data.meta.next_cursor === "string" ? data.meta.next_cursor : null;
-      if (!cursor) break;
-      if (seenCursors.has(cursor)) {
-        scanStatus = "repeated_cursor";
-        break;
-      }
-      seenCursors.add(cursor);
-      url.searchParams.set("cursor",cursor);
-    } while (pages < pageLimit);
-    if (cursor && scanStatus === "complete") scanStatus = "page_limit";
+    if (saved?.etag) headers["If-None-Match"] = saved.etag;
+    const response = await fetch(url,{headers});
+    if (response.status === 304 && saved?.board) {
+      await remember(boardKey,saved.board,900);
+      return json(saved.board);
+    }
+    if (response.status === 429) {
+      const error = await response.json().catch(() => null);
+      const providerCode = ["MONTHLY_QUOTA_EXCEEDED","RATE_LIMIT_EXCEEDED"].includes(error?.error?.code)
+        ? error.error.code : "PROVIDER_LIMIT";
+      const now = Date.now();
+      const next = providerRetryAt(response,providerCode,now);
+      const details = {providerCode,retryAt:new Date(next).toISOString()};
+      await remember(cooldownKey,details,Math.max(1,Math.ceil((next-now)/1000)));
+      return limited(details,saved);
+    }
+    if (!response.ok) return json({error:"PrizePicks provider unavailable"},502);
+    const data = await response.json();
+    if (data.meta?.mode !== "live" || data.meta.is_demo === true || !Array.isArray(data.data)) {
+      return json({error:"PrizePicks provider returned an unexpected response"},502);
+    }
+    const offers = data.data;
+    const observedAt = typeof data.meta.observed_at === "string" ? data.meta.observed_at : null;
+    const partial = Boolean(data.meta.next_cursor);
     const lines = [];
     const offerIds = new Set();
     for (const prop of offers) {
@@ -141,14 +143,25 @@ async function prizePicksLines(request, env, scan = false) {
         eventStart:typeof prop.event?.starts_at === "string" ? prop.event.starts_at : null,
         observedAt:typeof prop.observed_at === "string" ? prop.observed_at : null});
     }
-    const out = json({connected:true,source,lines,partial:Boolean(cursor),
-      observedAt,pages,scanStatus});
-    await remember(key,out,scanStatus === "provider_limit" ? 60 : 900);
-    if (!scan || pages > 1) await remember(snapshotKey,out,86400);
-    return out;
+    const board = {connected:true,source,lines,partial,observedAt,pages:1,
+      scanStatus:partial ? "page_limit" : "complete"};
+    if (offers.length && !lines.length) {
+      return json({error:"PrizePicks provider returned no usable live rows"},502);
+    }
+    await remember(boardKey,board,900);
+    await remember(snapshotKey,{board,etag:response.headers.get("ETag")},86400);
+    return json(board);
   } catch {
     return json({error:"PrizePicks feed unavailable"},502);
   }
+}
+
+async function prizePicksLines(request,env) {
+  if (!env.PRIZEPICKS_API_KEY) return json({connected:false,source:"prizepicksapi.com",lines:[]});
+  if (!prizePicksRefresh) {
+    prizePicksRefresh = refreshPrizePicksBoard(request,env).finally(() => { prizePicksRefresh = null; });
+  }
+  return (await prizePicksRefresh).clone();
 }
 
 export default {
@@ -164,7 +177,7 @@ export default {
     if (path === "/api/props") return json({sport:"NBA",live:false,
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});
-    if (path === "/api/prizepicks/scan") return prizePicksLines(request, env, true);
+    if (path === "/api/prizepicks/scan") return prizePicksLines(request, env);
     if (path === "/api/prizepicks") return prizePicksLines(request, env);
     if (path === "/api/lines") {
       // Cache successful results for 15 minutes to reduce paid provider requests.
