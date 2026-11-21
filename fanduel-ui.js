@@ -1,9 +1,10 @@
-import { importPlayers, reviewCSV, roster } from "./fanduel-optimizer.js";
+import { importPlayers, profiles, reviewCSV } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const importForm = byId("fdImport");
 const autoLoad = byId("fdAutoLoad");
+const sport = byId("fdSport");
 const salaries = byId("fdSalaries");
 const projections = byId("fdProjections");
 const search = byId("fdSearch");
@@ -60,6 +61,7 @@ importForm.addEventListener("submit",async event => {
   autoRequest?.abort();
   autoRequest = undefined;
   autoLoad.disabled = true;
+  sport.disabled = true;
   slateLockAt = null;
   importForm.querySelector("button").disabled = true;
   clearLineups();
@@ -68,7 +70,7 @@ importForm.addEventListener("submit",async event => {
     const salaryFile = salaries.files[0];
     const projectionFile = projections.files[0];
     if (salaryFile.size > 5_000_000 || projectionFile?.size > 5_000_000) throw new Error("Use CSV files under 5 MB.");
-    const result = importPlayers(await salaryFile.text(),await projectionFile?.text());
+    const result = importPlayers(await salaryFile.text(),await projectionFile?.text(),sport.value);
     players = result.players.sort((a,b) => (b.points ?? -Infinity)-(a.points ?? -Infinity) || a.name.localeCompare(b.name));
     const missing = players.filter(player => !Number.isFinite(player.points)).length;
     const averages = players.filter(player => player.source === "FanDuel FPPG").length;
@@ -84,6 +86,7 @@ importForm.addEventListener("submit",async event => {
   } finally {
     importForm.querySelector("button").disabled = false;
     autoLoad.disabled = false;
+    sport.disabled = false;
   }
 });
 
@@ -112,7 +115,7 @@ function renderLineups(result,requested) {
     const body = table.createTBody();
     for (const {slot,player} of lineup.picks) {
       const row = body.insertRow();
-      for (const value of [roster[slot][0],player.name,player.team,dollars.format(player.salary),player.points.toFixed(1)]) {
+      for (const value of [profiles[sport.value].roster[slot][0],player.name,player.team,dollars.format(player.salary),player.points.toFixed(1)]) {
         row.insertCell().textContent = value;
       }
     }
@@ -152,7 +155,7 @@ build.addEventListener("click",() => {
     finish();
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
-  optimizer.postMessage({players,count:requested,difference:difference.valueAsNumber});
+  optimizer.postMessage({players,count:requested,difference:difference.valueAsNumber,sport:sport.value});
 });
 async function loadPublicPool() {
   autoRequest?.abort();
@@ -162,7 +165,7 @@ async function loadPublicPool() {
   byId("fdStatus").textContent = "Looking for an upcoming FanDuel player pool…";
   const timeout = setTimeout(()=>request.abort(),25000);
   try {
-    const response = await fetch("/api/nba/fanduel",{signal:request.signal});
+    const response = await fetch("/api/nba/fanduel?sport="+sport.value,{signal:request.signal});
     const data = await response.json();
     if (autoRequest !== request || request.signal.aborted) return;
     if (!response.ok) throw new Error(data.error || "No public FanDuel player pool is available.");
@@ -190,17 +193,38 @@ async function loadPublicPool() {
     }
   }
 }
+function applySport() {
+  const profile = profiles[sport.value];
+  byId("fdRules").textContent = dollars.format(profile.salaryCap)+" cap · "+profile.roster.map(([slot])=>slot).join(", ");
+  byId("fdTeamRules").textContent = "Lock or exclude players before building. Use at least three teams and at most "+
+    profile.maxTeam+" players per team"+(profile.maxHitters ? ", including at most "+profile.maxHitters+" hitters" : "")+
+    ". Check current player availability before using a lineup.";
+  difference.max = profile.roster.length;
+  difference.value = Math.min(difference.valueAsNumber || 2,profile.roster.length);
+}
 autoLoad.addEventListener("click",loadPublicPool);
+sport.addEventListener("change",() => {
+  autoRequest?.abort();
+  autoRequest = undefined;
+  players = [];
+  slateLockAt = null;
+  importForm.reset();
+  clearLineups();
+  byId("fdPool").hidden = true;
+  applySport();
+  loadPublicPool();
+});
+applySport();
 loadPublicPool();
 
 search.addEventListener("input",renderPlayers);
 count.addEventListener("change",clearLineups);
 difference.addEventListener("change",clearLineups);
 exportButton.addEventListener("click",() => {
-  const url = URL.createObjectURL(new Blob([reviewCSV(lineups)],{type:"text/csv;charset=utf-8"}));
+  const url = URL.createObjectURL(new Blob([reviewCSV(lineups,sport.value)],{type:"text/csv;charset=utf-8"}));
   const download = document.createElement("a");
   download.href = url;
-  download.download = "fanduel-nba-lineups-review.csv";
+  download.download = "fanduel-"+sport.value.toLowerCase()+"-lineups-review.csv";
   download.click();
   setTimeout(() => URL.revokeObjectURL(url),1000);
 });
