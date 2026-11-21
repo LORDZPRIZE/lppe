@@ -1,4 +1,4 @@
-import { importPlayers, salaryCap, teamCode } from "../../../fanduel-optimizer.js";
+import { importPlayers, profiles, salaryCap, teamCode } from "../../../fanduel-optimizer.js";
 
 const source = "https://www.dailyfantasyfuel.com/nba/projections/fanduel/";
 const scoreboard = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=";
@@ -75,11 +75,13 @@ export function normalizePublicSlate({rows,updatedAt},events,now) {
     provider:"Daily Fantasy Fuel",poolType:"public preview",label:"Published FanDuel pool"};
 }
 
-export function selectProviderSlate(data,now) {
+export function selectProviderSlate(data,now,sport = "NBA") {
+  const profile = profiles[sport];
   return data.filter(slate => {
     const starts = Date.parse(slate.starts_at);
-    return slate.sport === "NBA" && slate.started === false && slate.salary_cap === salaryCap &&
-      slate.games >= 2 && slate.players >= 9 && /^[a-z0-9_-]+$/i.test(String(slate.id)) &&
+    return (slate.sport === sport || (sport === "CFB" && slate.sport === "NCAAF")) &&
+      slate.started === false && slate.salary_cap === profile.salaryCap &&
+      slate.games >= 2 && slate.players >= profile.roster.length && /^[a-z0-9_-]+$/i.test(String(slate.id)) &&
       starts > now && easternDay(starts) <= easternDay(now+86400000) &&
       !/single|showdown|quarter|half|tiers|mvp|express/i.test(slate.label || "");
   }).sort((a,b) => easternDay(Date.parse(a.starts_at)).localeCompare(easternDay(Date.parse(b.starts_at))) ||
@@ -87,27 +89,28 @@ export function selectProviderSlate(data,now) {
     b.games-a.games || Date.parse(a.starts_at)-Date.parse(b.starts_at))[0];
 }
 
-export function normalizeProviderPlayers(data,slate) {
-  const csv = ["ID,Name,Position,Team,Salary,FPPG,Injury Indicator",
+export function normalizeProviderPlayers(data,slate,sport = "NBA") {
+  const profile = profiles[sport];
+  const csv = ["ID,Name,Position,Team,Salary,FPPG,Injury Indicator,Game",
     ...data.map(row => {
       const positions = row.roster_positions || row.positions || row.position || "";
       const status = row.injury_status || row.injury_indicator || row.status || "";
       return [row.id ?? row.player_id ?? "",row.name ?? row.player ?? "",
         Array.isArray(positions) ? positions.join("/") : positions,row.team ?? "",row.salary ?? "",
-        row.fppg ?? row.fantasy_points_per_game ?? "",status].map(csvCell).join(",");
+        row.fppg ?? row.fantasy_points_per_game ?? "",status,row.game_id ?? row.game ?? ""].map(csvCell).join(",");
     })].join("\n");
-  const {players,skipped} = importPlayers(csv);
-  if (players.filter(player => Number.isFinite(player.points) && player.selection !== "exclude").length < 9) {
-    return {error:"The supplied salary slate has fewer than nine eligible players with FPPG."};
+  const {players,skipped} = importPlayers(csv,"",sport);
+  if (players.filter(player => Number.isFinite(player.points) && player.selection !== "exclude").length < profile.roster.length) {
+    return {error:"The supplied salary slate has too few eligible players with FPPG."};
   }
   return {date:easternDay(Date.parse(slate.starts_at)),updatedAt:slate.players_read_at || null,
     lockAt:Date.parse(slate.starts_at),gameCount:slate.games,players,skipped,
-    provider:"FanDuelAPI.com",poolType:"salary feed",label:slate.label || "FanDuel NBA Classic"};
+    provider:"FanDuelAPI.com",poolType:"salary feed",label:slate.label || "FanDuel " + profile.name + " Classic"};
 }
 
-async function providerPool(env) {
+async function providerPool(env,sport) {
   const headers = {Authorization:"Bearer "+env.FANDUEL_API_KEY,Accept:"application/json",
-    "X-User-Request":"Load an upcoming FanDuel NBA Classic slate and its salaries for LPPE"};
+    "X-User-Request":"Load an upcoming FanDuel " + profiles[sport].name + " Classic slate and its salaries for LPPE"};
   async function read(path) {
     const response = await fetch(salaryProvider+path,{headers,signal:AbortSignal.timeout(8000)});
     if (response.status === 429) throw new Error("The FanDuel salary provider has reached its usage limit.");
@@ -117,8 +120,11 @@ async function providerPool(env) {
     if (!Array.isArray(body.data)) throw new Error("The FanDuel salary API returned an unexpected response.");
     return body.data;
   }
-  const slate = selectProviderSlate(await read("/dfs/slates?sport=NBA&started=false&limit=50"),Date.now());
-  if (!slate) return {error:"No upcoming NBA Classic slate was returned by the salary provider."};
+  let slate = selectProviderSlate(await read("/dfs/slates?sport="+sport+"&started=false&limit=50"),Date.now(),sport);
+  if (!slate && sport === "CFB") {
+    slate = selectProviderSlate(await read("/dfs/slates?sport=NCAAF&started=false&limit=50"),Date.now(),sport);
+  }
+  if (!slate) return {error:"No upcoming " + profiles[sport].name + " Classic slate was returned by the salary provider."};
   const rows = [];
   while (rows.length < slate.players && rows.length < 800) {
     const limit = Math.min(200,slate.players-rows.length);
@@ -128,7 +134,7 @@ async function providerPool(env) {
   }
   if (rows.length < slate.players) return {error:"The salary provider returned an incomplete player pool."};
   if (Date.parse(slate.starts_at) <= Date.now()) return {error:"The salary slate has already locked."};
-  return normalizeProviderPlayers(rows,slate);
+  return normalizeProviderPlayers(rows,slate,sport);
 }
 
 async function publicPool() {
@@ -143,8 +149,13 @@ async function publicPool() {
 }
 
 export async function onRequestGet({request,env}) {
+  const sport = new URL(request.url).searchParams.get("sport")?.toUpperCase() || "NBA";
+  if (!Object.hasOwn(profiles,sport)) return reply({error:"Unsupported FanDuel Classic sport."},400);
   const configured = Boolean(env.FANDUEL_API_KEY);
-  const key = new Request(new URL("/lppe-internal/fanduel-pool-v2/"+(configured ? "provider" : "public"),request.url));
+  if (!configured && sport !== "NBA") return reply({
+    error:"Automatic " + profiles[sport].name + " loading needs the salary API key. Import a FanDuel contest CSV to build now."
+  },503);
+  const key = new Request(new URL("/lppe-internal/fanduel-pool-v3/"+sport+"/"+(configured ? "provider" : "public"),request.url));
   try {
     const cache = caches.default;
     const cached = await cache.match(key);
@@ -152,7 +163,7 @@ export async function onRequestGet({request,env}) {
       const data = await cached.json();
       if (data.lockAt > Date.now()) return reply(data);
     }
-    const data = configured ? await providerPool(env) : await publicPool();
+    const data = configured ? await providerPool(env,sport) : await publicPool();
     if (data.error) return reply(data,404);
     const ttl = Math.max(1,Math.min(600,Math.floor((data.lockAt-Date.now())/1000)));
     try { await cache.put(key,Response.json(data,{headers:{"Cache-Control":"public, max-age="+ttl}})); } catch {}
