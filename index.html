@@ -80,6 +80,7 @@ h1{font-size:21px}
   <h2>Today’s NBA Prop Rankings</h2>
   <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
   <button type="button" id="findTodayProps">Find Today’s Props</button>
+  <label>Estimate source <select id="estimateSource"><option value="auto">Automatic</option><option value="stats">Stats only (no sportsbook credits)</option></select></label>
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
   <label>Books required for entry suggestions <select id="minBooks"><option value="2">2 or more</option><option value="3">3 or more</option><option value="4">4 or more</option></select></label>
@@ -90,6 +91,16 @@ h1{font-size:21px}
    <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>BOOK ESTIMATE RANGE</th><th>DETAILS</th></tr></thead>
     <tbody id="todayPropsRows"></tbody>
    </table>
+  </div>
+ </section>
+
+ <section class="section" id="nbaModel" aria-labelledby="nbaModelHeading" hidden>
+  <h2 id="nbaModelHeading">NBA Model Estimates</h2>
+  <p class="sub">Based on 4 to 6 recent ESPN box scores per player. Estimates use recent playing time and production, with no live injury or lineup adjustments. Model estimates are excluded from entry suggestions.</p>
+  <p id="nbaModelStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="nbaModelTable" hidden>
+   <table><thead><tr><th>PLAYER</th><th>TEAM</th><th>MARKET</th><th>PROJECTED</th><th>MINUTES</th><th>GAMES</th><th>LINE</th><th>SIDE</th><th>MODEL ESTIMATE</th></tr></thead>
+   <tbody id="nbaModelRows"></tbody></table>
   </div>
  </section>
 
@@ -729,9 +740,109 @@ function renderSuggestions() {
   }
 }
 
+const estimateSource = document.getElementById("estimateSource");
+try { estimateSource.value = localStorage.getItem("lppe-estimate-source") === "stats" ? "stats" : "auto"; } catch {}
+estimateSource.addEventListener("change",() => {
+ try { localStorage.setItem("lppe-estimate-source",estimateSource.value); } catch {}
+ scanAndRankProps();
+});
 let latestBoard = null;
+let latestModel = null;
+
+const modelMarkets = ["points","rebounds","assists","three-pointers"];
+const modelPlayerKey = player => player.trim().normalize("NFD").replace(/\p{Mark}/gu,"")
+ .toLowerCase().replace(/[^a-z0-9]/g,"");
+const modelTeamKey = team => ({NY:"NYK",NO:"NOP",SA:"SAS",GS:"GSW",UTAH:"UTA",WSH:"WAS",BKN:"BKN",BRK:"BKN",PHO:"PHX"})[team] || team;
+
+function estimateNBAProps(data,prizePicks,now,filters) {
+ const byPlayer = new Map();
+ const projections = [];
+ for (const player of data.players) {
+  const games = player.games.filter(game => Date.parse(game.date) < now && now - Date.parse(game.date) <= 11*86400000);
+  if (games.length < 4) continue;
+  const minutes = games.reduce((sum,game) => sum + game.minutes,0) / games.length;
+  const key = modelPlayerKey(player.player) + ":" + modelTeamKey(player.team);
+  if (byPlayer.has(key)) {
+   byPlayer.set(key,null);
+   continue;
+  }
+  const markets = modelMarkets.map((market,index) => {
+   const values = games.map(game => game.values[index]);
+   return {player:player.player,team:player.team,market,minutes,games:games.length,values,
+    projection:values.reduce((sum,value) => sum + value,0) / values.length};
+  });
+  byPlayer.set(key,markets);
+  projections.push(...markets);
+ }
+ const today = pacificDay.format(now);
+ const sides = [];
+ for (const prop of prizePicks?.savedBoard ? [] : prizePicks?.lines || []) {
+  if (comparisonIssue(prop,now,today) || !prop.team) continue;
+  const markets = byPlayer.get(modelPlayerKey(prop.player) + ":" + modelTeamKey(prop.team.trim().toUpperCase()));
+  const model = markets?.find(item => item.market === supportedMarkets.get(prop.market.toLowerCase()));
+  if (!model) continue;
+  const more = model.values.filter(value => value > prop.line).length;
+  const less = model.values.filter(value => value < prop.line).length;
+  if (more + less < 4) continue;
+  for (const item of prop.sides) {
+   const tier = item.tier?.trim().toLowerCase();
+   if (filters.side !== "all" && item.side !== filters.side) continue;
+   if (filters.tier === "no-goblins" ? tier === "goblin" : filters.tier !== "all" && tier !== filters.tier) continue;
+   if (tier === "demon" && item.side !== "more") continue;
+   const hits = item.side === "more" ? more : less;
+   sides.push({...model,line:prop.line,side:item.side.toUpperCase(),chance:(hits+2)/(more+less+4)});
+  }
+ }
+ return {sides:sides.sort((a,b) => b.chance-a.chance),
+  projections:projections.sort((a,b) => a.player.localeCompare(b.player))};
+}
+
+function renderNBAModel(prizePicks,filters) {
+ const status = document.getElementById("nbaModelStatus");
+ const table = document.getElementById("nbaModelTable");
+ const body = document.getElementById("nbaModelRows");
+ const {sides,projections} = estimateNBAProps(latestModel,prizePicks,Date.now(),filters);
+ status.textContent = sides.length ? sides.length + " matching PrizePicks sides ranked by model estimate." :
+  projections.length ? "Showing projections. No fresh matching PrizePicks sides are available for these filters." :
+  "No upcoming players have enough recent box scores.";
+ if (latestModel.partial) status.textContent += " Box score coverage is partial.";
+ body.replaceChildren();
+ for (const item of sides.length ? sides : projections) {
+  const estimate = item.chance == null ? "—" : (item.chance*100).toFixed(1) + "%" +
+   (Number.isInteger(item.line) ? " if no tie" : "");
+  const row = body.insertRow();
+  for (const value of [item.player,item.team,item.market,item.projection.toFixed(1),item.minutes.toFixed(1),
+   item.games,item.line ?? "—",item.side ?? "—",estimate]) row.insertCell().textContent = value;
+ }
+ table.hidden = !body.rows.length;
+}
+
+async function loadNBAModel() {
+ const section = document.getElementById("nbaModel");
+ const status = document.getElementById("nbaModelStatus");
+ section.hidden = false;
+ document.getElementById("nbaModelTable").hidden = true;
+ status.textContent = "Loading recent NBA box scores…";
+ const controller = new AbortController();
+ const timer = setTimeout(() => controller.abort(),40000);
+ try {
+  const response = await fetch(API_URL+"/api/nba/model",{signal:controller.signal});
+  if (!response.ok) throw new Error("Model unavailable");
+  const data = await response.json();
+  if (!Array.isArray(data.players)) throw new Error("Unexpected response");
+  return data;
+ } catch {
+  status.textContent = "NBA box scores are temporarily unavailable.";
+ } finally {
+  clearTimeout(timer);
+ }
+}
+
 function useLatestBoard() {
  if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds);
+ if (latestModel) renderNBAModel(latestBoard?.prizePicks,{
+  tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value
+ });
 }
 for (const id of ["rankTier","rankSide","minBooks"]) {
  document.getElementById(id).addEventListener("change",useLatestBoard);
@@ -752,21 +863,30 @@ async function scanAndRankProps() {
  status.textContent = "Checking PrizePicks for upcoming NBA lines…";
  refreshEntryCandidates([]);
  latestBoard = null;
+ latestModel = null;
+ estimateSource.disabled = true;
+ document.getElementById("nbaModel").hidden = true;
  try {
   const prizePicks = await loadPrizePicksLines(true);
-  if (!prizePicks) throw new Error(document.getElementById("prizePicksStatus").textContent);
+  if (!prizePicks) status.textContent = document.getElementById("prizePicksStatus").textContent;
   const now = Date.now();
   const today = pacificDay.format(now);
-  const needsOdds = !prizePicks.savedBoard && prizePicks.lines.some(prop => !comparisonIssue(prop,now,today));
+  const needsOdds = estimateSource.value === "auto" && prizePicks && !prizePicks.savedBoard &&
+   prizePicks.lines.some(prop => !comparisonIssue(prop,now,today));
   if (needsOdds) status.textContent = "Checking sportsbook quotes…";
   const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
-  latestBoard = {prizePicks,sportsbook,needsOdds};
+  if (prizePicks) latestBoard = {prizePicks,sportsbook,needsOdds};
   useLatestBoard();
+  if (!sportsbook?.length || !rankMarketProps(prizePicks.lines,sportsbook).some(prop => prop.chance !== null)) {
+   latestModel = await loadNBAModel();
+   if (latestModel) useLatestBoard();
+  }
   return true;
  } catch (error) {
   status.textContent = error.message || "The prop comparison is temporarily unavailable.";
  } finally {
   rankButton.disabled = false;
+  estimateSource.disabled = false;
   findEntries.disabled = false;
   entrySize.disabled = false;
  }
