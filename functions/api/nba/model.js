@@ -104,8 +104,31 @@ async function recentNBA(request, now = Date.now()) {
   });
 }
 
+async function completedNBA(request, date) {
+  const days = await cachedNBA(request,"results-schedule-v1/" + date,900,() =>
+    getJson(espnNBA + "/scoreboard?dates=" + date));
+  if (!Array.isArray(days.events)) throw new Error("Missing NBA results schedule");
+  const games = days.events.filter(game => game.status?.type?.name === "STATUS_FINAL" &&
+    /^\d+$/.test(game.id) && Number.isFinite(Date.parse(game.date))).slice(0,16);
+  const results = [];
+  for (let offset = 0; offset < games.length; offset += 6) {
+    const batch = await Promise.allSettled(games.slice(offset,offset+6).map(async game => ({
+      start:game.date,
+      players:await cachedNBA(request,"box-v1/" + game.id,86400,async () =>
+        playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id))))
+    })));
+    results.push(...batch.filter(item => item.status === "fulfilled").map(item => item.value));
+  }
+  return {results,partial:results.length < games.length};
+}
+
 export async function onRequestGet({request}) {
-  try { return json(await recentNBA(request)); }
+  const date = new URL(request.url).searchParams.get("results");
+  const now = Date.now();
+  if (date !== null && (!/^\d{8}$/.test(date) || date < nbaDate(now - 15*86400000) || date > nbaDate(now))) {
+    return Response.json({error:"Results are available for the past 15 days"},{status:400});
+  }
+  try { return json(date ? await completedNBA(request,date) : await recentNBA(request,now)); }
   catch {
     return Response.json({error:"NBA results are temporarily unavailable"},{
       status:502,headers:{"Cache-Control":"no-store"}
