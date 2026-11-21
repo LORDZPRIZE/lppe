@@ -459,8 +459,9 @@ async function loadPrizePicksLines() {
   table.hidden = !data.lines.length;
   const observed = Date.parse(data.observedAt);
   status.textContent = (data.lines.length ? data.lines.length + " PrizePicks lines shown." : "No PrizePicks lines returned.") +
-   (data.partial ? " This view shows the first page of the board." : "") +
+   (data.partial ? " This board has partial coverage." : "") +
    (Number.isFinite(observed) ? " Observed " + new Date(observed).toLocaleString() + "." : "");
+  if (data.savedBoard) status.textContent = "Provider limit reached. Showing the last saved board. " + status.textContent;
   return data;
  } catch {
   status.textContent = "PrizePicks lines are temporarily unavailable.";
@@ -763,7 +764,7 @@ async function scanAndRankProps() {
   const [prizePicks,sportsbook] = await Promise.all([scanPrizePicks(),loadSportsbookLines()]);
   const now = Date.now();
   const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
-  const ranked = rankMarketProps(prizePicks.lines,sportsbook || [],now,filters);
+  const ranked = rankMarketProps(prizePicks.lines,prizePicks.savedBoard ? [] : sportsbook || [],now,filters);
   const pricedCount = ranked.filter(prop=>prop.chance !== null).length;
   const matches = ranked.filter(prop=>prop.chance !== null && prop.chance > 0.5);
   refreshEntryCandidates(matches);
@@ -813,6 +814,7 @@ async function scanAndRankProps() {
   }).map(line=>JSON.stringify([line.eventStart,[line.team,line.opponent].sort()])));
   status.textContent += " Scanned " + prizePicks.lines.length + " PrizePicks offers across " +
    games.size + " identified upcoming games today. " + matches.length + " sides had estimates above 50%.";
+  if (prizePicks.savedBoard) status.textContent += " Provider limit reached. Showing saved lines for reference only.";
   if (!sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
