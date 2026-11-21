@@ -110,6 +110,27 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
  border-radius:99px;background:#1d3d33;color:var(--green);font-size:.75em
 }
 [data-view][hidden]{display:none}
+#outsideOptimizer{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#edf4ff;background:#101b30;border:1px solid #304366;padding:clamp(16px,4vw,32px);border-radius:24px}
+#outsideOptimizer h2{font-family:inherit;font-size:clamp(26px,5vw,40px);line-height:1.12;letter-spacing:-.03em;margin:0;color:#fff}
+#outsideOptimizer h3{font-family:inherit;font-size:18px;color:#edf4ff;margin:24px 0 10px}
+.outside-top,.outside-card{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#outsideOptimizer .sub,#outsideOptimizer small{color:#b7c9e3}
+#outsideOptimizer .outside-primary{background:#a9d1ff;color:#102341;font:inherit;font-weight:750;border:1px solid #a9d1ff}
+#outsideOptimizer button,#outsideOptimizer summary{min-height:44px}
+#outsideOptimizer button:focus-visible,#outsideOptimizer summary:focus-visible,#outsideOptimizer input:focus-visible,#outsideOptimizer select:focus-visible{outline:2px solid #a9d1ff;outline-offset:3px}
+#outsideOptimizer details{background:#172641;border:1px solid #354d73;border-radius:14px;padding:0 14px}
+#outsideOptimizer summary{padding:12px 0;color:#eaf3ff;font-weight:700;cursor:pointer}
+.outside-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding-bottom:14px}
+.outside-form label{display:grid;gap:4px;min-width:0;color:#d5e3f8;font-weight:650}
+#outsideOptimizer input,#outsideOptimizer select{width:100%;min-width:0;min-height:44px;background:#0e192c;color:#f0f6ff;border:1px solid #56729a;border-radius:9px;padding:8px;font:inherit;color-scheme:dark}
+.outside-form .outside-primary{align-self:end}
+.outside-cards{display:grid;gap:10px;padding:0;list-style:none}
+.outside-card{background:#172641;border:1px solid #354d73;border-radius:14px;padding:13px}
+.outside-card strong,.outside-card small{display:block}
+.outside-status{background:#263957;color:#e9f2ff;border-radius:10px;padding:7px 10px;font-size:.9rem;overflow-wrap:anywhere}
+.outside-status[data-green="true"]{background:#173d36;color:#a3f4cd}
+#outsideEntries li{background:#172641;border:1px solid #354d73;border-radius:14px;padding:13px;color:#d5e3f8}
+@media(max-width:600px){.outside-form{grid-template-columns:repeat(2,minmax(0,1fr))}.outside-form .outside-primary{grid-column:1/-1}.outside-card .outside-status{flex-basis:100%}}
 [data-view] [id]{scroll-margin-top:72px}
 [data-view]>.section:first-child{margin-top:0}
 .section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -479,23 +500,29 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
  </section>
 </div>
 <div data-view="outsideOptimizer">
- <section class="section" id="outsideOptimizer">
-  <h2>Outside Picks Optimizer</h2>
-  <p class="sub">Compares dated outside picks with fresh LPPE PrizePicks offers and builds GREEN entries from exact matches.</p>
-  <details>
-   <summary>Source picks</summary>
-   <p class="sub">One pick per line: Pacific slate date | source | player | market | line | MORE or LESS</p>
-   <textarea id="outsidePickInput" rows="5" style="width:100%" aria-label="Outside picks"></textarea>
-   <button id="saveOutsidePicks" type="button" class="secondary">Save source picks</button>
-   <p id="outsideInputStatus" role="status"></p>
-  </details>
+ <section class="section" id="outsideOptimizer" aria-labelledby="outsideHeading">
+  <div class="outside-top">
+   <h2 id="outsideHeading">Outside Picks</h2>
+   <button id="outsideRefresh" type="button" class="outside-primary">Check today’s lines</button>
+  </div>
   <p id="outsideStatus" class="sub" role="status"></p>
-  <div class="table-wrap"><table>
-   <thead><tr><th>Source</th><th>Pick</th><th>LPPE comparison</th></tr></thead>
-   <tbody id="outsideRows"></tbody>
-  </table></div>
-  <h3>Automatic GREEN entries</h3>
-  <ul id="outsideEntries"></ul>
+  <details id="outsideFormPanel">
+   <summary>Add an outside pick</summary>
+   <form id="outsideForm" class="outside-form">
+    <label>Player<input name="player" placeholder="e.g. Victor Wembanyama" required maxlength="90"></label>
+    <label>Source<input name="source" placeholder="e.g. BettingPros" required maxlength="90"></label>
+    <label>Game date<input name="date" type="date" required></label>
+    <label>Stat<select name="market" required></select></label>
+    <label>Line<input name="line" type="number" inputmode="decimal" min="0" step="any" placeholder="11.5" required></label>
+    <label>Pick<select name="side"><option value="MORE">More</option><option value="LESS">Less</option></select></label>
+    <button type="submit" class="outside-primary">Add pick</button>
+   </form>
+   <p id="outsideInputStatus" class="sub" role="status"></p>
+  </details>
+  <h3>Saved picks</h3>
+  <ul id="outsideRows" class="outside-cards"></ul>
+  <h3>GREEN entries</h3>
+  <ul id="outsideEntries" class="outside-cards"></ul>
  </section>
 </div>
 
@@ -2265,9 +2292,9 @@ const outsideExample = [
  "2026-11-21 | Betravon trend | Domantas Sabonis | rebounds | 11.5 | MORE",
  "2026-11-21 | Betting Buddha | Jalen Brunson | points | 27.5 | MORE"
 ].join("\n");
-const outsideInput = document.getElementById("outsidePickInput");
-outsideInput.value = outsideExample;
-try { outsideInput.value = localStorage.getItem(outsidePicksKey) ?? outsideExample; } catch {}
+const outsideForm = document.getElementById("outsideForm");
+let savedOutsidePicks = outsideExample;
+try { savedOutsidePicks = localStorage.getItem(outsidePicksKey) ?? outsideExample; } catch {}
 
 function parseOutsidePicks(value) {
  const picks = [];
@@ -2291,7 +2318,7 @@ function parseOutsidePicks(value) {
 }
 
 let outsidePicks = [];
-try { outsidePicks = parseOutsidePicks(outsideInput.value); } catch {}
+try { outsidePicks = parseOutsidePicks(savedOutsidePicks); } catch {}
 let outsideExpiry;
 const outsideDate = new Intl.DateTimeFormat("en-US",{timeZone:"America/Los_Angeles",year:"numeric",month:"2-digit",day:"2-digit"});
 
@@ -2314,7 +2341,7 @@ function renderOutsideOptimizer() {
   rankMarketProps(fresh,latestBoard.sportsbook,now) : [];
  const minBooks = Number(document.getElementById("minBooks").value);
  const candidates = new Map();
- for (const pick of outsidePicks) {
+ for (const [index,pick] of outsidePicks.entries()) {
   const sameProp = prop => modelPlayerKey(prop.player) === modelPlayerKey(pick.player) &&
    supportedMarkets.get(prop.market.trim().toLowerCase()) === pick.market;
   const available = pick.date === today ? fresh.filter(sameProp) : [];
@@ -2336,14 +2363,30 @@ function renderOutsideOptimizer() {
   } else if (available.length) {
    decision += " · available lines " + [...new Set(available.map(prop => prop.line))].join(", ");
   }
-  const row = rows.insertRow();
-  for (const value of [pick.source,pick.player + " · " + pick.side + " " + pick.line + " " + pick.market,decision]) {
-   row.insertCell().textContent = value;
-  }
+  const row = document.createElement("li");
+  row.className = "outside-card";
+  const title = document.createElement("div");
+  const player = document.createElement("strong");
+  player.textContent = pick.player;
+  const line = document.createElement("small");
+  line.textContent = (pick.side === "MORE" ? "More" : "Less") + " than " + pick.line + " " + pick.market + " · " + pick.source;
+  title.append(player,line);
+  const result = document.createElement("span");
+  result.className = "outside-status";
+  result.dataset.green = String(decision.startsWith("GREEN"));
+  result.textContent = decision;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "secondary";
+  remove.textContent = "Remove";
+  remove.setAttribute("aria-label","Remove " + pick.player + " " + pick.market + " from " + pick.source);
+  remove.addEventListener("click",() => saveOutsidePicks(outsidePicks.filter((_,i) => i !== index)));
+  row.append(title,result,remove);
+  rows.append(row);
  }
  const picks = [...candidates.values()];
  document.getElementById("outsideStatus").textContent = outsidePicks.length +
-  " source picks · " + picks.length + " eligible GREEN matches. Source picks update when you save them.";
+  " saved · " + picks.length + " GREEN matches" + (fresh.length ? "." : " · Waiting for fresh PrizePicks lines.");
  for (let size=2; size<=6; size++) {
   const [best] = suggestEntries(picks,size,1);
   if (!best) continue;
@@ -2365,19 +2408,45 @@ function renderOutsideOptimizer() {
  }
 }
 
-document.getElementById("saveOutsidePicks").addEventListener("click",() => {
+function saveOutsidePicks(picks) {
  const status = document.getElementById("outsideInputStatus");
  try {
-  const picks = parseOutsidePicks(outsideInput.value);
-  localStorage.setItem(outsidePicksKey,outsideInput.value);
+  const value = picks.map(pick => [pick.date,pick.source,pick.player,pick.market,pick.line,pick.side].join(" | ")).join("\n");
+  localStorage.setItem(outsidePicksKey,value);
   outsidePicks = picks;
-  status.textContent = "Source picks saved in this browser.";
+  status.textContent = "Saved on this device.";
   renderOutsideOptimizer();
+  return true;
+ } catch {
+  status.textContent = "Your browser couldn’t save the change.";
+  return false;
+ }
+}
+
+for (const market of new Set(supportedMarkets.values())) {
+ const option = document.createElement("option");
+ option.value = market;
+ option.textContent = market[0].toUpperCase() + market.slice(1);
+ outsideForm.elements.market.append(option);
+}
+outsideForm.elements.date.value = outsideSlateDate(Date.now());
+outsideForm.addEventListener("submit",event => {
+ event.preventDefault();
+ const fields = new FormData(outsideForm);
+ try {
+  const [pick] = parseOutsidePicks(["date","source","player","market","line","side"].map(key => fields.get(key)).join("|"));
+  if (outsidePicks.length >= 200) throw new Error("Remove a saved pick before adding another.");
+  if (!saveOutsidePicks([...outsidePicks,pick])) return;
+  outsideForm.elements.player.value = "";
+  outsideForm.elements.line.value = "";
+  outsideForm.elements.player.focus();
   if (latestBoard?.prizePicks && !latestBoard.sportsbook?.length) scanAndRankProps();
  } catch (error) {
-  status.textContent = error.message;
+  document.getElementById("outsideInputStatus").textContent = error.message;
  }
 });
+const outsideRefresh = document.getElementById("outsideRefresh");
+outsideRefresh.addEventListener("click",scanAndRankProps);
 
 function useLatestBoard() {
  renderOutsideOptimizer();
@@ -2411,6 +2480,8 @@ async function scanAndRankProps() {
  const table = document.getElementById("todayPropsTable");
  rankButton.disabled = true;
  rankButton.textContent = "Checking…";
+ outsideRefresh.disabled = true;
+ outsideRefresh.textContent = "Checking…";
  updateSlateStats("—","—");
  sizeRecheck.disabled = true;
  findEntries.disabled = true;
@@ -2455,6 +2526,8 @@ async function scanAndRankProps() {
   checkNBAResults();
   rankButton.disabled = false;
   rankButton.textContent = "Check for picks";
+  outsideRefresh.disabled = false;
+  outsideRefresh.textContent = "Check today’s lines";
   sizeRecheck.disabled = false;
   estimateSource.disabled = false;
   findEntries.disabled = false;
