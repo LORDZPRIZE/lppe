@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Lord's PrizePicks Prop Engine</title>
 <style>
 :root {
@@ -73,6 +73,52 @@ h1{font-size:21px}
 .pick-grid table{min-width:0}
 .pick-grid td,.pick-grid th{padding:7px}
 .pick-grid summary{cursor:pointer;color:var(--blue)}
+
+.app-nav{position:sticky;top:0;z-index:5;display:flex;justify-content:center;gap:8px;
+ padding:8px 5%;background:var(--bg);border-bottom:1px solid var(--line)}
+.app-nav a{display:flex;align-items:center;justify-content:center;gap:5px;min-height:44px;
+ padding:0 18px;border-radius:10px;color:var(--muted);text-decoration:none;font-weight:bold}
+.app-nav a[aria-current]{background:var(--panel2);color:var(--text)}
+#navBuilderCount{color:var(--green);font-size:.8em}
+[data-view][hidden]{display:none}
+[data-view] [id]{scroll-margin-top:72px}
+[data-view]>.section:first-child{margin-top:0}
+.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.section-heading h2{margin:0;font-size:clamp(20px,4vw,28px)}
+.quick-filters label,.board-search,.disclosure>label{display:grid;gap:5px;color:var(--muted);font-size:13px}
+.quick-filters label{flex:1 1 140px;min-width:0}
+.quick-filters input,.quick-filters select,.board-search input{width:100%}
+.board-search{max-width:420px}
+.disclosure{margin:12px 0;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.disclosure summary,.pick-grid summary{cursor:pointer;padding:12px 0;color:var(--blue)}
+.disclosure[open]{padding-bottom:12px}
+.recent-results{display:flex;flex-wrap:wrap;gap:6px;list-style:none;padding:0}
+.recent-results li{padding:4px 8px;border-radius:5px;background:var(--panel2)}
+.recent-results .cleared{color:var(--green)}
+.badge{display:inline-block}
+:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
+@media(max-width:700px){
+ header{padding:16px 4%}
+ main{padding:16px 4% calc(76px + env(safe-area-inset-bottom))}
+ .app-nav{position:fixed;inset:auto 0 0;gap:4px;border:0;border-top:1px solid var(--line);
+  padding:6px 4% calc(6px + env(safe-area-inset-bottom))}
+ .app-nav a{flex:1;padding:0 3px;font-size:13px}
+ [data-view] [id]{scroll-margin-top:16px}
+ .section-heading button{flex-shrink:0}
+ button,input,select,summary{min-height:44px}
+ input,select{font-size:16px;max-width:100%}
+ .pick-grid{grid-template-columns:minmax(0,1fr)}
+ #todayPropsTable{background:none;border:0;overflow:visible}
+ #todayPropsTable table,#todayPropsRows{display:block;min-width:0}
+ #todayPropsTable thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ #todayPropsRows tr{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
+ #todayPropsRows td{display:block;border:0;padding:0;overflow-wrap:anywhere}
+ #todayPropsRows td:first-child,#todayPropsRows td:last-child{grid-column:1/-1}
+ #todayPropsRows td:first-child{font-size:16px;font-weight:bold}
+ #todayPropsRows td[data-label]::before{content:attr(data-label);display:block;color:var(--muted);font-size:11px;margin-bottom:3px}
+ #todayPropsRows summary{color:var(--blue);padding:12px 0;cursor:pointer}
+}
 </style>
 </head>
 <body>
@@ -82,41 +128,60 @@ h1{font-size:21px}
  <p><a href="/fanduel.html" style="color:var(--blue)">FanDuel DFS Optimizer</a></p>
 </header>
 
+<nav class="app-nav" aria-label="Dashboard">
+ <a href="#today" aria-current="page">Today</a>
+ <a href="#nbaPropRankings">Board</a>
+ <a href="#builder">Builder <span id="navBuilderCount" aria-label="selected picks">0</span></a>
+ <a href="#watchlist">Watchlist</a>
+</nav>
 <main>
  <div id="apiStatus" class="notice" role="status" aria-live="polite">Checking LPPE API connection…</div>
 
- <section class="section" aria-labelledby="todayPicksHeading">
+<div data-view="today">
+ <section class="section" id="today" aria-labelledby="todayPicksHeading">
+  <div class="section-heading">
   <h2 id="todayPicksHeading">Today’s NBA Picks</h2>
   <button type="button" id="findTodayProps">Check for picks</button>
-  <div class="toolbar">
-   <label>Player <input id="picksPlayer" type="search" placeholder="Search player"></label>
-   <label>Market <select id="picksMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
-   <label>Recent minutes <select id="picksMinutes"><option value="0">Any</option><option value="20">20+ per game</option><option value="25">25+ per game</option><option value="30">30+ per game</option><option value="35">35+ per game</option></select></label>
   </div>
   <p id="todayPicksStatus" class="sub" role="status">Checking for fresh PrizePicks lines…</p>
   <p id="todayPicksTiming" class="sub" hidden></p>
+  <div class="toolbar quick-filters">
+   <label>Player <input id="picksPlayer" type="search" placeholder="Search player"></label>
+   <label>Market <select id="picksMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
+  </div>
+  <details class="disclosure">
+   <summary>Filters</summary>
+   <label>Recent minutes <select id="picksMinutes"><option value="0">Any</option><option value="20">20+ per game</option><option value="25">25+ per game</option><option value="30">30+ per game</option><option value="35">35+ per game</option></select></label>
+  </details>
   <div id="todayPicksCards" class="pick-grid"></div>
   <p class="sub"><a href="#nbaPropRankings" style="color:var(--blue)">Filters and full prop board</a> · <a href="https://prizepicksapi.com/?ref=attribution" style="color:var(--blue)">Data by PrizePicks API</a></p>
  </section>
-
+</div>
+<div data-view="nbaPropRankings">
  <section class="section" id="nbaPropRankings">
   <h2>Today’s NBA Prop Rankings</h2>
   <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
+  <label class="board-search">Player <input id="liveBoardPlayer" type="search" placeholder="Search player"></label>
+  <details class="disclosure">
+   <summary>Filters and estimate settings</summary>
+   <div class="toolbar quick-filters">
   <label>Estimate source <select id="estimateSource"><option value="auto">Automatic</option><option value="stats" selected>Stats only (no sportsbook credits)</option></select></label>
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
   <label>Books required for entry suggestions <select id="minBooks"><option value="2">2 or more</option><option value="3">3 or more</option><option value="4">4 or more</option></select></label>
+   </div>
   <p class="sub">LPPE scans on opening and every five minutes while this tab is visible. PrizePicks uses up to 100 offers per scheduled snapshot. Opening or refreshing the dashboard reads the latest snapshot.</p>
   <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%, Gray when a market estimate is unavailable.</p>
+  </details>
   <p id="todayPropsStatus" class="sub" role="status"></p>
   <p id="prizePicksFreshness" class="sub" hidden></p>
   <div class="tablewrap" id="todayPropsTable" hidden>
-   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>BOOK ESTIMATE RANGE</th><th>DETAILS</th></tr></thead>
-    <tbody id="todayPropsRows"></tbody>
+   <table role="table"><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>BOOK ESTIMATE RANGE</th><th>DETAILS</th></tr></thead>
+    <tbody id="todayPropsRows" role="rowgroup"></tbody>
    </table>
   </div>
  </section>
-
+<details class="disclosure tools"><summary>NBA model projections</summary>
  <section class="section" id="nbaModel" aria-labelledby="nbaModelHeading" hidden>
   <h2 id="nbaModelHeading">NBA Model Estimates</h2>
   <p class="sub">Based on 4 to 6 recent ESPN box scores per player. Estimates use recent playing time and production, with no live injury or lineup adjustments. Model estimates are excluded from entry suggestions.</p>
@@ -126,71 +191,14 @@ h1{font-size:21px}
    <tbody id="nbaModelRows"></tbody></table>
   </div>
  </section>
-
- <section class="section" aria-labelledby="watchlistHeading">
-  <h2 id="watchlistHeading">Prop Watchlist</h2>
-  <p class="sub">Use Watch in a prop’s details to save it on this device. For MORE, your target is the highest line you’ll consider. For LESS, it’s the lowest.</p>
-  <p id="watchlistStatus" class="sub" role="status"></p>
-  <div class="tablewrap" id="watchlistTable" hidden>
-   <table><thead><tr><th>PROP</th><th>SAVED LINE</th><th>TARGET LINE</th><th>CURRENT LINE</th><th>CURRENT ESTIMATE</th><th>STATUS</th><th>ACTION</th></tr></thead>
-   <tbody id="watchlistRows"></tbody></table>
-  </div>
- </section>
-
- <section class="section" aria-labelledby="nbaResultsHeading">
-  <h2 id="nbaResultsHeading">NBA Results Scorecard</h2>
-  <p class="sub">This browser saves the first pregame estimate for each exact line and source during a scan. LPPE checks final NBA box scores while the dashboard is open. These are stat results. PrizePicks can apply its own void and payout rules.</p>
-  <label>Market <select id="nbaResultsMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
-  <p class="sub">Calibration gap is observed hit rate minus average estimate. Forecast error averages the squared error for decided sides. Lower is better. A constant 50% forecast scores 0.250. Several sides can come from the same game.</p>
-  <p id="nbaResultsStatus" class="sub" role="status"></p>
-  <div class="tablewrap">
-   <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>DECIDED SAMPLE</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th><th>CALIBRATION GAP</th><th>FORECAST ERROR</th></tr></thead>
-   <tbody id="nbaResultsRows"></tbody></table>
-  </div>
- </section>
-
- <section class="section" aria-labelledby="sizeComparisonHeading">
-  <h2 id="sizeComparisonHeading">Compare 2–6 Pick Sizes</h2>
-  <p class="sub">LPPE shows the highest all-hit estimate it finds for each size. Enter the exact total payout for the listed picks. Expected returns assume independent games and full settlement.</p>
-  <label>Format <select id="sizeComparisonFormat"><option value="power">Power</option><option value="flex">Flex</option><option value="both">Power and Flex</option></select></label>
-  <label>Probability buffer <select id="sizeProbabilityBuffer"><option value="0.02">2 points per pick</option><option value="0.03" selected>3 points per pick</option><option value="0.05">5 points per pick</option></select></label>
-  <button type="button" id="sizeRecheck" class="secondary">Recheck board</button>
-  <p class="sub">Rechecking refreshes suggestions and clears the entered payouts. The buffer tests lower hit probabilities. It does not establish a confidence interval.</p>
-  <p id="sizeComparisonStatus" class="sub" role="status"></p>
-  <div class="tablewrap" id="sizeComparisonTable" hidden>
-   <table><thead><tr><th>ENTRY</th><th>SUGGESTED PICKS</th><th>ALL-HIT ESTIMATE</th><th>POWER BREAK-EVEN</th><th>TOTAL PAYOUTS</th><th>ESTIMATED NET RETURN</th><th>LOWER-PROBABILITY RETURN</th><th>DECISION</th></tr></thead>
-   <tbody id="sizeComparisonRows"></tbody></table>
-  </div>
- </section>
-
- <section class="section" aria-labelledby="entryCompareHeading">
-  <h2 id="entryCompareHeading">Compare PrizePicks Entries</h2>
-  <p class="sub">Select 2 to 6 ranked props from different games, then enter the total return shown for each paying outcome on PrizePicks. Estimates assume independent games and full settlement. Whole-number lines are excluded because they can tie.</p>
-  <div class="toolbar">
-   <label>Number of picks <select id="suggestEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
-   <button type="button" id="findBestEntries">Find Best Entries</button>
-   <button type="button" id="generateDifferentEntries" class="secondary" disabled>Generate Different Entries</button>
-  </div>
-  <p class="sub">Power break-even is the minimum all-hit total payout, rounded up to 0.01×, needed to cover the entry cost under these estimates. Flex uses the payout comparison below. Enter the actual PrizePicks payout to compare expected returns.</p>
-  <p id="entrySuggestionStatus" class="sub" role="status"></p>
-  <ol id="entrySuggestions"></ol>
-  <div id="entrySelections"></div>
-  <form id="entryCompareForm" hidden>
-   <label>Entry format <select id="entryFormat"><option value="power">Power</option><option value="flex">Flex</option></select></label>
-   <div id="entryPayouts" class="formgrid"></div>
-   <button type="submit">Estimate and compare</button>
-  </form>
-  <p id="entryCompareStatus" class="sub" role="status">Run Find Today’s Props to get started.</p>
-  <div id="entryComparisons" class="tablewrap"></div>
- </section>
-
+</details>
+<details class="disclosure tools"><summary>Manual analyzer and saved props</summary>
  <div class="grid">
   <div class="card"><small>Props Analyzed</small><div class="value" id="total">0</div></div>
   <div class="card"><small>GREEN Candidates</small><div class="value" id="greens">0</div></div>
   <div class="card"><small>Average Probability</small><div class="value" id="average">--</div></div>
   <div class="card"><small>Smart Pick Builder</small><div class="value" id="builderCount">0/6</div></div>
  </div>
-
  <section class="section">
   <h2>Manual Prop Analyzer</h2>
   <p class="sub">Enter an independent projection and standard deviation to estimate MORE or LESS probability.</p>
@@ -221,27 +229,6 @@ h1{font-size:21px}
   </div>
   <div class="result" id="result"></div>
  </section>
-
-
- <section class="section" aria-labelledby="prizePicksHeading">
-  <h2 id="prizePicksHeading">NBA PrizePicks Lines</h2>
-  <p class="sub">PrizePicks board lines via an independent data provider. Model inputs are entered in the Prop Analyzer.</p>
-  <div class="toolbar"><button type="button" class="secondary" id="refreshPrizePicks">Refresh PrizePicks lines</button></div>
-  <p id="prizePicksStatus" class="sub" role="status"></p>
-  <div class="tablewrap" id="prizePicksTable" hidden>
-   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>PERIOD</th><th>LINE</th><th>AVAILABLE SIDES</th></tr></thead>
-   <tbody id="prizePicksRows"></tbody></table>
-  </div>
- </section>
-
- <section class="section" id="sportsbookSection">
-  <h2>NBA Sportsbook Lines</h2>
-  <p class="sub">Live sportsbook lines from The Odds API, when available. These are NOT PrizePicks lines or independent projections. Odds do not establish a model edge.</p>
-  <div class="toolbar"><button class="secondary" id="refreshLines" onclick="loadSportsbookLines()">Refresh sportsbook lines</button><input id="oddsSearch" placeholder="Filter player or market" oninput="renderSportsbookLines()"></div>
-  <div id="oddsStatus" class="sub" role="status" aria-live="polite">Sportsbook lines load when the scan finds fresh PrizePicks lines it can compare. Manual refreshes may consume provider credits.</div>
-  <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>PLAYER</th><th>MARKET</th><th>BOOKMAKER</th><th>LINE</th><th>SIDE</th><th>AMERICAN ODDS</th><th>UPDATED</th></tr></thead><tbody id="oddsBoard"><tr><td colspan="7" class="empty">No sportsbook data requested yet.</td></tr></tbody></table></div>
- </section>
-
  <section class="section">
   <h2>Ranked Prop Board</h2>
   <div class="toolbar">
@@ -272,8 +259,40 @@ h1{font-size:21px}
    </table>
   </div>
  </section>
-
- <section class="section">
+</details>
+<details class="disclosure tools"><summary>Raw lines and results scorecard</summary>
+ <section class="section" aria-labelledby="prizePicksHeading">
+  <h2 id="prizePicksHeading">NBA PrizePicks Lines</h2>
+  <p class="sub">PrizePicks board lines via an independent data provider. Model inputs are entered in the Prop Analyzer.</p>
+  <div class="toolbar"><button type="button" class="secondary" id="refreshPrizePicks">Refresh PrizePicks lines</button></div>
+  <p id="prizePicksStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="prizePicksTable" hidden>
+   <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>PERIOD</th><th>LINE</th><th>AVAILABLE SIDES</th></tr></thead>
+   <tbody id="prizePicksRows"></tbody></table>
+  </div>
+ </section>
+ <section class="section" id="sportsbookSection">
+  <h2>NBA Sportsbook Lines</h2>
+  <p class="sub">Live sportsbook lines from The Odds API, when available. These are NOT PrizePicks lines or independent projections. Odds do not establish a model edge.</p>
+  <div class="toolbar"><button class="secondary" id="refreshLines" onclick="loadSportsbookLines()">Refresh sportsbook lines</button><input id="oddsSearch" placeholder="Filter player or market" oninput="renderSportsbookLines()"></div>
+  <div id="oddsStatus" class="sub" role="status" aria-live="polite">Sportsbook lines load when the scan finds fresh PrizePicks lines it can compare. Manual refreshes may consume provider credits.</div>
+  <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>PLAYER</th><th>MARKET</th><th>BOOKMAKER</th><th>LINE</th><th>SIDE</th><th>AMERICAN ODDS</th><th>UPDATED</th></tr></thead><tbody id="oddsBoard"><tr><td colspan="7" class="empty">No sportsbook data requested yet.</td></tr></tbody></table></div>
+ </section>
+ <section class="section" aria-labelledby="nbaResultsHeading">
+  <h2 id="nbaResultsHeading">NBA Results Scorecard</h2>
+  <p class="sub">This browser saves the first pregame estimate for each exact line and source during a scan. LPPE checks final NBA box scores while the dashboard is open. These are stat results. PrizePicks can apply its own void and payout rules.</p>
+  <label>Market <select id="nbaResultsMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
+  <p class="sub">Calibration gap is observed hit rate minus average estimate. Forecast error averages the squared error for decided sides. Lower is better. A constant 50% forecast scores 0.250. Several sides can come from the same game.</p>
+  <p id="nbaResultsStatus" class="sub" role="status"></p>
+  <div class="tablewrap">
+   <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>DECIDED SAMPLE</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th><th>CALIBRATION GAP</th><th>FORECAST ERROR</th></tr></thead>
+   <tbody id="nbaResultsRows"></tbody></table>
+  </div>
+ </section>
+</details>
+</div>
+<div data-view="builder">
+ <section class="section" id="builder">
   <h2>Smart GREEN-Only Builder</h2>
   <p class="sub">Only GREEN candidates can be added. The builder does not guarantee positive expected value or independent outcomes.</p>
   <div class="card">
@@ -283,13 +302,77 @@ h1{font-size:21px}
    <button class="secondary" style="margin-top:14px" onclick="clearBuilder()">Clear Entry</button>
   </div>
  </section>
-
+ <section class="section" aria-labelledby="entryCompareHeading">
+  <h2 id="entryCompareHeading">Compare PrizePicks Entries</h2>
+  <p class="sub">Select 2 to 6 ranked props from different games, then enter the total return shown for each paying outcome on PrizePicks. Estimates assume independent games and full settlement. Whole-number lines are excluded because they can tie.</p>
+  <div class="toolbar">
+   <label>Number of picks <select id="suggestEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
+   <button type="button" id="findBestEntries">Find Best Entries</button>
+   <button type="button" id="generateDifferentEntries" class="secondary" disabled>Generate Different Entries</button>
+  </div>
+  <p class="sub">Power break-even is the minimum all-hit total payout, rounded up to 0.01×, needed to cover the entry cost under these estimates. Flex uses the payout comparison below. Enter the actual PrizePicks payout to compare expected returns.</p>
+  <p id="entrySuggestionStatus" class="sub" role="status"></p>
+  <ol id="entrySuggestions"></ol>
+  <div id="entrySelections"></div>
+  <form id="entryCompareForm" hidden>
+   <label>Entry format <select id="entryFormat"><option value="power">Power</option><option value="flex">Flex</option></select></label>
+   <div id="entryPayouts" class="formgrid"></div>
+   <button type="submit">Estimate and compare</button>
+  </form>
+  <p id="entryCompareStatus" class="sub" role="status">Run Find Today’s Props to get started.</p>
+  <div id="entryComparisons" class="tablewrap"></div>
+ </section>
+ <section class="section" aria-labelledby="sizeComparisonHeading">
+  <h2 id="sizeComparisonHeading">Compare 2–6 Pick Sizes</h2>
+  <p class="sub">LPPE shows the highest all-hit estimate it finds for each size. Enter the exact total payout for the listed picks. Expected returns assume independent games and full settlement.</p>
+  <label>Format <select id="sizeComparisonFormat"><option value="power">Power</option><option value="flex">Flex</option><option value="both">Power and Flex</option></select></label>
+  <label>Probability buffer <select id="sizeProbabilityBuffer"><option value="0.02">2 points per pick</option><option value="0.03" selected>3 points per pick</option><option value="0.05">5 points per pick</option></select></label>
+  <button type="button" id="sizeRecheck" class="secondary">Recheck board</button>
+  <p class="sub">Rechecking refreshes suggestions and clears the entered payouts. The buffer tests lower hit probabilities. It does not establish a confidence interval.</p>
+  <p id="sizeComparisonStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="sizeComparisonTable" hidden>
+   <table><thead><tr><th>ENTRY</th><th>SUGGESTED PICKS</th><th>ALL-HIT ESTIMATE</th><th>POWER BREAK-EVEN</th><th>TOTAL PAYOUTS</th><th>ESTIMATED NET RETURN</th><th>LOWER-PROBABILITY RETURN</th><th>DECISION</th></tr></thead>
+   <tbody id="sizeComparisonRows"></tbody></table>
+  </div>
+ </section>
+</div>
+<div data-view="watchlist">
+ <section class="section" id="watchlist" aria-labelledby="watchlistHeading">
+  <h2 id="watchlistHeading">Prop Watchlist</h2>
+  <p class="sub">Use Watch in a prop’s details to save it on this device. For MORE, your target is the highest line you’ll consider. For LESS, it’s the lowest.</p>
+  <p id="watchlistStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="watchlistTable" hidden>
+   <table><thead><tr><th>PROP</th><th>SAVED LINE</th><th>TARGET LINE</th><th>CURRENT LINE</th><th>CURRENT ESTIMATE</th><th>STATUS</th><th>ACTION</th></tr></thead>
+   <tbody id="watchlistRows"></tbody></table>
+  </div>
+ </section>
+</div>
  <footer>
   LPPE Development Version 0.1 · Probability estimates are model-based approximations.
   They require validated inputs and independent research. Never treat a grade as a guarantee.
  </footer>
 </main>
 <script>
+const dashboardViews = [...document.querySelectorAll("[data-view]")];
+const dashboardLinks = [...document.querySelectorAll(".app-nav a")];
+function showDashboardView() {
+ const target = document.getElementById(location.hash.slice(1));
+ const view = target?.closest("[data-view]") || dashboardViews[0];
+ for (const panel of dashboardViews) panel.hidden = panel !== view;
+ for (const link of dashboardLinks) {
+  if (link.hash === "#" + view.dataset.view) link.setAttribute("aria-current","page");
+  else link.removeAttribute("aria-current");
+ }
+ if (target) {
+  for (let parent = target.parentElement; parent && parent !== view; parent = parent.parentElement) {
+   if (parent instanceof HTMLDetailsElement) parent.open = true;
+  }
+  target.scrollIntoView();
+ }
+}
+window.addEventListener("hashchange",showDashboardView);
+showDashboardView();
+
 const API_URL = "https://lppe-api.lord-joseph.workers.dev";
 function setAPIStatus(message, color) {
  const el=document.getElementById("apiStatus");
@@ -402,6 +485,7 @@ function render(){
  document.getElementById("average").textContent=props.length?
  (props.reduce((s,p)=>s+p.probability,0)/props.length*100).toFixed(1)+"%":"--";
  document.getElementById("builderCount").textContent=selected.length+"/6";
+ document.getElementById("navBuilderCount").textContent = selected.length;
  const chosen=selected.map(id=>props.find(p=>p.id===id)).filter(Boolean);
  document.getElementById("builderList").textContent=chosen.length?
  chosen.map(p=>`${p.player} — ${p.market} ${p.side} (${(p.probability*100).toFixed(1)}%)`).join(" | "):
@@ -1502,7 +1586,8 @@ function renderTodayPicks() {
  const board = latestBoard?.prizePicks;
  const now = Date.now();
  if (!board || board.savedBoard || board.scheduled) {
-  status.textContent = document.getElementById("prizePicksStatus").textContent || "Waiting for fresh PrizePicks lines.";
+  status.textContent = board?.scheduled ? "Waiting for PrizePicks lines." :
+   document.getElementById("prizePicksStatus").textContent || "Waiting for PrizePicks lines.";
   showNextPrizePicksSnapshot(timing,now);
   return;
  }
@@ -1568,9 +1653,19 @@ function renderTodayPicks() {
   details.append(summary,marketNote,modelNote);
   if (model) {
    const recent = document.createElement("p");
-   recent.textContent = "Recent results: " + model.values.join(", ") + ". Minutes: " + model.recentMinutes.map(value => value.toFixed(0)).join(", ") + ". Cleared this side in " +
+   recent.textContent = "Historical results at " + pick.line + ": cleared this side in " +
     model.hits + " of " + model.games + " games" + (model.ties ? ", with " + model.ties + " ties." : ".");
-   details.append(recent);
+   const games = document.createElement("ul");
+   games.className = "recent-results";
+   games.setAttribute("aria-label","Recent game results");
+   for (const [index,value] of model.values.entries()) {
+    const game = document.createElement("li");
+    const cleared = pick.side === "MORE" ? value > pick.line : value < pick.line;
+    if (cleared) game.className = "cleared";
+    game.textContent = value + " · " + model.recentMinutes[index].toFixed(0) + " min";
+    games.append(game);
+   }
+   details.append(recent,games);
   }
   if (market && model && (market.chance-.5)*(model.chance-.5) < 0) {
    const disagreement = document.createElement("p");
@@ -1582,6 +1677,15 @@ function renderTodayPicks() {
    movement.textContent = "PrizePicks line: " + pick.openingLine + " at opening → " + pick.line + " at scan.";
    details.append(movement);
   }
+  const watch = document.createElement("button");
+  watch.type = "button";
+  watch.className = "secondary";
+  watch.textContent = "Watch this side";
+  watch.addEventListener("click",() => {
+   addToWatchlist(pick);
+   if (!watchlistWarning) watch.textContent = "Watching";
+  });
+  details.append(watch);
   card.append(title,line,badge,details);
   const alternates = renderAlternateLines(pick,alternateLines);
   if (alternates) card.append(alternates);
@@ -1602,6 +1706,9 @@ function useLatestBoard() {
 for (const id of ["rankTier","rankSide","minBooks"]) {
  document.getElementById(id).addEventListener("change",useLatestBoard);
 }
+document.getElementById("liveBoardPlayer").addEventListener("input",() => {
+ if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds,{searchOnly:true});
+});
 document.getElementById("picksPlayer").addEventListener("input",renderTodayPicks);
 for (const id of ["picksMarket","picksMinutes"]) {
  document.getElementById(id).addEventListener("change",renderTodayPicks);
@@ -1663,7 +1770,7 @@ async function scanAndRankProps() {
   entrySize.disabled = false;
  }
 }
-function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
+function renderMarketBoard(prizePicks,sportsbook,needsOdds,{searchOnly = false} = {}) {
  const status = document.getElementById("todayPropsStatus");
  const body = document.getElementById("todayPropsRows");
  const table = document.getElementById("todayPropsTable");
@@ -1673,11 +1780,15 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
   const pricedCount = ranked.filter(prop=>prop.chance !== null).length;
   const matches = ranked.filter(prop=>prop.chance !== null && prop.chance > 0.5);
   const minBooks = Number(document.getElementById("minBooks").value);
-  refreshEntryCandidates(matches.filter(prop=>prop.books >= minBooks));
-  renderSizeComparison();
-  renderSuggestions();
+  if (!searchOnly) {
+   refreshEntryCandidates(matches.filter(prop=>prop.books >= minBooks));
+   renderSizeComparison();
+   renderSuggestions();
+  }
+  const player = modelPlayerKey(document.getElementById("liveBoardPlayer").value);
+  const visible = ranked.filter(prop => modelPlayerKey(prop.player).includes(player));
   body.replaceChildren();
-  for (const prop of ranked) {
+  for (const prop of visible) {
    const row = body.insertRow();
    const estimate = prop.chance === null ? "N/A" : (prop.chance*100).toFixed(1) + "%" + (Number.isInteger(prop.line) ? " if no tie" : "");
    for (const value of [prop.player,prop.market,prop.line,prop.side,prop.tier]) {
@@ -1727,10 +1838,16 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
     details.append(watch);
    }
    row.insertCell().append(details);
+   row.setAttribute("role","row");
+   const labels = ["","Market","Line","Side","Tier","Market estimate","Books","Book estimate range",""];
+   for (const [index,cell] of Array.from(row.cells).entries()) {
+    cell.setAttribute("role","cell");
+    if (labels[index]) cell.dataset.label = labels[index];
+   }
   }
-  table.hidden = !ranked.length;
-  status.textContent = ranked.length ? "Showing " + ranked.length + " sides. " + pricedCount +
-   " with market estimates, " + (ranked.length - pricedCount) + " without."
+  table.hidden = !visible.length;
+  status.textContent = visible.length ? "Showing " + visible.length + " of " + ranked.length +
+   " sides. " + pricedCount + " on the board have market estimates."
     : "No available sides match the selected filters.";
   const gameKey = line => {
    const start = Date.parse(line.eventStart);
