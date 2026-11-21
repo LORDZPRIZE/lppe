@@ -183,7 +183,7 @@ export default {
     if (request.method !== "GET") return json({error:"Method not allowed"},405);
     const path = new URL(request.url).pathname;
     if (path === "/" || path === "/health") return json({
-      app:"LPPE",status:"online",version:"0.3",message:"LPPE API is running"});
+      app:"LPPE",status:"online",version:"0.4",message:"LPPE API is running"});
     if (path === "/api/props") return json({sport:"NBA",live:false,
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});
