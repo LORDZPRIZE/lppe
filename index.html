@@ -408,6 +408,18 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
   <p class="sub">Calibration gap is observed hit rate minus average estimate. Forecast error averages the squared error for decided sides. Lower is better. A constant 50% forecast scores 0.250. Several sides can come from the same game.</p>
   <p id="nbaResultsStatus" class="sub" role="status"></p>
   <details><summary>Recent GREEN picks</summary><ol id="nbaGreenPickLog"></ol></details>
+  <button id="downloadGreenBenchmark" class="secondary" type="button" disabled>Download GREEN results CSV</button>
+  <details>
+   <summary>Actual NBA PrizePicks entry ROI</summary>
+   <p class="sub">Enter settled NBA-only entries from your PrizePicks history. Include refunded stake in the total returned. Reuse an entry ID to correct a record.</p>
+   <form id="nbaEntryResults">
+    <label>Entry ID <input name="entryId" required maxlength="100"></label>
+    <label>Stake <input name="stake" type="number" min="0.01" step="0.01" required></label>
+    <label>Total returned <input name="returned" type="number" min="0" step="0.01" required></label>
+    <button type="submit" class="secondary">Save settled entry</button>
+   </form>
+   <p id="nbaEntryROI" class="sub" role="status"></p>
+  </details>
   <div class="tablewrap">
    <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>DECIDED SAMPLE</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th><th>CALIBRATION GAP</th><th>FORECAST ERROR</th></tr></thead>
    <tbody id="nbaResultsRows"></tbody></table>
@@ -1452,6 +1464,7 @@ function renderResultsLedger(ledger,warning = "") {
   market ? "No estimates recorded for this market yet." : "No estimates recorded yet. Fresh, comparable PrizePicks lines are required.";
  if (warning) status.textContent += " " + warning;
  const greenRows = rows.filter(row => row.green).map(row => ({...row,...row.green}));
+ document.getElementById("downloadGreenBenchmark").disabled = !greenRows.length;
  const log = document.getElementById("nbaGreenPickLog");
  log.replaceChildren();
  const recent = greenRows.sort((a,b) => b.saved-a.saved).slice(0,25);
@@ -1517,6 +1530,79 @@ function captureNBAResults(prizePicks,sportsbook,model) {
  const saved = saveResultsLedger(ledger);
  renderResultsLedger(ledger,saved ? "" : "Browser storage is unavailable or full.");
 }
+
+function makeGreenBenchmarkCSV(entries,market) {
+ const rows = [["Platform","Sport","Source","Player","Team","Market","Line","Side","Tier",
+  "Estimated probability","Line observed UTC","First GREEN UTC","Game start UTC","Outcome","Final stat"]];
+ for (const row of Object.values(entries)) {
+  if (!row.green || (market && row.market !== market)) continue;
+  rows.push(["PrizePicks","NBA",row.source,row.player,row.team,row.market,row.line,row.side,row.tier,
+   row.green.chance,new Date(row.green.observed).toISOString(),new Date(row.green.saved).toISOString(),
+   new Date(row.start).toISOString(),row.outcome === "tie" ? "push" : row.outcome ?? "ungraded",row.value ?? ""]);
+ }
+ return rows.map(row => row.map(value => {
+  const cell = String(value ?? "");
+  const safe = typeof value === "string" && /^[\s]*[=+@-]|^[\t\r\n]/.test(cell) ? "'" + cell : cell;
+  return '"' + safe.replaceAll('"','""') + '"';
+ }).join(",")).join("\r\n");
+}
+
+document.getElementById("downloadGreenBenchmark").addEventListener("click",() => {
+ const csv = makeGreenBenchmarkCSV(readResultsLedger().entries,document.getElementById("nbaResultsMarket").value);
+ const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+ const link = document.createElement("a");
+ link.href = url;
+ link.download = "lppe-nba-green-results.csv";
+ link.click();
+ setTimeout(() => URL.revokeObjectURL(url),1000);
+});
+
+const entryROIKey = "lppe-nba-entry-roi-v1";
+const entryROIForm = document.getElementById("nbaEntryResults");
+const entryROIStatus = document.getElementById("nbaEntryROI");
+
+function readEntryReturns() {
+ return new Map(JSON.parse(localStorage.getItem(entryROIKey) || "[]"));
+}
+
+function formatEntryROI(entries) {
+ const totals = Array.from(entries.values()).reduce((sum,entry) => ({
+  stake:sum.stake+entry.stake,returned:sum.returned+entry.returned
+ }),{stake:0,returned:0});
+ if (!totals.stake) return "No settled entries logged in this browser.";
+ const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"});
+ return entries.size + " settled entries · " + dollars.format(totals.stake) + " staked · " +
+  dollars.format(totals.returned) + " returned · " + ((totals.returned/totals.stake-1)*100).toFixed(1) + "% ROI";
+}
+
+function renderEntryROI() {
+ try {
+  entryROIStatus.textContent = formatEntryROI(readEntryReturns());
+ } catch {
+  entryROIStatus.textContent = "Entry history is unavailable in this browser.";
+ }
+}
+
+entryROIForm.addEventListener("submit",event => {
+ event.preventDefault();
+ const id = entryROIForm.elements.entryId.value.trim();
+ const stake = entryROIForm.elements.stake.valueAsNumber;
+ const returned = entryROIForm.elements.returned.valueAsNumber;
+ if (!id || !Number.isFinite(stake) || stake <= 0 || !Number.isFinite(returned) || returned < 0) {
+  entryROIStatus.textContent = "Enter an ID, a positive stake, and the total returned.";
+  return;
+ }
+ try {
+  const entries = readEntryReturns();
+  entries.set(id,{stake,returned});
+  localStorage.setItem(entryROIKey,JSON.stringify(Array.from(entries)));
+  entryROIForm.reset();
+  renderEntryROI();
+ } catch {
+  entryROIStatus.textContent = "Could not save the entry in this browser.";
+ }
+});
+renderEntryROI();
 
 let checkingNBAResults = false;
 async function checkNBAResults() {
