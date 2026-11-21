@@ -913,7 +913,7 @@ function renderPayoutFields() {
 }
 
 function refreshEntryCandidates(matches) {
- entryCandidates = matches.filter(p=>grade(p.chance) === "GREEN" && !Number.isInteger(p.line));
+ entryCandidates = matches.filter(p=>grade(p.chance) === "GREEN" && !Number.isInteger(p.line) && !availabilityHold(p));
  entrySelections.replaceChildren();
  compareForm.hidden = true;
  if (!entryCandidates.length) {
@@ -1275,6 +1275,42 @@ const modelPlayerKey = player => player.trim().normalize("NFD").replace(/\p{Mark
  .toLowerCase().replace(/[^a-z0-9]/g,"");
 const modelTeamKey = team => ({NY:"NYK",NO:"NOP",SA:"SAS",GS:"GSW",UTAH:"UTA",WSH:"WAS",BKN:"BKN",BRK:"BKN",PHO:"PHX"})[team] || team;
 
+let nbaAvailability = null;
+const availabilityKey = (player,team) => modelPlayerKey(player) + ":" + modelTeamKey(team.trim().toUpperCase());
+
+async function loadNBAAvailability() {
+ try {
+  const response = await fetch("/api/nba/model?availability=1",{signal:AbortSignal.timeout(7000)});
+  if (!response.ok) return null;
+  const {reports} = await response.json();
+  if (!Array.isArray(reports)) return null;
+  const recent = new Map();
+  for (const report of reports) {
+   const key = availabilityKey(report.player,report.team);
+   if (!recent.has(key) || Date.parse(report.updatedAt) > Date.parse(recent.get(key).updatedAt)) {
+    recent.set(key,report);
+   }
+  }
+  return recent;
+ } catch {
+  return null;
+ }
+}
+
+function availabilityReport(prop) {
+ return prop.team ? nbaAvailability?.get(availabilityKey(prop.player,prop.team)) : undefined;
+}
+
+function availabilityHold(prop) {
+ const report = availabilityReport(prop);
+ if (!report || !/^(out|doubtful|questionable|day.to.day)$/i.test(report.status)) return false;
+ const age = Date.now()-Date.parse(report.updatedAt);
+ const start = Date.parse(prop.eventStart);
+ const returnAt = Date.parse(report.returnDate);
+ return age >= 0 && (age <= 36*60*60*1000 ||
+  (/^out$/i.test(report.status) && returnAt > start && age < 30*86400000));
+}
+
 function estimateNBAProps(data,prizePicks,now,filters) {
  const byPlayer = new Map();
  const projections = [];
@@ -1293,7 +1329,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    const values = games.map(game => nbaStatValue(game.values,market));
    return {player:player.player,team:player.team,market,minutes,games:games.length,values,
     recentMinutes:games.map(game => game.minutes),
-    researchGames:completed.map(game => ({value:nbaStatValue(game.values,market),minutes:game.minutes})),
+    researchGames:completed.map(game => ({value:nbaStatValue(game.values,market),minutes:game.minutes,opponent:game.opponent})),
     projection:values.reduce((sum,value) => sum + value,0) / values.length};
   });
   byPlayer.set(key,markets);
@@ -1316,7 +1352,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    if (tier === "demon" && item.side !== "more") continue;
    const hits = item.side === "more" ? more : less;
    sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,
-    observedAt:prop.observedAt,openingLine:prop.openingLine,tier:item.tier,side:item.side.toUpperCase(),
+    observedAt:prop.observedAt,openingLine:prop.openingLine,opponent:prop.opponent,tier:item.tier,side:item.side.toUpperCase(),
     hits,ties:model.games-more-less,chance:(hits+2)/(more+less+4)});
   }
  }
@@ -1973,7 +2009,7 @@ function renderTodayPicks() {
  const player = modelPlayerKey(document.getElementById("picksPlayer").value);
  const marketFilter = document.getElementById("picksMarket").value;
  const minMinutes = Number(document.getElementById("picksMinutes").value);
- const picks = primary.filter(prop => prop.chance > .5 &&
+ const picks = primary.filter(prop => prop.chance > .5 && !availabilityHold(prop) &&
   modelPlayerKey(prop.player).includes(player) &&
   (!marketFilter || supportedMarkets.get(prop.market.trim().toLowerCase()) === marketFilter) &&
   (!minMinutes || (models.get(pickKey(prop))?.minutes ?? 0) >= minMinutes)).slice(0,todayPicksLimit);
@@ -2033,6 +2069,21 @@ function renderTodayPicks() {
    model.projection.toFixed(1) + " · " + model.minutes.toFixed(1) + " minutes per game over " + model.games + " games." :
    "Stats model estimate unavailable.";
   details.append(summary,marketNote,modelNote);
+  const availability = availabilityReport(pick);
+  if (availability || !nbaAvailability) {
+   const note = document.createElement("p");
+   note.textContent = availability ? "ESPN injury listing: " + availability.status + " · Updated " +
+    new Date(availability.updatedAt).toLocaleString() : "ESPN availability feed unavailable.";
+   details.append(note);
+  }
+  if (pick.opponent) {
+   const opponent = document.createElement("p");
+   opponent.textContent = "Opponent: " + pick.opponent;
+   const matchups = model?.researchGames.filter(game => modelTeamKey(game.opponent) === modelTeamKey(pick.opponent));
+   const matchup = matchups?.length ? recentPropResearch(matchups,pick.side,pick.line)[1] : null;
+   if (matchup?.count) opponent.textContent += " · " + matchup.hits + "/" + matchup.count + " cleared this side in available matchups";
+   details.append(opponent);
+  }
   if (model) {
    const recent = document.createElement("p");
    recent.textContent = "Historical results at " + pick.line + ": cleared this side in " +
@@ -2091,7 +2142,7 @@ function renderTodayPicks() {
     const expiresAt = Math.min(Date.parse(pick.observedAt) + maxQuoteAge,Date.parse(pick.eventStart),
      pick.expiresAt ?? Infinity);
     let prop = props.find(item => item.offer && item.pickKey === key);
-    if (!selected.includes(prop?.id) && Date.now() >= expiresAt) {
+    if (!selected.includes(prop?.id) && (Date.now() >= expiresAt || availabilityHold(pick))) {
      renderTodayPicks();
      return;
     }
@@ -2171,6 +2222,7 @@ async function scanAndRankProps() {
  document.getElementById("todayPicksStatus").textContent = "Checking for fresh PrizePicks lines…";
  estimateSource.disabled = true;
  const modelRequest = loadNBAModel();
+ const availabilityRequest = loadNBAAvailability();
  try {
   const prizePicks = await loadPrizePicksLines(true);
   if (!prizePicks) status.textContent = document.getElementById("prizePicksStatus").textContent;
@@ -2181,6 +2233,7 @@ async function scanAndRankProps() {
     modelMarketColumns[supportedMarkets.get(prop.market.toLowerCase())].length === 1);
   if (needsOdds) status.textContent = "Checking sportsbook quotes…";
   const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
+  nbaAvailability = await availabilityRequest;
   if (prizePicks) latestBoard = {prizePicks,sportsbook,needsOdds};
   useLatestBoard();
   updatePrizePicksHealth(prizePicks);
@@ -2291,6 +2344,8 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds,{searchOnly = false} 
    " PrizePicks offers across " + games.size + " identified upcoming games. Market estimates cover " + pricedGames.size +
    " of those games under the current filters.";
   if (prizePicks.savedBoard) status.textContent += " Provider limit reached. Showing saved lines for reference only.";
+  if (!nbaAvailability) status.textContent += " ESPN availability could not be checked.";
+  else if (matches.some(availabilityHold)) status.textContent += " Recent ESPN injury flags excluded affected players from automatic entries.";
   if (needsOdds && !sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
