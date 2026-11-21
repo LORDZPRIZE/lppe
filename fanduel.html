@@ -29,13 +29,17 @@ details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
 </header>
 <main>
  <section aria-labelledby="fdImportHeading">
-  <h2 id="fdImportHeading">Import a FanDuel slate</h2>
+  <h2 id="fdImportHeading">FanDuel slate</h2>
+  <button type="button" id="fdAutoLoad" class="primary">Load slate and build</button>
+  <p class="muted">Automatic loading uses the configured FanDuel salary provider or the public <a href="https://www.dailyfantasyfuel.com/nba/projections/fanduel/">Daily Fantasy Fuel</a> preview. Compare the slate, salaries and availability with your exact FanDuel contest.</p>
+  <details id="fdManualImport"><summary>Import your own slate</summary>
   <form id="fdImport" class="controls">
    <label>FanDuel salary CSV <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>
    <label>Projections CSV (optional) <input id="fdProjections" type="file" accept=".csv,text/csv"></label>
    <button type="submit" class="primary">Load player pool</button>
   </form>
   <p class="muted">For custom projections, include <strong>Projection</strong> and either <strong>ID</strong> or <strong>Name</strong> and <strong>Team</strong>. You can download a CSV from <a href="https://www.fanduel.com/research/nba/fantasy/dfs-projections">FanDuel Research</a> and match it to the same slate. Without a custom projection, LPPE uses the salary file’s projection or historical FanDuel FPPG when available.</p>
+  </details>
   <p id="fdStatus" role="status" aria-live="polite"></p>
  </section>
  <section id="fdPool" hidden aria-labelledby="fdPoolHeading">

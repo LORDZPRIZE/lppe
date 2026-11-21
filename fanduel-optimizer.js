@@ -40,7 +40,7 @@ function parseCSV(source) {
 const csvNumber = value => value?.trim() ? Number(value.replace(/[$,]/g, "")) : NaN;
 const playerName = row => row.nickname || row.playername || row.player || row.name ||
   [row.firstname,row.lastname].filter(Boolean).join(" ");
-const teamCode = raw => {
+export const teamCode = raw => {
   const team = raw?.trim().toUpperCase() || "";
   return {BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team;
 };
@@ -179,7 +179,7 @@ export function reviewCSV(lineups) {
     const text = String(value);
     return '"' + (/^[=+@\-\t\r]/.test(text) ? "'" : "") + text.replaceAll('"','""') + '"';
   };
-  const rows = [["Lineup","Slot","FanDuel ID","Player","Team","Salary","Projected FPTS","Projection source"]];
+  const rows = [["Lineup","Slot","Player ID","Player","Team","Salary","Projected FPTS","Projection source"]];
   for (const [index,lineup] of lineups.entries()) {
     for (const {slot,player} of lineup.picks) {
       rows.push([index+1,roster[slot][0],player.id,player.name,player.team,player.salary,player.points,player.source]);
