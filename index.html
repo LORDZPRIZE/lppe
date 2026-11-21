@@ -87,6 +87,7 @@ h1{font-size:21px}
 
  <section class="section" aria-labelledby="todayPicksHeading">
   <h2 id="todayPicksHeading">Today’s NBA Picks</h2>
+  <button type="button" id="findTodayProps">Check for picks</button>
   <div class="toolbar">
    <label>Player <input id="picksPlayer" type="search" placeholder="Search player"></label>
    <label>Market <select id="picksMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
@@ -95,13 +96,12 @@ h1{font-size:21px}
   <p id="todayPicksStatus" class="sub" role="status">Checking for fresh PrizePicks lines…</p>
   <p id="todayPicksTiming" class="sub" hidden></p>
   <div id="todayPicksCards" class="pick-grid"></div>
-  <p><a href="#nbaPropRankings" style="color:var(--blue)">Filters and full prop board</a></p>
+  <p class="sub"><a href="#nbaPropRankings" style="color:var(--blue)">Filters and full prop board</a> · <a href="https://prizepicksapi.com/?ref=attribution" style="color:var(--blue)">Data by PrizePicks API</a></p>
  </section>
 
  <section class="section" id="nbaPropRankings">
   <h2>Today’s NBA Prop Rankings</h2>
   <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
-  <button type="button" id="findTodayProps">Find Today’s Props</button>
   <label>Estimate source <select id="estimateSource"><option value="auto">Automatic</option><option value="stats" selected>Stats only (no sportsbook credits)</option></select></label>
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
@@ -1408,6 +1408,26 @@ function renderWatchlist() {
 
 const todayPicksLimit = 8;
 let todayPicksExpiry;
+let lastScanStartedAt = 0;
+const scanInterval = 5 * 60 * 1000;
+// UTC schedule in worker/wrangler.toml.
+const snapshotHours = [2,18,23];
+
+function nextPrizePicksSnapshot(now,retryAt) {
+ const earliest = Math.max(now+1,retryAt || 0);
+ const day = new Date(earliest);
+ const midnight = Date.UTC(day.getUTCFullYear(),day.getUTCMonth(),day.getUTCDate());
+ return snapshotHours.map(hour => midnight + hour*3600000).find(time => time >= earliest) ??
+  midnight + 86400000 + snapshotHours[0]*3600000;
+}
+
+function showNextPrizePicksSnapshot(timing,now) {
+ const next = new Date(nextPrizePicksSnapshot(now,prizePicksRetryAt));
+ timing.textContent = "Next scheduled PrizePicks refresh: " + next.toLocaleString([],{
+  month:"short",day:"numeric",hour:"numeric",minute:"2-digit",timeZoneName:"short"
+ }) + ". Checking this page reads the latest saved snapshot.";
+ timing.hidden = false;
+}
 
 function pickKey(prop) {
  return JSON.stringify([prop.id,modelPlayerKey(prop.player),modelTeamKey(prop.team?.trim().toUpperCase()),
@@ -1480,17 +1500,19 @@ function renderTodayPicks() {
  cards.replaceChildren();
  timing.hidden = true;
  const board = latestBoard?.prizePicks;
+ const now = Date.now();
  if (!board || board.savedBoard || board.scheduled) {
-  status.textContent = "Waiting for fresh PrizePicks lines. " + document.getElementById("prizePicksStatus").textContent;
+  status.textContent = document.getElementById("prizePicksStatus").textContent || "Waiting for fresh PrizePicks lines.";
+  showNextPrizePicksSnapshot(timing,now);
   return;
  }
 
- const now = Date.now();
  const filters = {tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value};
  const today = pacificDay.format(now);
  const fresh = board.lines.filter(prop => !comparisonIssue(prop,now,today));
  if (!fresh.length) {
-  status.textContent = "No fresh, supported lines for upcoming games today.";
+  status.textContent = "No fresh, supported PrizePicks lines for upcoming games today.";
+  showNextPrizePicksSnapshot(timing,now);
   return;
  }
  const modeled = latestModel ? estimateNBAProps(latestModel,{lines:fresh},now,filters).sides : [];
@@ -1590,6 +1612,7 @@ generateDifferent.addEventListener("click",showSuggestionBatch);
 
 async function scanAndRankProps() {
  if (rankButton.disabled) return false;
+ lastScanStartedAt = Date.now();
  entrySuggestions.replaceChildren();
  entrySuggestionStatus.textContent = "";
  const status = document.getElementById("todayPropsStatus");
@@ -1737,10 +1760,15 @@ renderWatchlist();
 updatePrizePicksHealth();
 checkNBAResults();
 scanAndRankProps();
-setInterval(() => {
- if (!document.hidden && !entrySelections.querySelector("input:checked") &&
-     !sizeComparison.some(row=>row.inputs.some(({input})=>!input.disabled && input.value !== input.defaultValue))) scanAndRankProps();
-}, 5 * 60 * 1000);
+function refreshVisibleBoard() {
+ if (document.hidden || Date.now()-lastScanStartedAt < scanInterval) return;
+ if (entrySelections.querySelector("input:checked") ||
+     sizeComparison.some(row=>row.inputs.some(({input})=>!input.disabled && input.value !== input.defaultValue))) return;
+ scanAndRankProps();
+}
+setInterval(refreshVisibleBoard,scanInterval);
+document.addEventListener("visibilitychange",refreshVisibleBoard);
+window.addEventListener("pageshow",refreshVisibleBoard);
 </script>
 </body>
 </html>
