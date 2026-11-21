@@ -1450,7 +1450,26 @@ function resultDateFor(time) {
  return parts.year + parts.month + parts.day;
 }
 
-function recordNBAEstimates(ledger,props,source,now) {
+function pregameResultAnalysis(prop,market,model) {
+ const report = availabilityReport(prop);
+ const opponent = prop.opponent || model?.opponent || market?.opponent;
+ const games = model?.researchGames ?? [];
+ const matchupGames = opponent ? games.filter(game =>
+  modelTeamKey(game.opponent) === modelTeamKey(opponent)) : [];
+ return {
+  availability:report?.status ?? (nbaAvailability ? "No ESPN listing found" : "ESPN feed unavailable"),
+  availabilityUpdatedAt:report?.updatedAt,
+  opponent,
+  openingLine:prop.openingLine,
+  marketChance:market?.chance,
+  books:market?.books,
+  modelChance:model?.chance,
+  recent:recentPropResearch(games,prop.side,prop.line).filter(row => row.count),
+  matchup:recentPropResearch(matchupGames,prop.side,prop.line)[1]
+ };
+}
+
+function recordNBAEstimates(ledger,props,source,now,marketByPick,modelByPick) {
  for (const prop of props) {
   const start = Date.parse(prop.eventStart);
   const observed = Date.parse(prop.observedAt);
@@ -1461,8 +1480,10 @@ function recordNBAEstimates(ledger,props,source,now) {
   const key = JSON.stringify([source,start,modelPlayerKey(prop.player),modelTeamKey(team),market,prop.line,prop.side,prop.tier]);
   const entry = ledger.entries[key] ??= {source,player:prop.player,team,market,line:prop.line,
    tier:prop.tier,side:prop.side,chance:prop.chance,start,observed,saved:now};
-  if (prop.chance >= .6 && !entry.green) {
-   entry.green = {chance:prop.chance,observed,saved:now};
+  if (prop.chance >= .6 && !entry.green && !availabilityHold(prop)) {
+   const exactPick = pickKey(prop);
+   entry.green = {chance:prop.chance,observed,saved:now,
+    analysis:pregameResultAnalysis(prop,marketByPick.get(exactPick),modelByPick.get(exactPick))};
   }
   if (entry.green && source === "Sportsbook" && now > entry.green.saved && now >= start-15*60*1000) {
    entry.nearTipoff = {chance:prop.chance,saved:now};
@@ -1523,6 +1544,32 @@ function renderResultsLedger(ledger,warning = "") {
    " · " + (row.chance*100).toFixed(1) + "% · " + row.source +
    " · Recorded " + new Date(row.saved).toLocaleString() + " · " + outcome + result +
    (row.nearTipoff ? " · Same-line consensus near tipoff " + (row.nearTipoff.chance*100).toFixed(1) + "%" : "");
+  if (row.analysis) {
+   const analysis = row.analysis;
+   const details = document.createElement("details");
+   const summary = document.createElement("summary");
+   summary.textContent = "Pregame analysis";
+   const fields = [
+    "Availability: " + analysis.availability + (analysis.availabilityUpdatedAt ?
+     " · Updated " + new Date(analysis.availabilityUpdatedAt).toLocaleString() : ""),
+    analysis.opponent && "Opponent: " + analysis.opponent,
+    Number.isFinite(analysis.openingLine) && "Opening line: " + analysis.openingLine + " · Recorded line: " + row.line,
+    Number.isFinite(analysis.marketChance) && "Sportsbook consensus: " + formatPickEstimate(analysis.marketChance) + " · " + analysis.books + " books",
+    Number.isFinite(analysis.modelChance) && "Stats model: " + formatPickEstimate(analysis.modelChance),
+    ...analysis.recent.map(window => "Last " + window.limit + ": " + window.hits + "/" + window.count +
+     " hits · " + window.pushes + " pushes" +
+     (window.averageMinutes === null ? "" : " · " + window.averageMinutes.toFixed(1) + " avg min")),
+    analysis.matchup.count > 0 && "Available matchups: " + analysis.matchup.hits + "/" + analysis.matchup.count +
+     " hits · " + analysis.matchup.pushes + " pushes"
+   ];
+   details.append(summary);
+   for (const field of fields.filter(Boolean)) {
+    const note = document.createElement("p");
+    note.textContent = field;
+    details.append(note);
+   }
+   item.append(details);
+  }
   log.append(item);
  }
  if (!recent.length) {
@@ -1565,8 +1612,12 @@ function captureNBAResults(prizePicks,sportsbook,model) {
   if (now-checked > 15*dayMillis) delete ledger.checked[date];
  }
  if (prizePicks && !prizePicks.savedBoard) {
-  if (sportsbook?.length) recordNBAEstimates(ledger,rankMarketProps(prizePicks.lines,sportsbook,now),"Sportsbook",now);
-  if (model) recordNBAEstimates(ledger,estimateNBAProps(model,prizePicks,now,{tier:"all",side:"all"}).sides,"Stats model",now);
+  const marketSides = sportsbook?.length ? rankMarketProps(prizePicks.lines,sportsbook,now) : [];
+  const modelSides = model ? estimateNBAProps(model,prizePicks,now,{tier:"all",side:"all"}).sides : [];
+  const marketByPick = new Map(marketSides.filter(prop => Number.isFinite(prop.chance)).map(prop => [pickKey(prop),prop]));
+  const modelByPick = new Map(modelSides.map(prop => [pickKey(prop),prop]));
+  recordNBAEstimates(ledger,marketSides,"Sportsbook",now,marketByPick,modelByPick);
+  recordNBAEstimates(ledger,modelSides,"Stats model",now,marketByPick,modelByPick);
  }
  const entries = Object.entries(ledger.entries);
  if (entries.length > 8000) {
@@ -1580,13 +1631,26 @@ function captureNBAResults(prizePicks,sportsbook,model) {
 function makeGreenBenchmarkCSV(entries,market) {
  const rows = [["Platform","Sport","Source","Player","Team","Market","Line","Side","Tier",
   "Estimated probability","Line observed UTC","First GREEN UTC","Game start UTC","Outcome","Final stat",
-  "Same-line consensus near tipoff","Consensus recorded UTC"]];
+  "Same-line consensus near tipoff","Consensus recorded UTC","Availability at capture","Availability updated UTC",
+  "Opponent","Opening line","Sportsbook probability at capture","Sportsbook count","Stats model probability at capture",
+  "Last 5 hits","Last 5 sample","Last 5 pushes","Last 5 average minutes",
+  "Last 10 hits","Last 10 sample","Last 10 pushes","Last 10 average minutes",
+  "Matchup hits","Matchup sample","Matchup pushes"]];
  for (const row of Object.values(entries)) {
   if (!row.green || (market && row.market !== market)) continue;
+  const analysis = row.green.analysis;
+  const recent = limit => {
+   const window = analysis?.recent.find(item => item.limit === limit);
+   return [window?.hits,window?.count,window?.pushes,window?.averageMinutes];
+  };
   rows.push(["PrizePicks","NBA",row.source,row.player,row.team,row.market,row.line,row.side,row.tier,
    row.green.chance,new Date(row.green.observed).toISOString(),new Date(row.green.saved).toISOString(),
    new Date(row.start).toISOString(),row.outcome === "tie" ? "push" : row.outcome ?? "ungraded",row.value ?? "",
-   row.nearTipoff?.chance ?? "",row.nearTipoff ? new Date(row.nearTipoff.saved).toISOString() : ""]);
+   row.nearTipoff?.chance ?? "",row.nearTipoff ? new Date(row.nearTipoff.saved).toISOString() : "",
+   analysis?.availability,analysis?.availabilityUpdatedAt,analysis?.opponent,analysis?.openingLine,
+   analysis?.marketChance,analysis?.books,analysis?.modelChance,...recent(5),...recent(10),
+   analysis?.matchup?.count ? analysis.matchup.hits : "",analysis?.matchup?.count,
+   analysis?.matchup?.count ? analysis.matchup.pushes : ""]);
  }
  return rows.map(row => row.map(value => {
   const cell = String(value ?? "");
