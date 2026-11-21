@@ -452,11 +452,30 @@ async function loadSportsbookLines(){
  finally{clearTimeout(timer);btn.disabled=false}
 }
 
+let prizePicksRetryAt = 0;
+let prizePicksLimitMessage = "";
+
+function showPrizePicksLimit(data) {
+ const retryAt = Date.parse(data.retryAt);
+ // Older Worker versions omit a retry time. Back off locally for the next scan interval.
+ prizePicksRetryAt = retryAt > Date.now() ? retryAt : Date.now() + 300000;
+ const reason = data.providerCode === "MONTHLY_QUOTA_EXCEEDED" ?
+  "PrizePicks provider monthly quota used." :
+  data.providerCode === "RATE_LIMIT_EXCEEDED" ? "PrizePicks provider temporarily rate-limited the feed." :
+  "PrizePicks provider limit reached.";
+ prizePicksLimitMessage = reason + " Next retry after " + new Date(prizePicksRetryAt).toLocaleString() + ".";
+ return prizePicksLimitMessage;
+}
+
 async function loadPrizePicksLines(scan = false) {
  const button = document.getElementById("refreshPrizePicks");
  const status = document.getElementById("prizePicksStatus");
  const rows = document.getElementById("prizePicksRows");
  const table = document.getElementById("prizePicksTable");
+ if (Date.now() < prizePicksRetryAt) {
+  status.textContent = prizePicksLimitMessage + (table.hidden ? "" : " Showing the previous board for reference.");
+  return;
+ }
  button.disabled = true;
  table.hidden = true;
  status.textContent = "Loading NBA PrizePicks lines…";
@@ -465,7 +484,7 @@ async function loadPrizePicksLines(scan = false) {
  try {
   const response = await fetch(API_URL + (scan ? "/api/prizepicks/scan" : "/api/prizepicks"), {signal:controller.signal});
   if (response.status === 429) {
-   status.textContent = "PrizePicks provider limit reached. LPPE will retry on the next automatic scan.";
+   status.textContent = showPrizePicksLimit(await response.json().catch(() => ({})));
    return;
   }
   if (!response.ok) throw new Error("PrizePicks request failed");
@@ -492,7 +511,7 @@ async function loadPrizePicksLines(scan = false) {
   status.textContent = (data.lines.length ? data.lines.length + " PrizePicks lines shown." : "No PrizePicks lines returned.") +
    (data.partial ? " This board has partial coverage." : "") +
    (Number.isFinite(observed) ? " Observed " + new Date(observed).toLocaleString() + "." : "");
-  if (data.savedBoard) status.textContent = "Provider limit reached. Showing the last saved board. " + status.textContent;
+  if (data.savedBoard) status.textContent = showPrizePicksLimit(data) + " Showing the last saved board. " + status.textContent;
   return data;
  } catch {
   status.textContent = "PrizePicks lines are temporarily unavailable.";
