@@ -167,7 +167,7 @@ h1{font-size:21px}
   <h2>NBA Sportsbook Lines</h2>
   <p class="sub">Live sportsbook lines from The Odds API, when available. These are NOT PrizePicks lines or independent projections. Odds do not establish a model edge.</p>
   <div class="toolbar"><button class="secondary" id="refreshLines" onclick="loadSportsbookLines()">Refresh sportsbook lines</button><input id="oddsSearch" placeholder="Filter player or market" oninput="renderSportsbookLines()"></div>
-  <div id="oddsStatus" class="sub" role="status" aria-live="polite">Sportsbook lines load when you open LPPE. Manual refreshes may consume provider credits.</div>
+  <div id="oddsStatus" class="sub" role="status" aria-live="polite">Sportsbook lines load when the scan finds fresh PrizePicks lines it can compare. Manual refreshes may consume provider credits.</div>
   <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>PLAYER</th><th>MARKET</th><th>BOOKMAKER</th><th>LINE</th><th>SIDE</th><th>AMERICAN ODDS</th><th>UPDATED</th></tr></thead><tbody id="oddsBoard"><tr><td colspan="7" class="empty">No sportsbook data requested yet.</td></tr></tbody></table></div>
  </section>
 
@@ -478,6 +478,18 @@ const pacificDay = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angele
 const maxQuoteAge = 30 * 60 * 1000;
 const maxTipoffDifference = 15 * 60 * 1000;
 
+function comparisonIssue(prop,now,today) {
+ const starts = Date.parse(prop.eventStart);
+ if (!Number.isFinite(starts)) return "Game time is unavailable.";
+ if (starts <= now || pacificDay.format(starts) !== today) return "Game is outside today’s upcoming slate.";
+ const age = now - Date.parse(prop.observedAt);
+ if (!(age >= 0 && age <= maxQuoteAge)) return "The PrizePicks line is outside the freshness window.";
+ if (prop.period.toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.toLowerCase())) {
+  return "This market or period is outside sportsbook comparison coverage.";
+ }
+ return "";
+}
+
 function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all", side = "all"} = {}) {
  const today = pacificDay.format(now);
  const key = line => JSON.stringify([line.player.trim().toLowerCase(),
@@ -497,13 +509,7 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all"
  const ranked = [];
  for (const prop of prizePicks) {
   const starts = Date.parse(prop.eventStart);
-  let unavailable = "";
-  if (!Number.isFinite(starts)) unavailable = "Game time is unavailable.";
-  else if (starts <= now || pacificDay.format(starts) !== today) unavailable = "Game is outside today’s upcoming slate.";
-  else if (!fresh(prop.observedAt)) unavailable = "The PrizePicks line is outside the freshness window.";
-  else if (prop.period.toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.toLowerCase())) {
-   unavailable = "This market or period is outside sportsbook comparison coverage.";
-  }
+  let unavailable = comparisonIssue(prop,now,today);
   const quotes = (unavailable ? [] : indexed.get(key(prop)) || []).filter(quote => {
    const bookStart = Date.parse(quote.eventStart);
    return bookStart > now && Math.abs(bookStart - starts) <= maxTipoffDifference;
@@ -725,7 +731,7 @@ function renderSuggestions() {
 
 let latestBoard = null;
 function useLatestBoard() {
- if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook);
+ if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds);
 }
 for (const id of ["rankTier","rankSide","minBooks"]) {
  document.getElementById(id).addEventListener("change",useLatestBoard);
@@ -743,13 +749,18 @@ async function scanAndRankProps() {
  findEntries.disabled = true;
  entrySize.disabled = true;
  table.hidden = true;
- status.textContent = "Checking both feeds…";
+ status.textContent = "Checking PrizePicks for upcoming NBA lines…";
  refreshEntryCandidates([]);
  latestBoard = null;
  try {
-  const [prizePicks,sportsbook] = await Promise.all([loadPrizePicksLines(true),loadSportsbookLines()]);
+  const prizePicks = await loadPrizePicksLines(true);
   if (!prizePicks) throw new Error(document.getElementById("prizePicksStatus").textContent);
-  latestBoard = {prizePicks,sportsbook};
+  const now = Date.now();
+  const today = pacificDay.format(now);
+  const needsOdds = !prizePicks.savedBoard && prizePicks.lines.some(prop => !comparisonIssue(prop,now,today));
+  if (needsOdds) status.textContent = "Checking sportsbook quotes…";
+  const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
+  latestBoard = {prizePicks,sportsbook,needsOdds};
   useLatestBoard();
   return true;
  } catch (error) {
@@ -760,7 +771,7 @@ async function scanAndRankProps() {
   entrySize.disabled = false;
  }
 }
-function renderMarketBoard(prizePicks,sportsbook) {
+function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
  const status = document.getElementById("todayPropsStatus");
  const body = document.getElementById("todayPropsRows");
  const table = document.getElementById("todayPropsTable");
@@ -823,7 +834,7 @@ function renderMarketBoard(prizePicks,sportsbook) {
   status.textContent += " Scanned " + prizePicks.lines.length + " PrizePicks offers across " +
    games.size + " identified upcoming games today. " + matches.length + " sides had estimates above 50%.";
   if (prizePicks.savedBoard) status.textContent += " Provider limit reached. Showing saved lines for reference only.";
-  if (!sportsbook) status.textContent += " The sportsbook feed is unavailable.";
+  if (needsOdds && !sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
 }
