@@ -54,7 +54,7 @@ function playerBoxScores(summary) {
 
 async function recentNBA(request, now = Date.now()) {
   const dates = [...new Set(Array.from({length:12},(_,day) => nbaDate(now + (1-day) * 86400000)))];
-  return cachedNBA(request,"model-v2/" + nbaDate(now) + "/" + encodeURIComponent(pacificSlate.format(now)),1800,async () => {
+  return cachedNBA(request,"model-v3/" + nbaDate(now) + "/" + encodeURIComponent(pacificSlate.format(now)),1800,async () => {
     const boards = await Promise.allSettled(dates.map(date => getJson(espnNBA + "/scoreboard?dates=" + date)));
     if (boards[1].status !== "fulfilled" || !Array.isArray(boards[1].value.events)) {
       throw new Error("NBA schedule unavailable");
@@ -90,7 +90,8 @@ async function recentNBA(request, now = Date.now()) {
             if (!teams.has(team)) continue;
             const key = id + ":" + team;
             if (!players.has(key)) players.set(key,{player,team,games:[]});
-            players.get(key).games.push({date:game.date,minutes,values});
+            const opponent = game.competitions?.[0]?.competitors?.find(entry => entry.team?.abbreviation !== team);
+            players.get(key).games.push({date:game.date,minutes,values,opponent:opponent?.team?.abbreviation});
           }
         } catch {
           partial = true;
@@ -121,7 +122,25 @@ async function completedNBA(request, date) {
   return {results,partial:results.length < games.length};
 }
 
+function normalizeNBAAvailability(data) {
+  if (data.status !== "success" || !Array.isArray(data.injuries)) throw new Error("Missing NBA injury report");
+  return data.injuries.flatMap(team => Array.isArray(team.injuries) ? team.injuries : [])
+    .map(row => ({player:row.athlete?.displayName,team:row.athlete?.team?.abbreviation,
+      status:row.status,updatedAt:row.date,returnDate:row.details?.returnDate}))
+    .filter(row => typeof row.player === "string" && typeof row.team === "string" &&
+      typeof row.status === "string" && Number.isFinite(Date.parse(row.updatedAt)));
+}
+
 export async function onRequestGet({request}) {
+  if (new URL(request.url).searchParams.has("availability")) {
+    try {
+      return json(await cachedNBA(request,"availability-v1",300,async () => ({
+        reports:normalizeNBAAvailability(await getJson(espnNBA + "/injuries")),checkedAt:new Date().toISOString()
+      })));
+    } catch {
+      return Response.json({error:"NBA availability is temporarily unavailable"},{status:502});
+    }
+  }
   const date = new URL(request.url).searchParams.get("results");
   const now = Date.now();
   if (date !== null && (!/^\d{8}$/.test(date) || date < nbaDate(now - 15*86400000) || date > nbaDate(now))) {
