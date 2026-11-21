@@ -156,7 +156,7 @@ async function refreshPrizePicksBoard(request, env) {
   }
 }
 
-async function prizePicksLines(request,env) {
+export async function prizePicksLines(request,env) {
   if (!env.PRIZEPICKS_API_KEY) return json({connected:false,source:"prizepicksapi.com",lines:[]});
   if (!prizePicksRefresh) {
     prizePicksRefresh = refreshPrizePicksBoard(request,env).finally(() => { prizePicksRefresh = null; });
