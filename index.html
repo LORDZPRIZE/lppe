@@ -105,6 +105,16 @@ h1{font-size:21px}
   </div>
  </section>
 
+ <section class="section" aria-labelledby="watchlistHeading">
+  <h2 id="watchlistHeading">Prop Watchlist</h2>
+  <p class="sub">Use Watch in a prop’s details to save it on this device. For MORE, your target is the highest line you’ll consider. For LESS, it’s the lowest.</p>
+  <p id="watchlistStatus" class="sub" role="status"></p>
+  <div class="tablewrap" id="watchlistTable" hidden>
+   <table><thead><tr><th>PROP</th><th>SAVED LINE</th><th>TARGET LINE</th><th>CURRENT LINE</th><th>CURRENT ESTIMATE</th><th>STATUS</th><th>ACTION</th></tr></thead>
+   <tbody id="watchlistRows"></tbody></table>
+  </div>
+ </section>
+
  <section class="section" aria-labelledby="nbaResultsHeading">
   <h2 id="nbaResultsHeading">NBA Results Tracker</h2>
   <p class="sub">This browser saves the first pregame estimate for each exact line and source during a scan. LPPE checks final NBA box scores while the dashboard is open. These are stat results. PrizePicks can apply its own void and payout rules.</p>
@@ -979,7 +989,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    if (filters.tier === "no-goblins" ? tier === "goblin" : filters.tier !== "all" && tier !== filters.tier) continue;
    if (tier === "demon" && item.side !== "more") continue;
    const hits = item.side === "more" ? more : less;
-   sides.push({...model,line:prop.line,eventStart:prop.eventStart,observedAt:prop.observedAt,tier:item.tier,side:item.side.toUpperCase(),chance:(hits+2)/(more+less+4)});
+   sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,observedAt:prop.observedAt,tier:item.tier,side:item.side.toUpperCase(),chance:(hits+2)/(more+less+4)});
   }
  }
  return {sides:sides.sort((a,b) => b.chance-a.chance),
@@ -1185,7 +1195,126 @@ async function checkNBAResults() {
  }
 }
 
+const watchlistKey = "lppe-watchlist-v1";
+let watchlistWarning = "";
+let watchlistTimer;
+
+function watchIdentity(prop) {
+ const market = prop.market.trim().toLowerCase();
+ return JSON.stringify([Date.parse(prop.eventStart),modelPlayerKey(prop.player),
+  modelTeamKey(prop.team?.trim().toUpperCase()),supportedMarkets.get(market) || market,
+  prop.period.trim().toLowerCase(),prop.side.toUpperCase(),prop.tier.trim().toLowerCase()]);
+}
+
+function readWatchlist() {
+ try {
+  const saved = JSON.parse(localStorage.getItem(watchlistKey) || "[]");
+  return Array.isArray(saved) ? saved : [];
+ } catch {
+  return [];
+ }
+}
+
+function saveWatchlist(items) {
+ try {
+  localStorage.setItem(watchlistKey,JSON.stringify(items));
+  watchlistWarning = "";
+ } catch {
+  watchlistWarning = "Watchlist changes could not be saved on this device.";
+ }
+ renderWatchlist();
+}
+
+function addToWatchlist(prop) {
+ const items = readWatchlist();
+ const identity = watchIdentity(prop);
+ if (items.some(item => watchIdentity(item) === identity &&
+  (item.id && prop.id ? item.id === prop.id : item.line === prop.line))) return;
+ const {id,player,market,period,side,tier,team,eventStart,line} = prop;
+ saveWatchlist([...items,{id,player,market,period,side,tier,team,eventStart,line,target:line,key:crypto.randomUUID()}]);
+}
+
+function watchedOffer(item,lines,board,now) {
+ const start = Date.parse(item.eventStart);
+ if (Number.isFinite(start) && start <= now) return {status:"Scheduled start passed"};
+ if (!board || board.savedBoard) return {status:"Live line unverified"};
+ const identity = watchIdentity(item);
+ const matches = lines.filter(prop => watchIdentity(prop) === identity);
+ const byId = item.id ? matches.filter(prop => prop.id === item.id) : [];
+ const candidates = byId.length ? byId : matches;
+ if (candidates.length > 1) return {status:"Multiple matching lines"};
+ if (!candidates.length) return {status:board.partial ? "Unverified on partial board" : "Side missing from current board"};
+ const offer = candidates[0];
+ const age = now-Date.parse(offer.observedAt);
+ if (!(age >= 0 && age < maxQuoteAge)) return {status:"Line timestamp is stale or unavailable"};
+ const meets = item.side === "MORE" ? offer.line <= item.target : offer.line >= item.target;
+ return {offer,status:meets ? "Meets target" : "Outside target",until:Math.min(start,Date.parse(offer.observedAt)+maxQuoteAge)};
+}
+
+function renderWatchlist() {
+ clearTimeout(watchlistTimer);
+ const items = readWatchlist();
+ const table = document.getElementById("watchlistTable");
+ const body = document.getElementById("watchlistRows");
+ const status = document.getElementById("watchlistStatus");
+ table.hidden = !items.length;
+ body.replaceChildren();
+ status.textContent = (items.length ? items.length + " watched sides. Updates run with LPPE scans while this page is open." :
+  "No watched props yet.") + (watchlistWarning ? " " + watchlistWarning : "");
+ if (!items.length) return;
+ const now = Date.now();
+ const prizePicks = latestBoard?.prizePicks;
+ const ranked = !prizePicks || prizePicks.savedBoard ? [] :
+  rankMarketProps(prizePicks.lines,latestBoard.sportsbook || [],now);
+ const modeled = latestModel && prizePicks && !prizePicks.savedBoard ?
+  estimateNBAProps(latestModel,prizePicks,now,{tier:"all",side:"all"}).sides : [];
+ let nextUpdate = Infinity;
+ for (const item of items) {
+  const {offer,status:lineStatus,until} = watchedOffer(item,ranked,prizePicks,now);
+  const start = Date.parse(item.eventStart);
+  if (start > now) nextUpdate = Math.min(nextUpdate,start);
+  if (until > now) nextUpdate = Math.min(nextUpdate,until);
+  const model = offer && modeled.find(prop => prop.id === offer.id && prop.line === offer.line && watchIdentity(prop) === watchIdentity(offer));
+  const marketChance = offer && now < offer.expiresAt ? offer.chance : null;
+  if (Number.isFinite(marketChance)) nextUpdate = Math.min(nextUpdate,offer.expiresAt);
+  const chance = marketChance ?? model?.chance;
+  const row = body.insertRow();
+  row.insertCell().textContent = [item.player,item.market,item.period,item.side,item.tier].filter(Boolean).join(" · ");
+  row.insertCell().textContent = item.line;
+  const target = document.createElement("input");
+  target.type = "number";
+  target.step = "any";
+  target.inputMode = "decimal";
+  target.required = true;
+  target.value = item.target;
+  target.setAttribute("aria-label","Target for "+item.player+" "+item.side+" "+item.market+" "+item.tier);
+  target.addEventListener("change",() => {
+   if (!target.validity.valid || !Number.isFinite(target.valueAsNumber)) {
+    target.value = item.target;
+    return;
+   }
+   saveWatchlist(readWatchlist().map(saved => saved.key === item.key ? {...saved,target:target.valueAsNumber} : saved));
+  });
+  row.insertCell().append(target);
+  row.insertCell().textContent = offer ? offer.line : "—";
+  row.insertCell().textContent = !Number.isFinite(chance) ? "—" :
+   (chance*100).toFixed(1) + "%" + (Number.isInteger(offer.line) ? " if no tie" : "") +
+   (marketChance !== null ? " · Sportsbook" : " · Stats model");
+  row.insertCell().textContent = lineStatus;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "secondary";
+  remove.textContent = "Remove";
+  remove.addEventListener("click",() => saveWatchlist(readWatchlist().filter(saved => saved.key !== item.key)));
+  row.insertCell().append(remove);
+ }
+ if (Number.isFinite(nextUpdate)) {
+  watchlistTimer = setTimeout(renderWatchlist,Math.min(2147483647,Math.max(1,nextUpdate-now)));
+ }
+}
+
 function useLatestBoard() {
+ renderWatchlist();
  if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds);
  if (latestModel) renderNBAModel(latestBoard?.prizePicks,{
   tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value
@@ -1213,6 +1342,7 @@ async function scanAndRankProps() {
  renderSizeComparison();
  latestBoard = null;
  latestModel = null;
+ renderWatchlist();
  estimateSource.disabled = true;
  document.getElementById("nbaModel").hidden = true;
  try {
@@ -1295,6 +1425,18 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
     movement.textContent = "PrizePicks line: " + prop.openingLine + " at opening → " + prop.line + " at scan.";
     details.append(movement);
    }
+   if (!prizePicks.savedBoard && Date.parse(prop.eventStart) > now &&
+       now-Date.parse(prop.observedAt) >= 0 && now-Date.parse(prop.observedAt) < maxQuoteAge) {
+    const watch = document.createElement("button");
+    watch.type = "button";
+    watch.className = "secondary";
+    watch.textContent = "Watch this side";
+    watch.addEventListener("click",() => {
+     addToWatchlist(prop);
+     if (!watchlistWarning) watch.textContent = "Watching";
+    });
+    details.append(watch);
+   }
    row.insertCell().append(details);
   }
   table.hidden = !ranked.length;
@@ -1313,10 +1455,14 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
    ? " Partial scan: provider limit reached." : " Partial scan: more offers are available.";
 }
 rankButton.addEventListener("click",scanAndRankProps);
+window.addEventListener("storage",event => {
+ if (event.key === watchlistKey || event.key === null) renderWatchlist();
+});
 
 render();
 document.getElementById("nbaResultsMarket").addEventListener("change",() => renderResultsLedger(readResultsLedger()));
 renderResultsLedger(readResultsLedger());
+renderWatchlist();
 updatePrizePicksHealth();
 checkNBAResults();
 loadNBAProps();
