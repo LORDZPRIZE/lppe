@@ -5,6 +5,35 @@ export const roster = [
 ];
 export const salaryCap = 60000;
 
+const slot = (label,...positions) => [label,positions.length ? positions : [label]];
+export const profiles = {
+  NBA:{name:"NBA",roster,salaryCap,maxTeam:4},
+  NFL:{name:"NFL",salaryCap:60000,maxTeam:4,roster:[
+    slot("QB"),slot("RB"),slot("RB"),slot("WR"),slot("WR"),slot("WR"),slot("TE"),
+    slot("FLEX","RB","WR","TE"),slot("DEF")
+  ]},
+  MLB:{name:"MLB",salaryCap:35000,maxTeam:5,maxHitters:4,roster:[
+    slot("P"),slot("C/1B","C","1B"),slot("2B"),slot("3B"),slot("SS"),slot("OF"),slot("OF"),slot("OF"),
+    slot("UTIL","C","1B","2B","3B","SS","OF","DH")
+  ]},
+  CFB:{name:"College Football",salaryCap:60000,maxTeam:4,roster:[
+    slot("QB"),slot("RB"),slot("RB"),slot("WR","WR","TE"),slot("WR","WR","TE"),slot("WR","WR","TE"),
+    slot("SFLEX","QB","RB","WR","TE")
+  ]}
+};
+
+function rosterProfile(sport) {
+  if (!Object.hasOwn(profiles,sport)) throw new Error("Choose a supported FanDuel Classic sport.");
+  return profiles[sport];
+}
+
+function positionCodes(raw, sport, allowed) {
+  const aliases = sport === "NFL" ? {DST:"DEF",D:"DEF",DEFENSE:"DEF"} :
+    sport === "MLB" ? {SP:"P",RP:"P",LF:"OF",CF:"OF",RF:"OF"} : {};
+  return [...new Set(raw.toUpperCase().replace(/D\/ST/g,"DST").split(/[\s/,;|-]+/)
+    .map(position => aliases[position] || position).filter(position => allowed.has(position)))];
+}
+
 function parseCSV(source) {
   const records = [];
   let record = [], field = "", quoted = false;
@@ -40,14 +69,16 @@ function parseCSV(source) {
 const csvNumber = value => value?.trim() ? Number(value.replace(/[$,]/g, "")) : NaN;
 const playerName = row => row.nickname || row.playername || row.player || row.name ||
   [row.firstname,row.lastname].filter(Boolean).join(" ");
-export const teamCode = raw => {
+export const teamCode = (raw,sport = "NBA") => {
   const team = raw?.trim().toUpperCase() || "";
-  return {BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team;
+  return sport === "NBA" ? ({BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team) : team;
 };
 const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const unavailable = status => /^(O|OUT|IR|INACTIVE|SUSPENDED|SUSP|DOUBTFUL|D)$/i.test(status || "");
 
-export function importPlayers(salaryCSV, projectionCSV = "") {
+export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
+  const profile = rosterProfile(sport);
+  const allowed = new Set(profile.roster.flatMap(([,positions]) => positions));
   const byId = new Map();
   const byName = new Map();
   function addProjection(map, key, points) {
@@ -60,7 +91,7 @@ export function importPlayers(salaryCSV, projectionCSV = "") {
       const projected = csvNumber(row.projection || row.projectedpoints || row.fantasypoints || row.fpts || row.fppg);
       if (!Number.isFinite(projected)) continue;
       const name = matchName(playerName(row));
-      const team = teamCode(row.team || row.teamabbr);
+      const team = teamCode(row.team || row.teamabbr,sport);
       addProjection(byId,row.id || row.playerid,projected);
       if (name && team) addProjection(byName,name + ":" + team,projected);
     }
@@ -72,10 +103,10 @@ export function importPlayers(salaryCSV, projectionCSV = "") {
   for (const row of parseCSV(salaryCSV)) {
     const id = row.id || row.playerid;
     const name = playerName(row);
-    const positions = [...new Set((row.rosterposition || row.position || "").toUpperCase().split(/[\s/,;|-]+/))]
-      .filter(position => roster.slice(0,5).some(([slot]) => slot === position));
+    const slots = positionCodes(row.rosterposition || "",sport,allowed);
+    const positions = slots.length ? slots : positionCodes(row.position || "",sport,allowed);
     const salary = csvNumber(row.salary);
-    const team = teamCode(row.team || row.teamabbr);
+    const team = teamCode(row.team || row.teamabbr,sport);
     if (!id || !name || !positions.length || !Number.isInteger(salary) || salary <= 0 || !team) {
       skipped++;
       continue;
@@ -95,22 +126,27 @@ export function importPlayers(salaryCSV, projectionCSV = "") {
       existing.positions = [...new Set([...existing.positions, ...positions])];
       continue;
     }
-    players.set(id,{id,name,positions,salary,team,points,source,status,
+    const game = (row.game || row.gameid || row.matchup || "").toUpperCase().replace(/\s+/g,"");
+    players.set(id,{id,name,positions,salary,team,points,source,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
-  if (!players.size) throw new Error("No FanDuel players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
+  if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
   return {players:[...players.values()],skipped};
 }
 
-export function buildLineups(players, count, difference, searchLimit = 160000) {
+export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA") {
+  const profile = rosterProfile(sport);
+  const roster = profile.roster;
+  const salaryCap = profile.salaryCap;
   if (!Number.isInteger(count) || count < 1 || count > 20 ||
       !Number.isInteger(difference) || difference < 1 || difference > roster.length) {
-    throw new Error("Choose 1–20 lineups and a minimum difference of 1–9 players.");
+    throw new Error("Choose 1–20 lineups and a minimum difference of 1–" + roster.length + " players.");
   }
   const eligible = players.filter(player => player.selection !== "exclude" && Number.isFinite(player.points));
   const locked = players.filter(player => player.selection === "lock");
   if (locked.some(player => !Number.isFinite(player.points))) throw new Error("A locked player is missing a projection.");
-  if (locked.length > roster.length) throw new Error("Lock at most nine players.");
+  if (locked.length > roster.length) throw new Error("Lock at most " + roster.length + " players.");
+  if (new Set(eligible.map(player => player.team)).size < 3) return {lineups:[],limited:false};
   const lockedIds = new Set(locked.map(player => player.id));
   const slots = roster.map(([label,positions],index) => ({
     label,index,pool:eligible.filter(player => player.positions.some(position => positions.includes(position)))
@@ -133,6 +169,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000) {
     const selected = [];
     const ids = new Set();
     const teams = new Map();
+    const hitters = new Map();
     const overlaps = lineups.map(() => 0);
     const maximumOverlap = roster.length-difference;
     let nodes = 0;
@@ -144,24 +181,33 @@ export function buildLineups(players, count, difference, searchLimit = 160000) {
           overlaps.some(overlap => overlap > maximumOverlap)) return;
       if (locksRemaining && locked.some(player => !ids.has(player.id) && !possible[index].has(player.id))) return;
       if (index === slots.length) {
+        if (teams.size < 3) return;
+        if (sport === "CFB" && selected.every(({player}) => player.game) &&
+            new Set(selected.map(({player}) => player.game)).size < 2) return;
         best = {picks:[...selected].sort((a,b)=>a.slot-b.slot),ids:new Set(ids),salary,points};
         return;
       }
       const slot = slots[index];
       for (let rank = 0; rank < slot.pool.length && nodes < searchLimit; rank++) {
         const player = slot.pool[rank];
-        if (ids.has(player.id) || (teams.get(player.team) || 0) >= 4) continue;
-        if (slot.label === "UTIL" && slots[index-1]?.label === "UTIL" && rank <= selected[index-1].rank) continue;
+        if (ids.has(player.id) || (teams.get(player.team) || 0) >= profile.maxTeam) continue;
+        const isHitter = profile.maxHitters && slot.label !== "P";
+        if (isHitter && (hitters.get(player.team) || 0) >= profile.maxHitters) continue;
+        if (slots[index-1]?.label === slot.label && rank <= selected[index-1].rank) continue;
         if (locksRemaining === slots.length-index && !lockedIds.has(player.id)) continue;
         if (salary+player.salary+salaryFloor[index+1] > salaryCap) continue;
         if (best && points+player.points+pointsCeiling[index+1] <= best.points) break;
         selected.push({player,slot:slot.index,rank});
         ids.add(player.id);
         teams.set(player.team,(teams.get(player.team) || 0)+1);
+        if (isHitter) hitters.set(player.team,(hitters.get(player.team) || 0)+1);
         for (const [i,lineup] of lineups.entries()) if (lineup.ids.has(player.id)) overlaps[i]++;
         search(index+1,salary+player.salary,points+player.points,locksRemaining-Number(lockedIds.has(player.id)));
         for (const [i,lineup] of lineups.entries()) if (lineup.ids.has(player.id)) overlaps[i]--;
-        teams.set(player.team,teams.get(player.team)-1);
+        const remaining = teams.get(player.team)-1;
+        if (remaining) teams.set(player.team,remaining);
+        else teams.delete(player.team);
+        if (isHitter) hitters.set(player.team,hitters.get(player.team)-1);
         ids.delete(player.id);
         selected.pop();
       }
@@ -174,7 +220,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000) {
   return {lineups,limited};
 }
 
-export function reviewCSV(lineups) {
+export function reviewCSV(lineups,sport = "NBA") {
+  const {roster} = rosterProfile(sport);
   const escape = value => {
     const text = String(value);
     return '"' + (/^[=+@\-\t\r]/.test(text) ? "'" : "") + text.replaceAll('"','""') + '"';
