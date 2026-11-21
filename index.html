@@ -116,12 +116,13 @@ h1{font-size:21px}
  </section>
 
  <section class="section" aria-labelledby="nbaResultsHeading">
-  <h2 id="nbaResultsHeading">NBA Results Tracker</h2>
+  <h2 id="nbaResultsHeading">NBA Results Scorecard</h2>
   <p class="sub">This browser saves the first pregame estimate for each exact line and source during a scan. LPPE checks final NBA box scores while the dashboard is open. These are stat results. PrizePicks can apply its own void and payout rules.</p>
   <label>Market <select id="nbaResultsMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option></select></label>
+  <p class="sub">Calibration gap is observed hit rate minus average estimate. Forecast error averages the squared error for decided sides. Lower is better. A constant 50% forecast scores 0.250. Several sides can come from the same game.</p>
   <p id="nbaResultsStatus" class="sub" role="status"></p>
   <div class="tablewrap">
-   <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>DECIDED SAMPLE</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th></tr></thead>
+   <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>DECIDED SAMPLE</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th><th>CALIBRATION GAP</th><th>FORECAST ERROR</th></tr></thead>
    <tbody id="nbaResultsRows"></tbody></table>
   </div>
  </section>
@@ -1109,6 +1110,20 @@ function gradeNBAEstimate(entry,results) {
  return {value,outcome};
 }
 
+function forecastScore(rows) {
+ const decided = rows.filter(row => row.outcome === "win" || row.outcome === "loss");
+ if (!decided.length) return null;
+ const totals = decided.reduce((sum,row) => {
+  const actual = Number(row.outcome === "win");
+  sum.wins += actual;
+  sum.chance += row.chance;
+  sum.error += (row.chance-actual)**2;
+  return sum;
+ },{wins:0,chance:0,error:0});
+ const count = decided.length;
+ return {wins:totals.wins,count,average:totals.chance/count,hitRate:totals.wins/count,error:totals.error/count};
+}
+
 function renderResultsLedger(ledger,warning = "") {
  const body = document.getElementById("nbaResultsRows");
  const status = document.getElementById("nbaResultsStatus");
@@ -1123,17 +1138,24 @@ function renderResultsLedger(ledger,warning = "") {
  if (warning) status.textContent += " " + warning;
  body.replaceChildren();
  for (const source of ["Sportsbook","Stats model"]) {
-  for (const [label,low,high] of [["Below 55%",0,.55],["55% to under 60%",.55,.6],["60% and above",.6,1.01]]) {
-   const graded = rows.filter(row => row.source === source && row.outcome && row.chance >= low && row.chance < high);
+  const sourceRows = rows.filter(row => row.source === source && row.outcome);
+  const bands = [
+   ["All estimates",0,1.01],["Below 55%",0,.55],["55% to under 60%",.55,.6],
+   ["60% to under 65%",.6,.65],["65% to under 70%",.65,.7],["70% and above",.7,1.01]
+  ];
+  for (const [label,low,high] of bands) {
+   const graded = sourceRows.filter(row => row.chance >= low && row.chance < high);
    if (!graded.length) continue;
-   const wins = graded.filter(row => row.outcome === "win").length;
-   const losses = graded.filter(row => row.outcome === "loss").length;
-   const decided = wins + losses;
-   const average = graded.reduce((sum,row) => sum + (row.outcome === "tie" ? 0 : row.chance),0);
+   const score = forecastScore(graded);
+   const count = score?.count ?? 0;
+   const wins = score?.wins ?? 0;
    const percent = value => (value*100).toFixed(1) + "%";
+   const gap = score ? ((score.hitRate-score.average)*100).toFixed(1) : "";
    const row = body.insertRow();
-   for (const value of [source,label,wins,losses,graded.length-decided,decided,
-    decided ? percent(average/decided) : "—",decided ? percent(wins/decided) : "—"]) row.insertCell().textContent = value;
+   for (const value of [source,label,wins,count-wins,graded.length-count,count,
+    score ? percent(score.average) : "—",score ? percent(score.hitRate) : "—",
+    score ? (Number(gap)>0 ? "+" : "") + gap + " pp" : "—",
+    score ? score.error.toFixed(3) : "—"]) row.insertCell().textContent = value;
   }
  }
 }
@@ -1443,12 +1465,17 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
   status.textContent = ranked.length ? "Showing " + ranked.length + " sides. " + pricedCount +
    " with market estimates, " + (ranked.length - pricedCount) + " without."
     : "No available sides match the selected filters.";
-  const games = new Set(prizePicks.lines.filter(line => {
+  const gameKey = line => {
    const start = Date.parse(line.eventStart);
-   return start > now && pacificDay.format(start) === pacificDay.format(now) && line.team && line.opponent;
-  }).map(line=>JSON.stringify([line.eventStart,[line.team,line.opponent].sort()])));
-  status.textContent += " Scanned " + prizePicks.lines.length + " PrizePicks offers across " +
-   games.size + " identified upcoming games today. " + matches.length + " sides had estimates above 50%.";
+   if (!(start > now) || pacificDay.format(start) !== pacificDay.format(now) || !line.team || !line.opponent) return null;
+   const teams = [line.team,line.opponent].map(team => modelTeamKey(team.trim().toUpperCase())).sort();
+   return JSON.stringify([start,teams]);
+  };
+  const games = new Set(prizePicks.lines.map(gameKey).filter(Boolean));
+  const pricedGames = new Set(ranked.filter(prop=>prop.chance !== null).map(gameKey).filter(Boolean));
+  status.textContent += (prizePicks.savedBoard ? " Saved " : " Received ") + prizePicks.lines.length +
+   " PrizePicks offers across " + games.size + " identified upcoming games. Market estimates cover " + pricedGames.size +
+   " of those games under the current filters.";
   if (prizePicks.savedBoard) status.textContent += " Provider limit reached. Showing saved lines for reference only.";
   if (needsOdds && !sportsbook) status.textContent += " The sportsbook feed is unavailable.";
   if (prizePicks.partial) status.textContent += prizePicks.scanStatus === "provider_limit"
