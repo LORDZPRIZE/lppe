@@ -87,6 +87,7 @@ h1{font-size:21px}
   <p class="sub">LPPE scans on opening and every five minutes while this tab is visible. Each scan checks up to 800 PrizePicks offers. Broader scans may use provider credits.</p>
   <p class="sub">Market estimate colors: Green 60% and above, Yellow 55% to under 60%, Red below 55%, Gray when a market estimate is unavailable.</p>
   <p id="todayPropsStatus" class="sub" role="status"></p>
+  <p id="prizePicksFreshness" class="sub" hidden></p>
   <div class="tablewrap" id="todayPropsTable" hidden>
    <table><thead><tr><th>PLAYER</th><th>MARKET</th><th>LINE</th><th>SIDE</th><th>TIER</th><th>MARKET ESTIMATE</th><th>BOOKS</th><th>BOOK ESTIMATE RANGE</th><th>DETAILS</th></tr></thead>
     <tbody id="todayPropsRows"></tbody>
@@ -101,6 +102,16 @@ h1{font-size:21px}
   <div class="tablewrap" id="nbaModelTable" hidden>
    <table><thead><tr><th>PLAYER</th><th>TEAM</th><th>MARKET</th><th>PROJECTED</th><th>MINUTES</th><th>GAMES</th><th>LINE</th><th>SIDE</th><th>MODEL ESTIMATE</th></tr></thead>
    <tbody id="nbaModelRows"></tbody></table>
+  </div>
+ </section>
+
+ <section class="section" aria-labelledby="nbaResultsHeading">
+  <h2 id="nbaResultsHeading">NBA Results Tracker</h2>
+  <p class="sub">This browser saves the first pregame estimate for each exact line and source during a scan. LPPE checks final NBA box scores while the dashboard is open. These are stat results. PrizePicks can apply its own void and payout rules.</p>
+  <p id="nbaResultsStatus" class="sub" role="status"></p>
+  <div class="tablewrap">
+   <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th></tr></thead>
+   <tbody id="nbaResultsRows"></tbody></table>
   </div>
  </section>
 
@@ -790,7 +801,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    if (filters.tier === "no-goblins" ? tier === "goblin" : filters.tier !== "all" && tier !== filters.tier) continue;
    if (tier === "demon" && item.side !== "more") continue;
    const hits = item.side === "more" ? more : less;
-   sides.push({...model,line:prop.line,side:item.side.toUpperCase(),chance:(hits+2)/(more+less+4)});
+   sides.push({...model,line:prop.line,eventStart:prop.eventStart,observedAt:prop.observedAt,tier:item.tier,side:item.side.toUpperCase(),chance:(hits+2)/(more+less+4)});
   }
  }
  return {sides:sides.sort((a,b) => b.chance-a.chance),
@@ -838,6 +849,163 @@ async function loadNBAModel() {
  }
 }
 
+const ledgerKey = "lppe-nba-results-v1";
+const lastFeedKey = "lppe-prizepicks-last-fresh-v1";
+const dayMillis = 86400000;
+const resultWait = 4 * 60 * 60 * 1000;
+const resultsDate = new Intl.DateTimeFormat("en-US",{
+ timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"
+});
+
+function updatePrizePicksHealth(board) {
+ const status = document.getElementById("prizePicksFreshness");
+ const now = Date.now();
+ try {
+  const fresh = !board?.savedBoard && board?.lines.some(prop => !comparisonIssue(prop,now,pacificDay.format(now)));
+  if (fresh) localStorage.setItem(lastFeedKey,String(now));
+  const last = Number(localStorage.getItem(lastFeedKey));
+  if (last > 0) {
+   status.hidden = false;
+   status.textContent = "Last scan with fresh comparable PrizePicks lines: " + new Date(last).toLocaleString() + ".";
+  }
+ } catch {}
+}
+
+function readResultsLedger() {
+ try {
+  const data = JSON.parse(localStorage.getItem(ledgerKey) || '{"entries":{},"checked":{}}');
+  return data.entries && data.checked ? data : {entries:{},checked:{}};
+ } catch {
+  return {entries:{},checked:{}};
+ }
+}
+
+function saveResultsLedger(ledger) {
+ try {
+  localStorage.setItem(ledgerKey,JSON.stringify(ledger));
+  return true;
+ } catch {
+  return false;
+ }
+}
+
+function resultDateFor(time) {
+ const parts = Object.fromEntries(resultsDate.formatToParts(time).map(({type,value}) => [type,value]));
+ return parts.year + parts.month + parts.day;
+}
+
+function recordNBAEstimates(ledger,props,source,now) {
+ for (const prop of props) {
+  const start = Date.parse(prop.eventStart);
+  const observed = Date.parse(prop.observedAt);
+  const team = prop.team?.trim().toUpperCase();
+  const market = supportedMarkets.get(prop.market.trim().toLowerCase());
+  if (!team || !market || !Number.isFinite(start) || start <= now || !(observed <= now) ||
+      now-observed > maxQuoteAge || !Number.isFinite(prop.chance)) continue;
+  const key = JSON.stringify([source,start,modelPlayerKey(prop.player),modelTeamKey(team),market,prop.line,prop.side,prop.tier]);
+  if (ledger.entries[key]) continue;
+  ledger.entries[key] = {source,player:prop.player,team,market,line:prop.line,tier:prop.tier,side:prop.side,
+   chance:prop.chance,start,observed,saved:now};
+ }
+}
+
+function gradeNBAEstimate(entry,results) {
+ const nearby = results.filter(game => Math.abs(Date.parse(game.start)-entry.start) <= maxTipoffDifference)
+  .flatMap(game => game.players.filter(player =>
+   modelTeamKey(player.team) === modelTeamKey(entry.team) && modelPlayerKey(player.player) === modelPlayerKey(entry.player)));
+ if (nearby.length !== 1) return;
+ const value = nearby[0].values[modelMarkets.indexOf(entry.market)];
+ if (!Number.isFinite(value)) return;
+ const outcome = value === entry.line ? "tie" :
+  (entry.side === "MORE" ? value > entry.line : value < entry.line) ? "win" : "loss";
+ return {value,outcome};
+}
+
+function renderResultsLedger(ledger,warning = "") {
+ const body = document.getElementById("nbaResultsRows");
+ const status = document.getElementById("nbaResultsStatus");
+ const rows = Object.values(ledger.entries);
+ const now = Date.now();
+ const unverified = rows.filter(row => !row.outcome && now-row.start > 14*dayMillis).length;
+ const pending = rows.filter(row => !row.outcome).length - unverified;
+ status.textContent = rows.length ?
+  rows.length + " recorded sides · " + pending + " pending · " + unverified + " unverified. Keeps up to 8,000 sides for 90 days." :
+  "No estimates recorded yet. Fresh, comparable PrizePicks lines are required.";
+ if (warning) status.textContent += " " + warning;
+ body.replaceChildren();
+ for (const source of ["Sportsbook","Stats model"]) {
+  for (const [label,low,high] of [["Below 55%",0,.55],["55% to under 60%",.55,.6],["60% and above",.6,1.01]]) {
+   const graded = rows.filter(row => row.source === source && row.outcome && row.chance >= low && row.chance < high);
+   if (!graded.length) continue;
+   const wins = graded.filter(row => row.outcome === "win").length;
+   const losses = graded.filter(row => row.outcome === "loss").length;
+   const decided = wins + losses;
+   const average = graded.reduce((sum,row) => sum + (row.outcome === "tie" ? 0 : row.chance),0);
+   const percent = value => (value*100).toFixed(1) + "%";
+   const row = body.insertRow();
+   for (const value of [source,label,wins,losses,graded.length-decided,
+    decided ? percent(average/decided) : "—",decided ? percent(wins/decided) : "—"]) row.insertCell().textContent = value;
+  }
+ }
+}
+
+function captureNBAResults(prizePicks,sportsbook,model) {
+ const ledger = readResultsLedger();
+ const now = Date.now();
+ for (const [key,entry] of Object.entries(ledger.entries)) {
+  if (now-entry.start > 90*dayMillis) delete ledger.entries[key];
+ }
+ for (const [date,checked] of Object.entries(ledger.checked)) {
+  if (now-checked > 15*dayMillis) delete ledger.checked[date];
+ }
+ if (prizePicks && !prizePicks.savedBoard) {
+  if (sportsbook?.length) recordNBAEstimates(ledger,rankMarketProps(prizePicks.lines,sportsbook,now),"Sportsbook",now);
+  if (model) recordNBAEstimates(ledger,estimateNBAProps(model,prizePicks,now,{tier:"all",side:"all"}).sides,"Stats model",now);
+ }
+ const entries = Object.entries(ledger.entries);
+ if (entries.length > 8000) {
+  entries.sort(([,a],[,b]) => a.saved-b.saved);
+  for (const [key] of entries.slice(0,entries.length-8000)) delete ledger.entries[key];
+ }
+ const saved = saveResultsLedger(ledger);
+ renderResultsLedger(ledger,saved ? "" : "Browser storage is unavailable or full.");
+}
+
+let checkingNBAResults = false;
+async function checkNBAResults() {
+ if (checkingNBAResults) return;
+ const ledger = readResultsLedger();
+ const now = Date.now();
+ const date = Object.values(ledger.entries).filter(entry => !entry.outcome &&
+  now-entry.start >= resultWait && now-entry.start <= 14*dayMillis)
+  .map(entry => resultDateFor(entry.start)).sort()
+  .find(day => now-(ledger.checked[day] || 0) > 60*60*1000);
+ if (!date) return;
+ checkingNBAResults = true;
+ try {
+  const response = await fetch("/api/nba/model?results="+date,{signal:AbortSignal.timeout(25000)});
+  if (!response.ok) throw new Error("Results unavailable");
+  const {results} = await response.json();
+  if (!Array.isArray(results)) throw new Error("Invalid results");
+  const current = readResultsLedger();
+  for (const entry of Object.values(current.entries)) {
+   if (entry.outcome || resultDateFor(entry.start) !== date || now-entry.start < resultWait) continue;
+   const result = gradeNBAEstimate(entry,results);
+   if (result) Object.assign(entry,result);
+  }
+  current.checked[date] = now;
+  const saved = saveResultsLedger(current);
+  renderResultsLedger(current,saved ? "" : "Browser storage is unavailable or full.");
+ } catch {
+  const current = readResultsLedger();
+  current.checked[date] = now;
+  saveResultsLedger(current);
+  renderResultsLedger(current,"The latest results check was unavailable.");
+ } finally {
+  checkingNBAResults = false;
+ }
+}
+
 function useLatestBoard() {
  if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds);
  if (latestModel) renderNBAModel(latestBoard?.prizePicks,{
@@ -877,10 +1045,13 @@ async function scanAndRankProps() {
   const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
   if (prizePicks) latestBoard = {prizePicks,sportsbook,needsOdds};
   useLatestBoard();
+  updatePrizePicksHealth(prizePicks);
   if (!sportsbook?.length || !rankMarketProps(prizePicks.lines,sportsbook).some(prop => prop.chance !== null)) {
    latestModel = await loadNBAModel();
    if (latestModel) useLatestBoard();
   }
+  captureNBAResults(prizePicks,sportsbook,latestModel);
+  checkNBAResults();
   return true;
  } catch (error) {
   status.textContent = error.message || "The prop comparison is temporarily unavailable.";
@@ -961,6 +1132,9 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds) {
 rankButton.addEventListener("click",scanAndRankProps);
 
 render();
+renderResultsLedger(readResultsLedger());
+updatePrizePicksHealth();
+checkNBAResults();
 loadNBAProps();
 scanAndRankProps();
 setInterval(() => {
