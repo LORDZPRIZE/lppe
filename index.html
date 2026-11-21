@@ -96,6 +96,10 @@ h1{font-size:21px}
 .recent-results li{padding:4px 8px;border-radius:5px;background:var(--panel2)}
 .recent-results .cleared{color:var(--green)}
 .badge{display:inline-block}
+.builder-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+#builderRecheckResults{padding-left:20px}
+#builderRecheckResults li{margin-bottom:8px}
+.pick-grid .add-to-entry{display:block;margin-top:12px}
 :focus-visible{outline:2px solid var(--blue);outline-offset:3px}
 @media(max-width:700px){
  header{padding:16px 4%}
@@ -299,7 +303,12 @@ h1{font-size:21px}
    <div class="value" id="builderProbability">--</div>
    <small>Illustrative combined probability, assuming independence</small>
    <div id="builderList" class="sub" style="margin-top:14px">No selections yet.</div>
-   <button class="secondary" style="margin-top:14px" onclick="clearBuilder()">Clear Entry</button>
+   <div class="builder-actions">
+    <button type="button" id="recheckBuilder" disabled>Recheck entry</button>
+    <button class="secondary" onclick="clearBuilder()">Clear Entry</button>
+   </div>
+   <p id="builderRecheckStatus" class="sub" role="status"></p>
+   <ul id="builderRecheckResults" hidden></ul>
   </div>
  </section>
  <section class="section" aria-labelledby="entryCompareHeading">
@@ -382,6 +391,7 @@ function setAPIStatus(message, color) {
 
 
 let props=[];
+let nextPropId=0;
 let selected=[];
 let lastResult=null;
 const MAX_PICKS = 6;
@@ -443,11 +453,24 @@ function addProp(){
  // Recalculate to prevent saving a stale result after the form is edited.
  analyze();
  if(!lastResult)return;
- const p={...lastResult,id:Date.now()};
+ const p={...lastResult,id:++nextPropId};
  props.push(p);
  lastResult=null;
  document.getElementById("result").style.display="none";
  render();
+}
+
+const recheckBuilderButton = document.getElementById("recheckBuilder");
+const builderRecheckStatus = document.getElementById("builderRecheckStatus");
+const builderRecheckResults = document.getElementById("builderRecheckResults");
+let builderRevision = 0;
+let recheckingBuilder = false;
+
+function resetBuilderRecheck() {
+ builderRevision++;
+ builderRecheckStatus.textContent = "";
+ builderRecheckResults.replaceChildren();
+ builderRecheckResults.hidden = true;
 }
 
 function togglePick(id){
@@ -455,7 +478,11 @@ function togglePick(id){
  if(!p||grade(p.probability)!=="GREEN")return;
  if(selected.includes(id))selected=selected.filter(x=>x!==id);
  else if(selected.length<MAX_PICKS)selected.push(id);
- else alert("Six selections maximum.");
+ else {
+  alert("Six selections maximum.");
+  return;
+ }
+ resetBuilderRecheck();
  render();
 }
 
@@ -473,7 +500,7 @@ function render(){
  const chosen=selected.includes(p.id);
  return `<tr>
  <td><b>${escapeHTML(p.player)}</b><br><small>${p.sport}</small></td>
- <td>${escapeHTML(p.market)}<br><small>${p.type}</small></td>
+ <td>${escapeHTML(p.market)}<br><small>${escapeHTML(p.type)}</small></td>
  <td>${p.line}</td><td>${p.side}</td><td>${p.projection}</td>
  <td>${(p.probability*100).toFixed(1)}%</td>
  <td><span class="badge ${gr}">${gr}</span></td>
@@ -486,6 +513,12 @@ function render(){
  (props.reduce((s,p)=>s+p.probability,0)/props.length*100).toFixed(1)+"%":"--";
  document.getElementById("builderCount").textContent=selected.length+"/6";
  document.getElementById("navBuilderCount").textContent = selected.length;
+ recheckBuilderButton.disabled = recheckingBuilder || selected.length === 0;
+ for (const button of document.querySelectorAll(".add-to-entry")) {
+  const active = selected.some(id => String(id) === button.dataset.propId);
+  button.textContent = active ? "Remove from Builder" : "Add to Builder";
+  button.setAttribute("aria-pressed",String(active));
+ }
  const chosen=selected.map(id=>props.find(p=>p.id===id)).filter(Boolean);
  document.getElementById("builderList").textContent=chosen.length?
  chosen.map(p=>`${p.player} — ${p.market} ${p.side} (${(p.probability*100).toFixed(1)}%)`).join(" | "):
@@ -494,7 +527,11 @@ function render(){
  (chosen.reduce((v,p)=>v*p.probability,1)*100).toFixed(2)+"%":"Select 2 to 6 GREEN props";
 }
 
-function clearBuilder(){selected=[];render();}
+function clearBuilder(){
+ selected=[];
+ resetBuilderRecheck();
+ render();
+}
 function escapeHTML(s){
  return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
@@ -1428,6 +1465,71 @@ function watchedOffer(item,lines,board,now) {
  return {offer,status:meets ? "Meets target" : "Outside target",until:Math.min(start,Date.parse(offer.observedAt)+maxQuoteAge)};
 }
 
+function recheckLeg(leg,board,offers,now) {
+ if (!leg.offer) return "Manual estimate. No saved PrizePicks offer to verify.";
+ if (Date.parse(leg.offer.eventStart) <= now) return "Scheduled start passed.";
+ if (!board || board.savedBoard || board.scheduled) return "Unverified. A fresh PrizePicks snapshot is unavailable.";
+ const snapshotAge = now - Date.parse(board.observedAt);
+ if (Number.isFinite(snapshotAge) && !(snapshotAge >= 0 && snapshotAge < maxQuoteAge)) {
+  return "Unverified. The latest snapshot is stale.";
+ }
+ const identity = watchIdentity(leg.offer);
+ const matching = offers.filter(offer => watchIdentity(offer) === identity);
+ const sameId = leg.offer.id ? matching.filter(offer => offer.id === leg.offer.id) : [];
+ const sameLine = matching.filter(offer => offer.line === leg.line);
+ const options = sameId.length ? sameId : sameLine.length ? sameLine : matching;
+ if (options.length > 1) return "Unverified. Multiple matching offers.";
+ if (!options.length) return board.partial ? "Unverified on this partial board." : "Side missing from the latest snapshot.";
+ const offer = options[0];
+ const age = now - Date.parse(offer.observedAt);
+ if (!(age >= 0 && age < maxQuoteAge)) return "Unverified. Line timestamp is stale or unavailable.";
+ if (offer.line === leg.line) return "Same line in the latest snapshot.";
+ return "Line moved to " + offer.line + ". Review the estimate at the new line.";
+}
+
+async function recheckBuilderEntry() {
+ const legs = selected.map(id => props.find(prop => prop.id === id)).filter(Boolean);
+ if (recheckingBuilder || !legs.length) return;
+ resetBuilderRecheck();
+ const revision = builderRevision;
+ recheckingBuilder = true;
+ recheckBuilderButton.disabled = true;
+ builderRecheckStatus.textContent = "Checking the latest PrizePicks snapshot…";
+ let board;
+ try {
+  if (legs.some(leg => leg.offer)) {
+   const response = await fetch("/api/prizepicks-board?scan=1",{
+    cache:"no-store",signal:AbortSignal.timeout(15000)
+   });
+   if (response.ok) {
+    const snapshot = await response.json();
+    if (snapshot.connected === true && Array.isArray(snapshot.lines)) board = snapshot;
+   }
+  }
+ } catch {
+  // The per-leg results report that live lines are unverified.
+ } finally {
+  recheckingBuilder = false;
+  recheckBuilderButton.disabled = selected.length === 0;
+ }
+ if (revision !== builderRevision) return;
+ const now = Date.now();
+ const offers = (board?.lines || []).flatMap(line => line.sides.map(side => ({
+  ...line,side:side.side.toUpperCase(),tier:side.tier
+ })));
+ for (const leg of legs) {
+  const item = document.createElement("li");
+  item.textContent = leg.player + " · " + leg.side + " " + leg.line + " " + leg.market + " · " +
+   recheckLeg(leg,board,offers,now);
+  builderRecheckResults.append(item);
+ }
+ builderRecheckResults.hidden = false;
+ builderRecheckStatus.textContent = "Checked at " + new Date(now).toLocaleTimeString([],{
+  hour:"numeric",minute:"2-digit",timeZoneName:"short"
+ }) + ". Line check only. Saved grades and player injury status are not rechecked.";
+}
+recheckBuilderButton.addEventListener("click",recheckBuilderEntry);
+
 function renderWatchlist() {
  clearTimeout(watchlistTimer);
  const items = readWatchlist();
@@ -1687,6 +1789,43 @@ function renderTodayPicks() {
   });
   details.append(watch);
   card.append(title,line,badge,details);
+  if (grade(pick.chance) === "GREEN" && !Number.isInteger(pick.line)) {
+   const add = document.createElement("button");
+   add.type = "button";
+   add.className = "secondary add-to-entry";
+   const key = pickKey(pick);
+   const existing = props.find(prop => prop.offer && prop.pickKey === key);
+   const active = existing && selected.includes(existing.id);
+   if (existing) add.dataset.propId = existing.id;
+   add.textContent = active ? "Remove from Builder" : "Add to Builder";
+   add.setAttribute("aria-pressed",String(Boolean(active)));
+   add.addEventListener("click",() => {
+    const expiresAt = Math.min(Date.parse(pick.observedAt) + maxQuoteAge,Date.parse(pick.eventStart),
+     pick.expiresAt ?? Infinity);
+    let prop = props.find(item => item.offer && item.pickKey === key);
+    if (!selected.includes(prop?.id) && Date.now() >= expiresAt) {
+     renderTodayPicks();
+     return;
+    }
+    if (!selected.includes(prop?.id)) {
+     if (selected.length >= MAX_PICKS) {
+      alert("Six selections maximum.");
+      return;
+     }
+     const updated = {
+      id:prop?.id ?? ++nextPropId,player:pick.player,sport:"NBA",market:pick.market,
+      line:pick.line,side:pick.side,type:pick.tier,projection:model?.projection ?? "—",
+      probability:pick.chance,source:primaryName,offer:pick,pickKey:key
+     };
+     if (prop) props[props.indexOf(prop)] = updated;
+     else props.push(updated);
+     prop = updated;
+    }
+    add.dataset.propId = prop.id;
+    togglePick(prop.id);
+   });
+   card.append(add);
+  }
   const alternates = renderAlternateLines(pick,alternateLines);
   if (alternates) card.append(alternates);
   cards.append(card);
