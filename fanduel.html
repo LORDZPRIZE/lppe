@@ -161,7 +161,9 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <div class="controls slate-controls">
    <label>Sport <select id="fdSport"><option value="NBA">NBA</option><option value="NFL">NFL</option><option value="MLB">MLB</option><option value="CFB">College football</option></select></label>
    <label>Optimize for <select id="fdObjective"><option value="projection">Projected points</option><option value="ceiling">High Ceiling</option><option value="tournament" hidden disabled>NFL Tournament Simulation</option></select></label>
-   <button type="button" id="fdAutoLoad" class="primary">Load slate and build</button>
+   <label>Live contest slate <select id="fdLiveSlate" disabled><option value="">Looking for slates…</option></select></label>
+   <button type="button" id="fdAutoLoad" class="primary" disabled>Load slate and build</button>
+   <button type="button" id="fdRefreshSlates">Refresh slates</button>
   </div>
   <p id="fdStatus" role="status" aria-live="polite"></p>
   <div class="controls" id="fdSavedSlate" hidden>
