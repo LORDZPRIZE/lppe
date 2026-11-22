@@ -81,6 +81,9 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   const allowed = new Set(profile.roster.flatMap(([,positions]) => positions));
   const byId = new Map();
   const byName = new Map();
+  const ceilingById = new Map();
+  const ceilingByName = new Map();
+  const readCeiling = row => csvNumber(row.ceiling || row.ceilingfpts || row.projectedceiling);
   function addProjection(map, key, points) {
     if (!key) return;
     if (map.has(key) && map.get(key) !== points) map.set(key, null);
@@ -94,6 +97,11 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
       const team = teamCode(row.team || row.teamabbr,sport);
       addProjection(byId,row.id || row.playerid,projected);
       if (name && team) addProjection(byName,name + ":" + team,projected);
+      const ceiling = readCeiling(row);
+      if (Number.isFinite(ceiling)) {
+        addProjection(ceilingById,row.id || row.playerid,ceiling);
+        if (name && team) addProjection(ceilingByName,name + ":" + team,ceiling);
+      }
     }
     if (!byId.size && !byName.size) throw new Error("Projection CSV needs a numeric Projection column and an ID or player name plus team.");
   }
@@ -112,6 +120,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
       continue;
     }
     const matched = byId.get(id) ?? byName.get(matchName(name) + ":" + team);
+    const ceiling = ceilingById.get(id) ?? ceilingByName.get(matchName(name) + ":" + team) ?? readCeiling(row);
     const provided = csvNumber(row.projection || row.projectedpoints || row.fpts);
     const average = csvNumber(row.fppg);
     const points = matched ?? (Number.isFinite(provided) ? provided : average);
@@ -127,7 +136,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
       continue;
     }
     const game = (row.game || row.gameid || row.matchup || "").toUpperCase().replace(/\s+/g,"");
-    players.set(id,{id,name,positions,salary,team,points,source,status,game,
+    players.set(id,{id,name,positions,salary,team,points,ceiling,source,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
   if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
