@@ -302,16 +302,36 @@ function renderLineups(result,requested,highCeiling) {
     }
     const portfolio = document.createElement("details");
     const summary = document.createElement("summary");
-    summary.textContent = "Player exposure across "+lineups.length+" built lineups";
+    summary.textContent = "Portfolio exposure and ownership · "+lineups.length+" lineups";
     const list = document.createElement("ul");
     const entries = [...exposureByPlayer.values()].sort((a,b) => b.count-a.count || a.player.name.localeCompare(b.player.name));
     const percentage = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
     for (const {player,count} of entries) {
       const item = document.createElement("li");
-      item.textContent = player.name+" ("+player.team+") · "+percentage.format(count/lineups.length)+" · "+count+"/"+lineups.length;
+      const exposure = count/lineups.length;
+      const leverage = (exposure-player.ownership)*100;
+      const ownership = Number.isFinite(player.ownership) ?
+        " · Field " + percentage.format(player.ownership) + " · " +
+        (leverage > 0 ? "+" : "") + leverage.toFixed(1) + " pp vs. field" : " · Field ownership unavailable";
+      item.textContent = player.name+" ("+player.team+") · Exposure "+percentage.format(exposure)+
+        " ("+count+"/"+lineups.length+")"+ownership;
       list.append(item);
     }
-    portfolio.append(summary,list);
+    const overlap = document.createElement("p");
+    let sharedTotal = 0;
+    let mostShared = 0;
+    let comparisons = 0;
+    for (const [index,lineup] of lineups.entries()) {
+      for (const previous of lineups.slice(0,index)) {
+        const shared = [...lineup.ids].filter(id => previous.ids.has(id)).length;
+        sharedTotal += shared;
+        mostShared = Math.max(mostShared,shared);
+        comparisons++;
+      }
+    }
+    if (comparisons) overlap.textContent = "Lineup overlap: " + (sharedTotal/comparisons).toFixed(1) +
+      " shared players on average · highest " + mostShared + ".";
+    portfolio.append(summary,overlap,list);
     output.prepend(portfolio);
   }
   exportButton.disabled = !lineups.length;
