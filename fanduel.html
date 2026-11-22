@@ -39,9 +39,9 @@ details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
   <form id="fdImport" class="controls">
    <label>FanDuel salary CSV <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>
    <label>Projections CSV (optional) <input id="fdProjections" type="file" accept=".csv,text/csv"></label>
-   <button type="submit" class="primary">Load player pool</button>
+   <button type="submit" class="primary">Reload CSV and build</button>
   </form>
-  <p class="muted">For custom projections, include <strong>Projection</strong> and either <strong>ID</strong> or <strong>Name</strong> and <strong>Team</strong>. Without a custom projection, LPPE uses the salary file’s projection or historical FanDuel FPPG when available.</p>
+  <p class="muted">Selecting a salary CSV loads the slate and builds in the selected mode. Selecting a projections CSV afterward rebuilds with the updated projections. For custom projections, include <strong>Projection</strong> and either <strong>ID</strong> or <strong>Name</strong> and <strong>Team</strong>. Without a custom projection, LPPE uses the salary file’s projection or historical FanDuel FPPG when available.</p>
   </details>
   <p id="fdStatus" role="status" aria-live="polite"></p>
  </section>
