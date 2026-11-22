@@ -67,6 +67,45 @@ function providerRetryAt(response,code,now) {
   return retryAt > now ? retryAt : now + 300000;
 }
 
+function normalizePrizePicksOffer(offer) {
+  if (!offer || offer.league !== "NBA" || offer.is_demo === true ||
+      typeof offer.id !== "string" || !offer.id.trim() || !Number.isFinite(offer.line)) return null;
+  const compact = typeof offer.player === "string";
+  if ((compact && offer.source && offer.source !== "prizepicks") ||
+      (!compact && (offer.source !== "prizepicks" || offer.is_demo !== false)) ||
+      (offer.status ?? (compact ? "active" : null)) !== "active") return null;
+  const player = compact ? offer.player : offer.player?.name;
+  const market = compact ? offer.stat : offer.market?.stat;
+  const period = compact ? offer.period : offer.market?.period;
+  const eventStart = compact ? offer.starts_at : offer.event?.starts_at;
+  if (![player,market,period].every(value => typeof value === "string" && value.trim())) return null;
+
+  // The compact API places one tier on the offer and returns available side names.
+  const selections = compact ? (Array.isArray(offer.sides) ? offer.sides : []).map(side => ({
+    side,tier:offer.tier,available:true
+  })) : offer.selections;
+  const sides = [];
+  for (const selection of Array.isArray(selections) ? selections : []) {
+    if (selection?.available !== true || !["more","less"].includes(selection.side)) continue;
+    const tier = typeof selection.tier === "string" ? selection.tier.trim().toLowerCase() : "";
+    if (!sides.some(item => item.side === selection.side && item.tier === tier)) {
+      sides.push({side:selection.side,tier});
+    }
+  }
+  if (!sides.length) return null;
+
+  const team = compact ? offer.team : offer.player?.team;
+  const opponent = compact ? offer.opponent : offer.event?.opponent;
+  const openingLine = compact ? offer.opening_line : offer.line_context?.opening_line;
+  return {id:offer.id,player:player.trim(),market:market.trim(),period:period.trim(),line:offer.line,sides,
+    team:typeof team === "string" ? team : null,
+    opponent:typeof opponent === "string" ? opponent : null,
+    openingLine:Number.isFinite(openingLine) ? openingLine : null,
+    eventStart:typeof eventStart === "string" ? eventStart : null,
+    // Row freshness must come from the provider's confirmation for this offer.
+    observedAt:typeof offer.observed_at === "string" ? offer.observed_at : null};
+}
+
 async function refreshPrizePicksBoard(env, saved) {
   const source = "prizepicksapi.com";
   function limited(details,saved) {
@@ -81,7 +120,7 @@ async function refreshPrizePicksBoard(env, saved) {
     const headers = {Authorization: `Bearer ${env.PRIZEPICKS_API_KEY}`, Accept:"application/json",
       "X-User-Request":"Load NBA PrizePicks lines for LPPE"};
     if (saved?.etag) headers["If-None-Match"] = saved.etag;
-    const response = await fetch(url,{headers});
+    const response = await fetch(url,{headers,signal:AbortSignal.timeout(20000)});
     if (response.status === 304 && saved?.board) {
       return new Response(null,{status:304});
     }
@@ -97,35 +136,26 @@ async function refreshPrizePicksBoard(env, saved) {
     }
     if (!response.ok) return json({error:"PrizePicks provider unavailable",providerStatus:response.status},502);
     const data = await response.json();
-    if (data.meta?.mode !== "live" || data.meta.is_demo === true || !Array.isArray(data.data)) {
+    if (data.meta?.mode !== "live" || data.meta.is_demo === true || data.meta.source_status === "demo" || !Array.isArray(data.data)) {
       return json({error:"PrizePicks provider returned an unexpected response"},502);
     }
     const offers = data.data;
     const observedAt = typeof data.meta.observed_at === "string" ? data.meta.observed_at : null;
-    const partial = Boolean(data.meta.next_cursor);
+    const sourceStatus = data.meta.source_status;
+    if (["stale","failed","not_configured"].includes(sourceStatus)) {
+      return json({error:"PrizePicks provider has no current board",sourceStatus},502);
+    }
     const lines = [];
     const offerIds = new Set();
-    for (const prop of offers) {
-      if (prop?.source !== "prizepicks" || prop.is_demo !== false || prop.league !== "NBA" ||
-          prop.status !== "active" || typeof prop.player?.name !== "string" ||
-          typeof prop.market?.stat !== "string" || !Number.isFinite(prop.line)) continue;
-      const sides = Array.isArray(prop.selections) ? prop.selections.filter(side =>
-        side?.available === true && ["more","less"].includes(side.side)).map(side => ({
-          side:side.side, tier:typeof side.tier === "string" ? side.tier : ""
-        })) : [];
-      if (!sides.length || (prop.id && offerIds.has(prop.id))) continue;
-      if (prop.id) offerIds.add(prop.id);
-      lines.push({player:prop.player.name, market:prop.market.stat, line:prop.line, sides,
-        period:typeof prop.market.period === "string" ? prop.market.period : "",
-        id:typeof prop.id === "string" ? prop.id : null,
-        team:typeof prop.player.team === "string" ? prop.player.team : null,
-        openingLine:Number.isFinite(prop.line_context?.opening_line) ? prop.line_context.opening_line : null,
-        opponent:typeof prop.event?.opponent === "string" ? prop.event.opponent : null,
-        eventStart:typeof prop.event?.starts_at === "string" ? prop.event.starts_at : null,
-        observedAt:typeof prop.observed_at === "string" ? prop.observed_at : null});
+    for (const offer of offers) {
+      const prop = normalizePrizePicksOffer(offer);
+      if (!prop || offerIds.has(prop.id)) continue;
+      offerIds.add(prop.id);
+      lines.push(prop);
     }
+    const partial = Boolean(data.meta.next_cursor) || sourceStatus === "partial";
     const board = {connected:true,source,lines,partial,observedAt,pages:1,
-      scanStatus:partial ? "page_limit" : "complete"};
+      scanStatus:data.meta.next_cursor ? "page_limit" : partial ? "partial" : "complete"};
     if (offers.length && !lines.length) {
       return json({error:"PrizePicks provider returned no usable live rows"},502);
     }
@@ -142,15 +172,16 @@ async function prizePicksLines(env) {
   if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) {
     return json({connected:false,source:"prizepicksapi.com",lines:[]});
   }
-  const [board,cooldown] = await Promise.all([
+  const [board,cooldown,lastRefresh] = await Promise.all([
     env.PRIZEPICKS_BOARD.get("board","json"),
-    env.PRIZEPICKS_BOARD.get("cooldown","json")
+    env.PRIZEPICKS_BOARD.get("cooldown","json"),
+    env.PRIZEPICKS_BOARD.get("lastRefresh","json")
   ]);
   if (cooldown && Date.parse(cooldown.retryAt) > Date.now()) {
-    return board ? json({...board,...cooldown,savedBoard:true}) :
-      json({error:"PrizePicks provider limit reached",...cooldown},429);
+    return board ? json({...board,...cooldown,savedBoard:true,lastRefresh}) :
+      json({error:"PrizePicks provider limit reached",...cooldown,lastRefresh},429);
   }
-  return json(board ?? {connected:true,source:"prizepicksapi.com",lines:[],scheduled:true});
+  return json({...board ?? {connected:true,source:"prizepicksapi.com",lines:[],scheduled:true},lastRefresh});
 }
 
 export default {
@@ -163,6 +194,10 @@ export default {
       log("missing_configuration",{keyConfigured:Boolean(env.PRIZEPICKS_API_KEY),kvConfigured:Boolean(env.PRIZEPICKS_BOARD)});
       return;
     }
+    const record = async (outcome,details = {}) => {
+      log(outcome,details);
+      await env.PRIZEPICKS_BOARD.put("lastRefresh",JSON.stringify({scheduledAt,outcome,...details}));
+    };
     try {
       const previous = await env.PRIZEPICKS_BOARD.getWithMetadata("board","json");
       if (previous.metadata?.scheduledAt >= scheduledAt) {
@@ -176,23 +211,23 @@ export default {
         await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(saved.board),{
           metadata:{etag:saved.etag,scheduledAt}
         });
-        log("unchanged",{lineCount:saved.board.lines.length});
+        await record("unchanged",{lineCount:saved.board.lines.length});
         return;
       }
       const board = await response.json();
       if (!response.ok) {
-        log("refresh_failed",{status:response.status,reason:board.error,providerStatus:board.providerStatus,
+        await record("refresh_failed",{status:response.status,reason:board.error,providerStatus:board.providerStatus,
           providerCode:board.providerCode,retryAt:board.retryAt});
         return;
       }
       if (board.savedBoard) {
-        log("retained_previous_board",{providerCode:board.providerCode,retryAt:board.retryAt});
+        await record("retained_previous_board",{providerCode:board.providerCode,retryAt:board.retryAt});
         return;
       }
       await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(board),{
         metadata:{etag:response.headers.get("ETag"),scheduledAt}
       });
-      log("saved",{lineCount:board.lines.length,observedAt:board.observedAt});
+      await record("saved",{lineCount:board.lines.length,observedAt:board.observedAt});
     } catch {
       log("scheduled_handler_failed");
       throw new Error("PrizePicks scheduled refresh could not save its result");
@@ -206,7 +241,7 @@ export default {
     if (request.method !== "GET") return json({error:"Method not allowed"},405);
     const path = new URL(request.url).pathname;
     if (path === "/" || path === "/health") return json({
-      app:"LPPE",status:"online",version:"0.4",message:"LPPE API is running"});
+      app:"LPPE",status:"online",version:"0.5",message:"LPPE API is running"});
     if (path === "/api/props") return json({sport:"NBA",live:false,
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});
