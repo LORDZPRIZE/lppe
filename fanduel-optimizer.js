@@ -74,7 +74,7 @@ export const teamCode = (raw,sport = "NBA") => {
   return sport === "NBA" ? ({BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team) : team;
 };
 const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
-const unavailable = status => /^(O|OUT|IR|INACTIVE|SUSPENDED|SUSP|DOUBTFUL|D)$/i.test(status || "");
+export const unavailable = status => /^(O|OUT|IR|INACTIVE|SUSPENDED|SUSP|DOUBTFUL|D)$/i.test(status || "");
 
 export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   const profile = rosterProfile(sport);
