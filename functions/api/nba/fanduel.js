@@ -293,6 +293,21 @@ async function publicPool() {
   return normalizePublicSlate(slate,await nbaSchedule(date),Date.now());
 }
 
+async function cachedPool(cache,key) {
+  const response = await cache.match(key);
+  if (!response) return null;
+  const pool = await response.json();
+  return pool.lockAt > Date.now() ? pool : null;
+}
+
+async function storePool(cache,key,pool,maxAge) {
+  const ttl = Math.min(maxAge,Math.floor((pool.lockAt-Date.now())/1000));
+  if (ttl <= 0) return;
+  try {
+    await cache.put(key,Response.json(pool,{headers:{"Cache-Control":"public, max-age="+ttl}}));
+  } catch {}
+}
+
 export async function onRequestGet({request,env}) {
   const {searchParams} = new URL(request.url);
   const sport = searchParams.get("sport")?.toUpperCase() || "NBA";
@@ -306,7 +321,7 @@ export async function onRequestGet({request,env}) {
   },503);
   try {
     const cache = caches.default;
-    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v7/"+sport+"/"+suffix,request.url));
+    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v8/"+sport+"/"+suffix,request.url));
     let slate;
     let read;
     if (configured) {
@@ -325,26 +340,27 @@ export async function onRequestGet({request,env}) {
       if (slateId !== null && slateId !== "public") return reply({error:"This slate is no longer available."},404);
     }
     const key = cacheKey(configured ? "provider/"+slate.id : "public");
-    const cached = await cache.match(key);
-    if (cached) {
-      const data = await cached.json();
-      if (data.lockAt > Date.now()) return reply(data);
-    }
+    const cached = await cachedPool(cache,key);
+    if (cached) return reply(cached);
     const isLiveNBA = configured && sport === "NBA";
     const projectionsRequest = isLiveNBA ? currentNBAProjections() : null;
     const injuriesRequest = isLiveNBA ? currentNBAInjuries() : null;
     const scheduleRequest = isLiveNBA ?
       nbaSchedule(easternDay(Date.parse(slate.starts_at)),3500).catch(() => []) : null;
-    let data = configured ? await providerPool(read,slate,sport) : await publicPool();
-    if (data.error) return reply(data,404);
+    const salaryKey = isLiveNBA ? cacheKey("nba-salaries/"+slate.id) : null;
+    let data = salaryKey ? await cachedPool(cache,salaryKey) : null;
+    if (!data) {
+      data = configured ? await providerPool(read,slate,sport) : await publicPool();
+      if (data.error) return reply(data,404);
+      if (salaryKey) await storePool(cache,salaryKey,data,600);
+    }
     const projections = await projectionsRequest;
     if (scheduleRequest) data = attachNBAGames(data,await scheduleRequest,Date.now());
     const injuries = await injuriesRequest;
     if (injuries) data = applyNBAInjuryReport(data,injuries,Date.now());
     if (projections) data = addNBAProjections(data,projections,Date.now());
     if (data.lockAt <= Date.now()) return reply({error:"The salary slate has already locked."},404);
-    const ttl = Math.max(1,Math.min(600,Math.floor((data.lockAt-Date.now())/1000)));
-    try { await cache.put(key,Response.json(data,{headers:{"Cache-Control":"public, max-age="+ttl}})); } catch {}
+    await storePool(cache,key,data,isLiveNBA ? 120 : 600);
     return reply(data);
   } catch (error) {
     const message = configured && /^The FanDuel salary/.test(error.message) ? error.message :
