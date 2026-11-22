@@ -251,7 +251,10 @@ function applySport() {
   difference.max = profile.roster.length;
   difference.value = Math.min(difference.valueAsNumber || 2,profile.roster.length);
 }
-autoLoad.addEventListener("click",loadPublicPool);
+autoLoad.addEventListener("click",() => {
+  if (salaries.files.length) importForm.requestSubmit();
+  else loadPublicPool();
+});
 sport.addEventListener("change",() => {
   autoRequest?.abort();
   autoRequest = undefined;
