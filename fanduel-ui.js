@@ -33,6 +33,82 @@ let optimizer;
 let autoRequest;
 let slateLockAt = null;
 let loadedSalaryFile;
+let importedSlateName;
+const savedSlateKey = "lppe-fanduel-import-v1";
+const savedSlateLifetime = 48 * 60 * 60 * 1000;
+const slateSettings = [mode,objective,count,difference,exposure,stack];
+
+function readSavedSlate() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(savedSlateKey));
+    if (!saved) return null;
+    if (Object.hasOwn(profiles,saved.sport) && Array.isArray(saved.players) && saved.players.length &&
+        saved.settings && saved.savedAt + savedSlateLifetime > Date.now()) return saved;
+    localStorage.removeItem(savedSlateKey);
+  } catch {}
+  return null;
+}
+
+function showSavedSlate() {
+  const saved = readSavedSlate();
+  byId("fdSavedSlate").hidden = !saved;
+  byId("fdSavedSlateInfo").textContent = saved ?
+    profiles[saved.sport].name+" · "+saved.name+" · saved "+new Date(saved.savedAt).toLocaleString() : "";
+}
+
+byId("fdSaveSlate").addEventListener("click",() => {
+  if (!importedSlateName || !players.length) return;
+  try {
+    const settings = Object.fromEntries(slateSettings.map(control => [control.id,control.value]));
+    const saved = {name:importedSlateName,sport:sport.value,players,settings,savedAt:Date.now()};
+    localStorage.setItem(savedSlateKey,JSON.stringify(saved));
+    byId("fdSaveStatus").textContent = "Saved for up to 48 hours on this device.";
+    showSavedSlate();
+  } catch {
+    byId("fdSaveStatus").textContent = "This browser could not save the slate. Keep your CSV for later.";
+  }
+});
+
+byId("fdForgetSlate").addEventListener("click",() => {
+  try {
+    localStorage.removeItem(savedSlateKey);
+    byId("fdSaveStatus").textContent = "";
+    showSavedSlate();
+  } catch {
+    byId("fdSavedSlateInfo").textContent = "This browser could not clear the saved slate.";
+  }
+});
+
+byId("fdResumeSlate").addEventListener("click",() => {
+  const saved = readSavedSlate();
+  if (!saved) {
+    showSavedSlate();
+    return;
+  }
+  autoRequest?.abort();
+  autoRequest = undefined;
+  autoLoad.disabled = false;
+  clearRemoval();
+  clearLineups();
+  importForm.reset();
+  byId("fdSalaryOnly").hidden = true;
+  search.value = selectionFilter.value = "";
+  sport.value = saved.sport;
+  applySport();
+  for (const control of slateSettings) control.value = saved.settings[control.id];
+  slateLockAt = null;
+  loadedSalaryFile = undefined;
+  importedSlateName = saved.name;
+  players = saved.players;
+  applyMode();
+  byId("fdPool").hidden = false;
+  byId("fdStatus").textContent = "Resumed "+saved.name+" from "+new Date(saved.savedAt).toLocaleString()+
+    ". Confirm the contest and current player availability before using these lineups.";
+  byId("fdSaveStatus").textContent = "";
+  renderPlayers();
+  buildCurrentLineups();
+  showBuildResults();
+});
 let lastRemoval;
 
 function clearRemoval() {
@@ -117,6 +193,7 @@ function renderSlateCheck() {
 
 function renderPlayers() {
   renderSlateCheck();
+  byId("fdSaveControls").hidden = !importedSlateName;
   const body = byId("fdPlayers");
   body.replaceChildren();
   const query = search.value.trim().toLowerCase();
@@ -200,6 +277,7 @@ importForm.addEventListener("submit",async event => {
   salaries.disabled = projections.disabled = true;
   importForm.querySelector("button").disabled = true;
   byId("fdSalaryOnly").disabled = true;
+  byId("fdResumeSlate").disabled = true;
   try {
     const salaryFile = salaries.files[0];
     const projectionFile = projections.files[0];
@@ -220,6 +298,8 @@ importForm.addEventListener("submit",async event => {
       search.value = positionFilter.value = selectionFilter.value = "";
     }
     loadedSalaryFile = salaryFile;
+    importedSlateName = salaryFile.name;
+    byId("fdSaveStatus").textContent = "";
     slateLockAt = null;
     clearRemoval();
     clearLineups();
@@ -243,6 +323,7 @@ importForm.addEventListener("submit",async event => {
     salaries.disabled = projections.disabled = false;
     importForm.querySelector("button").disabled = false;
     byId("fdSalaryOnly").disabled = false;
+    byId("fdResumeSlate").disabled = false;
     autoLoad.disabled = false;
     sport.disabled = false;
   }
@@ -478,6 +559,7 @@ async function loadPublicPool() {
     clearRemoval();
     slateLockAt = data.lockAt;
     loadedSalaryFile = undefined;
+    importedSlateName = undefined;
     players = data.players;
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
     const baseline = data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
@@ -522,6 +604,7 @@ sport.addEventListener("change",() => {
   players = [];
   slateLockAt = null;
   loadedSalaryFile = undefined;
+  importedSlateName = undefined;
   search.value = selectionFilter.value = "";
   importForm.reset();
   byId("fdSalaryOnly").hidden = true;
@@ -550,6 +633,7 @@ mode.addEventListener("change",() => {
 });
 applySport();
 applyMode();
+showSavedSlate();
 loadPublicPool();
 
 search.addEventListener("input",renderPlayers);
