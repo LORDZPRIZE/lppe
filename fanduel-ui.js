@@ -211,10 +211,25 @@ function renderPlayers() {
     visible.length+" of "+players.length+" players shown" : "No players match these filters.";
   for (const player of visible) {
     const row = body.insertRow();
-    for (const value of [player.name,player.positions.join("/"),player.team,dollars.format(player.salary),
-      Number.isFinite(player.points) ? player.points.toFixed(1) : "—",player.source || "Missing",player.status || "—"]) {
-      row.insertCell().textContent = value;
+    const nameCell = row.insertCell();
+    nameCell.textContent = player.name;
+    const meta = document.createElement("small");
+    meta.className = "player-mobile-meta";
+    meta.textContent = [player.positions.join("/"),player.team,player.status,player.source || "Missing projection"]
+      .filter(Boolean).join(" · ");
+    nameCell.append(meta);
+    for (const [value,desktopOnly] of [
+      [player.positions.join("/"),true],[player.team,true],[dollars.format(player.salary),false],
+      [Number.isFinite(player.points) ? player.points.toFixed(1) : "—",false],
+      [player.source || "Missing",true],[player.status || "—",true]
+    ]) {
+      const cell = row.insertCell();
+      cell.textContent = value;
+      if (desktopOnly) cell.className = "player-detail";
     }
+    const playerControls = document.createElement("div");
+    playerControls.className = "player-controls";
+    row.insertCell().append(playerControls);
     const selection = document.createElement("select");
     selection.setAttribute("aria-label",player.name+" selection");
     for (const [value,label] of [["available","Available"],["lock","Lock"],["exclude","Exclude"]]) {
@@ -242,7 +257,7 @@ function renderPlayers() {
       if (selectionFilter.value) renderPlayers();
       else renderSlateCheck();
     });
-    row.insertCell().append(selection);
+    playerControls.append(selection);
     if (mode.value === "gpp") {
       const cap = document.createElement("input");
       cap.type = "number";
@@ -260,7 +275,10 @@ function renderPlayers() {
         clearLineups();
         renderSlateCheck();
       });
-      row.insertCell().append(cap);
+      const capLabel = document.createElement("label");
+      capLabel.className = "player-exposure";
+      capLabel.append("Max %",cap);
+      playerControls.append(capLabel);
     }
   }
 }
@@ -351,6 +369,54 @@ function removalSummary(player,previous,rebuilt) {
     previous.points.toFixed(2) + " → " + rebuilt.points.toFixed(2) + " FPTS (" + change + ").";
 }
 
+function compareLineups(highCeiling,simulation) {
+  const comparison = document.createElement("details");
+  comparison.className = "lineup-comparison";
+  const summary = document.createElement("summary");
+  summary.textContent = "Compare "+lineups.length+" lineups";
+  const table = document.createElement("table");
+  const headings = ["Lineup","Projected FPTS","FPTS vs. Lineup 1","Salary left","Players changed"];
+  if (highCeiling) headings.push("Ceiling FPTS");
+  if (simulation) headings.push("Modeled top-10%");
+  const header = table.createTHead().insertRow();
+  for (const label of headings) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    header.append(cell);
+  }
+  const body = table.createTBody();
+  const top = lineups[0];
+  const signed = new Intl.NumberFormat("en-US",{signDisplay:"exceptZero",minimumFractionDigits:2,maximumFractionDigits:2});
+  for (const [index,lineup] of lineups.entries()) {
+    const row = body.insertRow();
+    const link = document.createElement("a");
+    const id = "fdLineup"+(index+1);
+    link.href = "#"+id;
+    link.textContent = "Lineup "+(index+1);
+    link.addEventListener("click",event => {
+      const details = byId(id);
+      details.open = true;
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      details.querySelector("summary").focus({preventScroll:true});
+      details.scrollIntoView({block:"start"});
+    });
+    row.insertCell().append(link);
+    const changed = [...lineup.ids].filter(player => !top.ids.has(player)).length;
+    const values = [lineup.points.toFixed(2),signed.format(lineup.points-top.points),
+      dollars.format(profiles[sport.value].salaryCap-lineup.salary),changed];
+    if (highCeiling) values.push(lineup.ceiling.toFixed(2));
+    if (simulation) values.push(percent.format(lineup.tournament.top));
+    for (const value of values) row.insertCell().textContent = value;
+  }
+  const wrapper = document.createElement("div");
+  wrapper.className = "tablewrap";
+  wrapper.append(table);
+  comparison.append(summary,wrapper);
+  return comparison;
+}
+
 function renderLineups(result,requested,highCeiling) {
   const status = byId("fdBuildStatus");
   lineups = result.simulation ? result.lineups : [...result.lineups].sort((a,b) => highCeiling ? b.ceiling - a.ceiling : b.points - a.points);
@@ -371,9 +437,11 @@ function renderLineups(result,requested,highCeiling) {
     status.textContent += " " + summary;
   }
   const output = byId("fdResults");
+  if (lineups.length > 1) output.append(compareLineups(highCeiling,result.simulation));
   for (const [index,lineup] of lineups.entries()) {
     const details = document.createElement("details");
     details.className = "lineup-card";
+    details.id = "fdLineup"+(index+1);
     details.open = index === 0;
     const summary = document.createElement("summary");
     const total = lineup.points.toFixed(2);
