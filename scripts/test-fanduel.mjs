@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
+import { applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
 import { addNBAProjections, attachNBAGames } from "../functions/api/nba/fanduel.js";
 import { rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
@@ -167,4 +167,23 @@ test("bounded search returns the exhaustive NBA optimum with flexible slots and 
   const result = buildLineups(pool,1,1,Infinity,"NBA",{exactFirst:true});
   assert.equal(result.lineups[0].points,optimum);
   assert.equal(result.limited,false);
+});
+
+test("custom live projections preserve salary, selection and fallback estimates", () => {
+  const baseline = [
+    {id:"137-A",name:"Alex Smith Jr.",team:"BUF",salary:6500,points:11,source:"FanDuel FPPG",selection:"lock"},
+    {id:"137-B",name:"Randy Jones",team:"BUF",salary:7000,points:14,source:"FanDuel FPPG",selection:"exclude"},
+    {id:"137-C",name:"Peter James",team:"KC",salary:5400,points:16,source:"FanDuel FPPG",selection:"available"}
+  ];
+  const csv = [
+    "ID,Name,Team,Projection,Ceiling,Ownership %,Game Date",
+    ",Alex Smith,BUF,0,12,12.5%,2026-11-22",
+    "137-B,,,30,36,20%,2026-11-23"
+  ].join("\n");
+  const result = applyPlayerProjections(baseline,csv,"NFL",{date:"2026-11-22"});
+  assert.equal(result.matched,1);
+  assert.deepEqual(result.players[0],{...baseline[0],source:"Projection CSV",points:0,ceiling:12,ownership:0.125});
+  assert.deepEqual(result.players.slice(1),baseline.slice(1));
+  assert.equal(baseline[0].points,11);
+  assert.throws(() => applyPlayerProjections(baseline,csv,"NFL",{date:"2026-11-24"}),/Projection CSV/);
 });
