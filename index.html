@@ -431,6 +431,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
   <label>Market <select id="nbaResultsMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
   <p class="sub">Calibration gap is observed hit rate minus average estimate. Forecast error averages the squared error for decided sides. Lower is better. A constant 50% forecast scores 0.250. Several sides can come from the same game.</p>
   <p id="nbaResultsStatus" class="sub" role="status"></p>
+  <details><summary>Recent entered-line results</summary><ol id="nbaEnteredPickLog"></ol></details>
   <details><summary>Recent GREEN picks</summary><ol id="nbaGreenPickLog"></ol></details>
   <button id="downloadGreenBenchmark" class="secondary" type="button" disabled>Download GREEN results CSV</button>
   <details>
@@ -522,6 +523,20 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
     <button type="submit" class="outside-primary">Add pick</button>
    </form>
    <p id="outsideInputStatus" class="sub" role="status"></p>
+  </details>
+  <details>
+   <summary>Import multiple picks</summary>
+   <form id="outsideBulkForm" class="outside-form">
+    <label>Game date<input name="date" type="date" required></label>
+    <label>Source<input name="source" value="PrizePicks" maxlength="90" required></label>
+    <label style="grid-column:1/-1">One pick per line in Player | Stat | Line | MORE or LESS format
+     <textarea name="picks" rows="5" maxlength="50000" placeholder="Victor Wembanyama | rebounds | 11.5 | MORE" required></textarea>
+    </label>
+    <button class="outside-primary" type="submit">Preview import</button>
+    <button id="outsideBulkSave" class="secondary" type="button" disabled>Save picks</button>
+   </form>
+   <p id="outsideBulkStatus" role="status" class="sub"></p>
+   <ul id="outsideBulkRows" class="outside-cards"></ul>
   </details>
   <div class="toolbar">
    <h3>Saved picks</h3>
@@ -1739,8 +1754,27 @@ function renderResultsLedger(ledger,warning = "") {
  const pending = rows.filter(row => !row.outcome).length - unverified;
  status.textContent = rows.length ?
   rows.length + " recorded sides · " + pending + " pending · " + unverified + " unverified. Keeps up to 8,000 sides for 90 days." :
-  market ? "No estimates recorded for this market yet." : "No estimates recorded yet. Fresh, comparable PrizePicks lines are required.";
+  market ? "No estimates recorded for this market yet." : "No estimates recorded yet. Add an outside pick or check for fresh PrizePicks lines.";
  if (warning) status.textContent += " " + warning;
+ const enteredLog = document.getElementById("nbaEnteredPickLog");
+ enteredLog.replaceChildren();
+ const latestEntered = rows.filter(row => row.source === "Entered line · Stats model")
+  .sort((a,b) => b.saved-a.saved).slice(0,25);
+ for (const row of latestEntered) {
+  const item = document.createElement("li");
+  const outcome = row.outcome === "tie" ? "Push" : row.outcome ||
+   (now-row.start > 14*dayMillis ? "Unverified" : "Pending");
+  item.textContent = row.player + " · " + row.side + " " + row.line + " " + row.market +
+   " · " + formatPickEstimate(row.chance) + (Number.isInteger(row.line) ? " if no tie" : "") +
+   " · Recorded " + new Date(row.saved).toLocaleString() + " · " + outcome +
+   (Number.isFinite(row.value) ? " (" + row.value + ")" : "");
+  enteredLog.append(item);
+ }
+ if (!latestEntered.length) {
+  const item = document.createElement("li");
+  item.textContent = "No entered-line estimates recorded for the selected markets.";
+  enteredLog.append(item);
+ }
  const greenRows = rows.filter(row => row.green).map(row => ({...row,...row.green}));
  document.getElementById("downloadGreenBenchmark").disabled = !greenRows.length;
  const log = document.getElementById("nbaGreenPickLog");
@@ -1831,6 +1865,7 @@ function captureNBAResults(prizePicks,sportsbook,model) {
   recordNBAEstimates(ledger,marketSides,"Sportsbook",now,marketByPick,modelByPick);
   recordNBAEstimates(ledger,modelSides,"Stats model",now,marketByPick,modelByPick);
  }
+ recordOutsideNBAEstimates(ledger,outsidePicks,model,now);
  const entries = Object.entries(ledger.entries);
  if (entries.length > 8000) {
   entries.sort(([,a],[,b]) => a.saved-b.saved);
@@ -2591,6 +2626,41 @@ function outsideSlateDate(now) {
  return date.year + "-" + date.month + "-" + date.day;
 }
 
+function outsidePickIdentity(pick) {
+ return JSON.stringify([pick.date,pick.source.toLowerCase(),modelPlayerKey(pick.player),pick.market,pick.line,pick.side]);
+}
+
+function previewOutsideImport(value,date,source,saved) {
+ const rows = value.split(/\r?\n/).filter(row => row.trim());
+ if (rows.length > 200) throw new Error("Enter up to 200 picks at a time.");
+ const seen = new Set(saved.map(outsidePickIdentity));
+ return rows.map((row,index) => {
+  try {
+   const fields = row.split("|");
+   const [pick] = parseOutsidePicks(fields.length === 4 ? [date,source,row].join("|") : row);
+   const key = outsidePickIdentity(pick);
+   if (seen.has(key)) return {index,message:"Duplicate pick"};
+   seen.add(key);
+   return {index,pick};
+  } catch {
+   return {index,message:"Check the player, market, line and side"};
+  }
+ });
+}
+
+function recordOutsideNBAEstimates(ledger,picks,model,now) {
+ for (const pick of picks) {
+  const research = researchOutsidePick(model,pick,now);
+  if (!research) continue;
+  const {player,team,method,chance} = research;
+  const start = Date.parse(research.eventStart);
+  const {market,line,side} = pick;
+  const source = "Entered line · Stats model";
+  const key = JSON.stringify([source,start,modelPlayerKey(player),team,market,line,side]);
+  ledger.entries[key] ??= {source,method,player,team,market,line,side,chance,start,saved:now};
+ }
+}
+
 function researchOutsidePick(data,pick,now) {
  if (pick.date !== outsideSlateDate(now) || !data?.schedule) return null;
  const players = data.players.filter(player => modelPlayerKey(player.player) === modelPlayerKey(pick.player));
@@ -2778,6 +2848,7 @@ function saveOutsidePicks(picks) {
   outsidePicks = picks;
   status.textContent = "Saved on this device.";
   renderOutsideOptimizer();
+  captureNBAResults(undefined,undefined,latestModel);
   return true;
  } catch {
   status.textContent = "Your browser couldn’t save the change.";
@@ -2811,6 +2882,60 @@ outsideForm.addEventListener("submit",event => {
   document.getElementById("outsideInputStatus").textContent = error.message;
  }
 });
+const outsideBulkForm = document.getElementById("outsideBulkForm");
+const outsideBulkSave = document.getElementById("outsideBulkSave");
+const outsideBulkStatus = document.getElementById("outsideBulkStatus");
+const outsideBulkRows = document.getElementById("outsideBulkRows");
+outsideBulkForm.elements.date.value = outsideSlateDate(Date.now());
+let outsideBulkPreview;
+
+function resetOutsideBulkPreview() {
+ outsideBulkPreview = undefined;
+ outsideBulkSave.disabled = true;
+ outsideBulkRows.replaceChildren();
+ outsideBulkStatus.textContent = "";
+}
+
+outsideBulkForm.addEventListener("input",resetOutsideBulkPreview);
+outsideBulkForm.addEventListener("submit",event => {
+ event.preventDefault();
+ resetOutsideBulkPreview();
+ const {date,source,picks} = outsideBulkForm.elements;
+ try {
+  const rows = previewOutsideImport(picks.value,date.value,source.value,outsidePicks);
+  outsideBulkPreview = rows.flatMap(row => row.pick ? [row.pick] : []);
+  for (const {index,pick,message} of rows) {
+   const item = document.createElement("li");
+   item.textContent = "Row " + (index+1) + " · " + (pick ?
+    pick.player + " · " + pick.side + " " + pick.line + " " + pick.market + " · " + pick.date : message);
+   outsideBulkRows.append(item);
+  }
+  const fits = outsidePicks.length+outsideBulkPreview.length <= 200;
+  outsideBulkSave.disabled = !outsideBulkPreview.length || !fits;
+  outsideBulkStatus.textContent = outsideBulkPreview.length + " ready · " +
+   (rows.length-outsideBulkPreview.length) + " skipped." + (fits ? "" : " This import would exceed 200 saved picks.");
+ } catch (error) {
+  outsideBulkStatus.textContent = error.message;
+ }
+});
+
+outsideBulkSave.addEventListener("click",() => {
+ if (!outsideBulkPreview?.length) return;
+ const existing = new Set(outsidePicks.map(outsidePickIdentity));
+ const additions = outsideBulkPreview.filter(pick => !existing.has(outsidePickIdentity(pick)));
+ if (outsidePicks.length+additions.length > 200) {
+  outsideBulkStatus.textContent = "This import would exceed 200 saved picks. Preview again after making room.";
+  return;
+ }
+ if (additions.length && !saveOutsidePicks([...outsidePicks,...additions])) {
+  outsideBulkStatus.textContent = "Your browser couldn’t save the picks.";
+  return;
+ }
+ resetOutsideBulkPreview();
+ outsideBulkForm.elements.picks.value = "";
+ outsideBulkStatus.textContent = additions.length + " picks saved on this device.";
+});
+
 const outsideRefresh = document.getElementById("outsideRefresh");
 outsideRefresh.addEventListener("click",scanAndRankProps);
 
