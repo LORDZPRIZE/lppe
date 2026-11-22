@@ -350,22 +350,34 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   }
   // A second relaxation keeps players distinct and drops position-by-position
   // assignments. It is strongest when flexible slots share the same expensive players.
-  const distinctBounds = possible.slice(0,-1).map((ids,index) => {
-    const remaining = slots.length-index;
-    const scores = Array.from({length:remaining+1},(_,count) =>
-      new Float64Array(budgetSteps+1).fill(count ? -Infinity : 0));
-    for (const player of projectionOrder) {
-      if (!ids.has(player.id)) continue;
-      const cost = Math.floor(player.salary/budgetUnit);
-      for (let count = remaining; count > 0; count--) {
-        for (let budget = cost; budget <= budgetSteps; budget++) {
-          scores[count][budget] = Math.max(scores[count][budget],player.points + scores[count-1][budget-cost]);
+  // Small searches, such as individual modeled opponent lineups, can spend
+  // more time building this table than the additional pruning would save.
+  function distinctScoreBounds(excludedId) {
+    return possible.slice(0,-1).map((ids,index) => {
+      const remaining = slots.length-index;
+      const scores = Array.from({length:remaining+1},(_,count) =>
+        new Float64Array(budgetSteps+1).fill(count ? -Infinity : 0));
+      for (const player of projectionOrder) {
+        if (!ids.has(player.id) || lockedIds.has(player.id) || player.id === excludedId) continue;
+        const cost = Math.floor(player.salary/budgetUnit);
+        for (let count = remaining; count > 0; count--) {
+          for (let budget = cost; budget <= budgetSteps; budget++) {
+            scores[count][budget] = Math.max(scores[count][budget],player.points + scores[count-1][budget-cost]);
+          }
         }
       }
-    }
-    return scores[remaining];
-  });
+      return scores;
+    });
+  }
+  const distinctBounds = exactFirst || searchLimit > 5000 ? distinctScoreBounds() : null;
+  // A high outlier can otherwise contribute again to the relaxed bound even
+  // after the search has selected them. Keep a table without that player.
+  const highest = projectionOrder[0];
+  const outlier = highest.points-projectionOrder[1].points >= 10 ? highest.id : undefined;
+  const withoutOutlier = exactFirst && outlier !== undefined ? distinctScoreBounds(outlier) : null;
   const baseBounds = scoreBounds(null,() => true);
+  const lockSalary = locked.reduce((sum,player) => sum+player.salary,0);
+  const lockPoints = locked.reduce((sum,player) => sum+player.points,0);
   const lineups = [];
   let limited = false;
   let restriction;
@@ -400,14 +412,19 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     const nodeLimit = exactFirst && number === 0 ? Infinity : searchLimit;
     let nodes = 0;
     let best = null;
-    function search(index,salary,points,locksRemaining) {
+    function search(index,salary,points,locksRemaining,unplacedSalary,unplacedPoints) {
       nodes++;
-      if (salary + salaryFloor[index] > salaryCap || locksRemaining > slots.length-index ||
+      if (salary + Math.max(unplacedSalary,salaryFloor[index]) > salaryCap || locksRemaining > slots.length-index ||
           (best && points+pointsCeiling[index] <= best.points) ||
           overlaps.some(overlap => overlap > maximumOverlap)) return;
       const allowedOverlap = previous ? maximumOverlap-overlaps.at(-1) : 0;
       const budget = Math.floor((salaryCap-salary)/budgetUnit);
-      const budgetBound = Math.min(budgetBounds[index][allowedOverlap][budget],distinctBounds[index]?.[budget] ?? 0);
+      const slotBound = budgetBounds[index][allowedOverlap][budget];
+      const uniqueBounds = withoutOutlier && ids.has(outlier) ? withoutOutlier : distinctBounds;
+      const unfilled = slots.length-index-locksRemaining;
+      const uncommitted = Math.floor((salaryCap-salary-unplacedSalary)/budgetUnit);
+      const uniqueBound = uniqueBounds?.[index]?.[unfilled][uncommitted] ?? Infinity;
+      const budgetBound = Math.min(slotBound,unplacedPoints+uniqueBound);
       if (budgetBound === -Infinity || (best && points + budgetBound + 1e-9 < best.points)) return;
       if (nodeLimit === Infinity && best && index < slots.length) {
         let remaining = slots.length-index;
@@ -455,7 +472,9 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
         teams.set(player.team,(teams.get(player.team) || 0)+1);
         if (isHitter) hitters.set(player.team,(hitters.get(player.team) || 0)+1);
         for (const [i,lineup] of lineups.entries()) if (lineup.ids.has(player.id)) overlaps[i]++;
-        search(index+1,salary+player.salary,points+player.points,locksRemaining-Number(lockedIds.has(player.id)));
+        const isLock = lockedIds.has(player.id);
+        search(index+1,salary+player.salary,points+player.points,locksRemaining-Number(isLock),
+          unplacedSalary-(isLock ? player.salary : 0),unplacedPoints-(isLock ? player.points : 0));
         for (const [i,lineup] of lineups.entries()) if (lineup.ids.has(player.id)) overlaps[i]--;
         const remaining = teams.get(player.team)-1;
         if (remaining) teams.set(player.team,remaining);
@@ -465,7 +484,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
         selected.pop();
       }
     }
-    search(0,0,0,locked.length);
+    search(0,0,0,locked.length,lockSalary,lockPoints);
     if (nodes >= nodeLimit) limited = true;
     if (!best) break;
     lineups.push(best);

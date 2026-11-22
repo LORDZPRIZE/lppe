@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
-import { addNBAProjections, applyNBAInjuryReport, attachNBAGames } from "../functions/api/nba/fanduel.js";
+import { addNBAProjections, applyNBAInjuryReport, attachNBAGames, onRequestGet } from "../functions/api/nba/fanduel.js";
 import { rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
@@ -162,6 +162,7 @@ test("bounded search returns the exhaustive NBA optimum with flexible slots and 
       teams.set(player.team,teamCount);
     }
   }
+  pool[4].points = 99;
   enumerate(0,0,0);
   assert(Number.isFinite(optimum));
   const result = buildLineups(pool,1,1,Infinity,"NBA",{exactFirst:true});
@@ -215,4 +216,46 @@ test("recent confirmed NBA absences can exclude additional players without clear
   const current = {...data,updatedAt:"2026-11-22T19:59:00Z"};
   assert.equal(applyNBAInjuryReport(current,injuries,now),current);
   assert.equal(applyNBAInjuryReport(data,injuries,now+3600001),data);
+});
+
+test("refreshing NBA projections reuses the longer-lived salary cache", async context => {
+  const responses = new Map();
+  globalThis.caches = {default:{
+    async match(request) { return responses.get(request.url)?.clone(); },
+    async put(request,response) { responses.set(request.url,response.clone()); }
+  }};
+  context.after(() => { delete globalThis.caches; });
+
+  const providerCalls = [];
+  const publicCalls = [];
+  const startsAt = new Date(Date.now()+3*3600000).toISOString();
+  context.mock.method(globalThis,"fetch",async input => {
+    const url = new URL(input);
+    if (url.hostname !== "fanduelapi.com") {
+      publicCalls.push(url.href);
+      return new Response("",{status:503});
+    }
+    providerCalls.push(url.pathname);
+    const data = url.pathname.endsWith("/players") ?
+      Array.from({length:10},(_,index) => ({
+        id:String(index),name:"Player "+index,team:["ORL","DEN","BOS"][index%3],position:"PG",salary:5500,fppg:20
+      })) :
+      [{id:"1",label:"Main",sport:"NBA",started:false,starts_at:startsAt,salary_cap:60000,games:2,players:10}];
+    return Response.json({data});
+  });
+
+  const reply = () => onRequestGet({
+    request:new Request("https://example.com/api/nba/fanduel?slate=1"),
+    env:{FANDUEL_API_KEY:"fd_test_fixture"}
+  });
+  assert.equal((await reply()).status,200);
+  assert.equal((await reply()).status,200);
+  assert.equal(providerCalls.length,2);
+  assert.equal(publicCalls.length,3);
+  for (const key of responses.keys()) {
+    if (key.endsWith("/provider/1")) responses.delete(key);
+  }
+  assert.equal((await reply()).status,200);
+  assert.equal(providerCalls.length,2);
+  assert.equal(publicCalls.length,6);
 });
