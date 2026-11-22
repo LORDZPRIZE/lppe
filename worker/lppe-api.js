@@ -67,26 +67,13 @@ function providerRetryAt(response,code,now) {
   return retryAt > now ? retryAt : now + 300000;
 }
 
-async function refreshPrizePicksBoard(request, env) {
+async function refreshPrizePicksBoard(env, saved) {
   const source = "prizepicksapi.com";
-  const cache = caches.default;
-  const cacheKey = path => new Request(new URL(path, request.url));
-  const boardKey = cacheKey("/lppe-internal/prizepicks-compact-board-v2");
-  const snapshotKey = cacheKey("/lppe-internal/prizepicks-compact-snapshot-v2");
-  async function remember(key, body, seconds) {
-    const response = json(body);
-    response.headers.set("Cache-Control","public, max-age=" + seconds);
-    try { await cache.put(key,response); } catch {}
-  }
   function limited(details,saved) {
     if (saved?.board?.lines.length) return json({...saved.board,savedBoard:true,...details});
     return json({error:"PrizePicks provider limit reached",...details},429);
   }
   try {
-    const cached = await cache.match(boardKey);
-    if (cached) return json(await cached.json());
-    const snapshot = await cache.match(snapshotKey);
-    const saved = snapshot ? await snapshot.json() : null;
     const cooldown = await env.PRIZEPICKS_BOARD.get("cooldown", "json");
     if (cooldown && Date.parse(cooldown.retryAt) > Date.now()) return limited(cooldown,saved);
     // Request at most one 100-row credit unit per scheduled refresh.
@@ -96,8 +83,7 @@ async function refreshPrizePicksBoard(request, env) {
     if (saved?.etag) headers["If-None-Match"] = saved.etag;
     const response = await fetch(url,{headers});
     if (response.status === 304 && saved?.board) {
-      await remember(boardKey,saved.board,900);
-      return json(saved.board);
+      return new Response(null,{status:304});
     }
     if (response.status === 429) {
       const error = await response.json().catch(() => null);
@@ -143,9 +129,10 @@ async function refreshPrizePicksBoard(request, env) {
     if (offers.length && !lines.length) {
       return json({error:"PrizePicks provider returned no usable live rows"},502);
     }
-    await remember(boardKey,board,900);
-    await remember(snapshotKey,{board,etag:response.headers.get("ETag")},86400);
-    return json(board);
+    const result = json(board);
+    const etag = response.headers.get("ETag");
+    if (etag) result.headers.set("ETag",etag);
+    return result;
   } catch {
     return json({error:"PrizePicks feed unavailable"},502);
   }
@@ -177,8 +164,21 @@ export default {
       return;
     }
     try {
-      const request = new Request("https://lppe-api.lord-joseph.workers.dev/api/prizepicks");
-      const response = await refreshPrizePicksBoard(request,env);
+      const previous = await env.PRIZEPICKS_BOARD.getWithMetadata("board","json");
+      if (previous.metadata?.scheduledAt >= scheduledAt) {
+        log("already_refreshed");
+        return;
+      }
+      // The validator belongs to the last successfully saved board.
+      const saved = {board:previous.value,etag:previous.value ? previous.metadata?.etag : null};
+      const response = await refreshPrizePicksBoard(env,saved);
+      if (response.status === 304) {
+        await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(saved.board),{
+          metadata:{etag:saved.etag,scheduledAt}
+        });
+        log("unchanged",{lineCount:saved.board.lines.length});
+        return;
+      }
       const board = await response.json();
       if (!response.ok) {
         log("refresh_failed",{status:response.status,reason:board.error,providerStatus:board.providerStatus,
@@ -189,7 +189,9 @@ export default {
         log("retained_previous_board",{providerCode:board.providerCode,retryAt:board.retryAt});
         return;
       }
-      await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(board));
+      await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(board),{
+        metadata:{etag:response.headers.get("ETag"),scheduledAt}
+      });
       log("saved",{lineCount:board.lines.length,observedAt:board.observedAt});
     } catch {
       log("scheduled_handler_failed");
