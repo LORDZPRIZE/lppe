@@ -34,6 +34,8 @@ const difference = byId("fdDifference");
 const exposure = byId("fdExposure");
 const stack = byId("fdStack");
 const depth = byId("fdSearchDepth");
+const avoidQuestionable = byId("fdAvoidQuestionable");
+const uncertainAvailability = status => /^(q|questionable|gtd|game[ -]time decision|day[ -]to[ -]day|dtd)$/i.test(status || "");
 const objective = byId("fdObjective");
 const mode = byId("fdMode");
 const build = byId("fdBuild");
@@ -76,7 +78,7 @@ byId("fdSaveSlate").addEventListener("click",() => {
   if (!importedSlateName || !players.length) return;
   try {
     const settings = Object.fromEntries(slateSettings.map(control => [control.id,control.value]));
-    const saved = {name:importedSlateName,sport:sport.value,players,settings,savedAt:Date.now()};
+    const saved = {name:importedSlateName,sport:sport.value,players,settings,skipQuestionable:avoidQuestionable.checked,savedAt:Date.now()};
     localStorage.setItem(savedSlateKey,JSON.stringify(saved));
     byId("fdSaveStatus").textContent = "Saved for up to 48 hours on this device.";
     showSavedSlate();
@@ -116,6 +118,7 @@ byId("fdResumeSlate").addEventListener("click",() => {
   }
   slateLockAt = null;
   loadedLiveSlate = undefined;
+  avoidQuestionable.checked = saved.skipQuestionable === true;
   importedSlateName = saved.name;
   players = saved.players;
   applyMode();
@@ -179,6 +182,12 @@ function clearLineups() {
   byId("fdResultsPanel").hidden = true;
 }
 
+function poolForBuild() {
+  if (!avoidQuestionable.checked) return players;
+  return players.map(player => player.selection === "available" && uncertainAvailability(player.status) ?
+    {...player,selection:"exclude"} : player);
+}
+
 function checkSlate(pool, profile, selectedSport) {
   const eligible = pool.filter(player => player.selection !== "exclude" && Number.isFinite(player.points));
   const games = [...new Set(pool.map(player => player.game).filter(Boolean))].sort();
@@ -230,7 +239,8 @@ function checkSlate(pool, profile, selectedSport) {
 
 function renderSlateCheck() {
   const profile = profiles[sport.value];
-  const {eligible,games,warnings} = checkSlate(players,profile,sport.value);
+  const {eligible,games,warnings} = checkSlate(poolForBuild(),profile,sport.value);
+  byId("fdQuestionableHint").hidden = !avoidQuestionable.checked;
   const slateName = loadedLiveSlate?.name || importedSlateName;
   byId("fdSlateCheck").textContent = (slateName ? slateName+" · " : "") +
     players.length + " players · " + eligible + " eligible · " +
@@ -567,7 +577,7 @@ function renderLineups(result,requested,highCeiling) {
     meta.className = "lineup-meta";
     meta.textContent = dollars.format(lineup.salary)+" used · "+dollars.format(profiles[sport.value].salaryCap-lineup.salary)+" remaining";
     const historical = lineup.picks.filter(({player}) => player.source === "FanDuel FPPG").length;
-    const uncertain = lineup.picks.filter(({player}) => /^(q|questionable|gtd|game time decision)$/i.test(player.status || ""));
+    const uncertain = lineup.picks.filter(({player}) => uncertainAvailability(player.status));
     if (historical) meta.append(" · "+historical+" using historical FPPG");
     if (uncertain.length) meta.append(" · Status to check: "+uncertain.map(({player}) => player.name).join(", "));
     if (highCeiling) meta.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
@@ -668,7 +678,8 @@ function buildCurrentLineups() {
     return;
   }
   const gpp = mode.value === "gpp";
-  const {warnings} = checkSlate(players,profiles[sport.value],sport.value);
+  const candidates = poolForBuild();
+  const {warnings} = checkSlate(candidates,profiles[sport.value],sport.value);
   if (warnings.length) {
     byId("fdResultsPanel").hidden = false;
     byId("fdBuildStatus").textContent = warnings.join(" ");
@@ -722,7 +733,7 @@ function buildCurrentLineups() {
     buildProgress = undefined;
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
-  const pool = gpp ? players : players.map(player => ({...player,maxExposure:100}));
+  const pool = gpp ? candidates : candidates.map(player => ({...player,maxExposure:100}));
   activeWorker.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,
     sport:sport.value,deep:gpp && depth.value === "deep",options});
 }
@@ -978,6 +989,10 @@ difference.addEventListener("change",applyMode);
 exposure.addEventListener("change",applyMode);
 stack.addEventListener("change",applyMode);
 depth.addEventListener("change",applyMode);
+avoidQuestionable.addEventListener("change",() => {
+  clearLineups();
+  renderSlateCheck();
+});
 exportButton.addEventListener("click",() => {
   const url = URL.createObjectURL(new Blob([reviewCSV(lineups,sport.value)],{type:"text/csv;charset=utf-8"}));
   const download = document.createElement("a");

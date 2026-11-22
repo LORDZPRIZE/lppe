@@ -145,6 +145,8 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
 .lineup-value small { display: block; color: var(--muted); font-size: .75rem; margin-top: 5px; }
 .lineup-meta { grid-column: 1 / -1; font-size: .8rem; color: var(--muted); font-weight: 500; }
 #fdResults .lineup-card + details:not(.lineup-card) { background: #211a31; }
+.checkbox-label { display: inline-flex; align-items: center; gap: .5rem; padding: .65rem 0; }
+.checkbox-label input { width: auto; min-height: 0; padding: 0; }
 </style>
 </head>
 <body>
@@ -216,10 +218,12 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <label data-gpp>Max exposure (%) <input id="fdExposure" type="number" min="1" max="100" value="100" required></label>
    <label data-gpp>Search depth <select id="fdSearchDepth"><option value="standard">Standard</option><option value="deep">Deep search</option></select></label>
    <label id="fdFootballStack" hidden>Football stack <select id="fdStack"><option value="0">Off</option><option value="1">QB + 1 WR/TE</option><option value="2">QB + 2 WR/TE</option></select></label>
+   <label class="checkbox-label"><input id="fdAvoidQuestionable" type="checkbox"> Skip questionable players</label>
    <button id="fdBuild" class="primary" type="button">Build lineups</button>
   </div>
   <p class="muted" id="fdExposureHint">Exposure limits use the requested lineup count and round down. The lower of the overall and player limits applies. Locks are exempt.</p>
   <p class="muted" id="fdTeamRules"></p>
+  <p class="muted" id="fdQuestionableHint" hidden>Questionable players are skipped unless you lock them.</p>
   <p class="muted" id="fdDepthHint" hidden>Deep search checks more alternatives and can take longer. Cancel to keep completed lineups.</p>
   <div class="controls" id="fdSaveControls" hidden>
    <button type="button" id="fdSaveSlate">Save slate on this device</button>

@@ -71,7 +71,9 @@ const playerName = row => row.nickname || row.playername || row.player || row.na
   [row.firstname,row.lastname].filter(Boolean).join(" ");
 export const teamCode = (raw,sport = "NBA") => {
   const team = raw?.trim().toUpperCase() || "";
-  return sport === "NBA" ? ({BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team) : team;
+  if (sport === "NBA") return {BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team;
+  if (sport === "NFL") return {JAX:"JAC",WSH:"WAS"}[team] || team;
+  return team;
 };
 export const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const nameVariant = name => matchName(name.replace(/[\s,]+(?:jr\.?|sr\.?|ii|iii|iv|v)$/i,""));
@@ -111,6 +113,7 @@ const readCeiling = row => csvNumber(row.ceiling || row.ceilingfpts || row.proje
 
 export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{selectedSlate,date} = {}) {
   if (!projectionCSV.trim()) return {players,matched:0};
+  const gameDates = new Set([date,...players.map(player => player.gameDate)].filter(Boolean));
   const byId = new Map();
   const byName = new Map();
   const ceilingById = new Map();
@@ -126,7 +129,7 @@ export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{sele
   }
   for (const row of parseCSV(projectionCSV)) {
     if (selectedSlate && row.slate && row.gamedate && cheatsheetKey(row) !== selectedSlate) continue;
-    if (date && row.gamedate && row.gamedate !== date) continue;
+    if (date && row.gamedate && !gameDates.has(row.gamedate)) continue;
     const projected = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
     if (!Number.isFinite(projected)) continue;
     const displayName = playerName(row);
