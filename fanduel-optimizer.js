@@ -220,6 +220,15 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     player.id,Math.floor(count*Math.min(exposure,player.maxExposure ?? 100)/100)
   ]));
   const lockedIds = new Set(locked.map(player => player.id));
+  const stackRequired = (sport === "NFL" || sport === "CFB") ? stack : 0;
+  const passCatchers = new Map();
+  if (stackRequired) {
+    for (const player of eligible) {
+      if (!player.positions.some(position => position === "WR" || position === "TE")) continue;
+      if (!passCatchers.has(player.team)) passCatchers.set(player.team,[]);
+      passCatchers.get(player.team).push(player);
+    }
+  }
   const slots = roster.map(([label,positions],index) => ({
     label,index,pool:eligible.filter(player => (!(reservedSlots & (1 << index)) || lockedIds.has(player.id)) &&
       player.positions.some(position => positions.includes(position)))
@@ -257,6 +266,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   }
   const lineups = [];
   let limited = false;
+  let restriction;
   const projectionOrder = exactFirst ? [...eligible].sort((a,b) => b.points-a.points) : [];
   for (let number = 0; number < count; number++) {
     const selected = [];
@@ -265,6 +275,26 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     const hitters = new Map();
     const overlaps = lineups.map(() => 0);
     const maximumOverlap = roster.length-difference;
+    if (number && locked.length > maximumOverlap) {
+      restriction = "Your locked players leave room for at most " + (roster.length-locked.length) +
+        " different players between lineups. Lower the minimum difference or unlock players.";
+      break;
+    }
+    const canUse = player => lockedIds.has(player.id) ||
+      (usage.get(player.id) || 0) < exposureLimits.get(player.id);
+    const activeTeams = new Set(eligible.filter(canUse).map(player => player.team));
+    if (activeTeams.size < 3) {
+      restriction = "The exposure limits leave eligible players on fewer than three teams.";
+      break;
+    }
+    const qbSlot = stackRequired ? slots.find(slot => slot.label === "QB") : undefined;
+    const stackQuarterbacks = new Set(qbSlot?.pool.filter(qb => canUse(qb) &&
+      (passCatchers.get(qb.team) || []).filter(player => player.id !== qb.id && canUse(player)).length >= stackRequired)
+      .map(qb => qb.id));
+    if (qbSlot && !stackQuarterbacks.size) {
+      restriction = "No eligible quarterback has enough available WR/TE teammates for this stack.";
+      break;
+    }
     const nodeLimit = exactFirst && number === 0 ? Infinity : searchLimit;
     let nodes = 0;
     let best = null;
@@ -288,9 +318,12 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       if (locksRemaining && locked.some(player => !ids.has(player.id) && !possible[index].has(player.id))) return;
       if (index === slots.length) {
         if (teams.size < 3) return;
-        if (stack && (sport === "NFL" || sport === "CFB") && !selected.some(({player:qb,slot}) =>
-          roster[slot][0] === "QB" && selected.filter(({player}) => player.id !== qb.id &&
-            player.team === qb.team && player.positions.some(position => position === "WR" || position === "TE")).length >= stack)) return;
+        if (qbSlot) {
+          const qb = selected.find(({slot}) => slot === qbSlot.index).player;
+          const teammates = (passCatchers.get(qb.team) || [])
+            .filter(player => player.id !== qb.id && ids.has(player.id));
+          if (teammates.length < stackRequired) return;
+        }
         if (sport === "CFB" && selected.every(({player}) => player.game) &&
             new Set(selected.map(({player}) => player.game)).size < 2) return;
         best = {picks:[...selected].sort((a,b)=>a.slot-b.slot),ids:new Set(ids),salary,points};
@@ -299,7 +332,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       const slot = slots[index];
       for (let rank = 0; rank < slot.pool.length && nodes < nodeLimit; rank++) {
         const player = slot.pool[rank];
-        if (!lockedIds.has(player.id) && (usage.get(player.id) || 0) >= exposureLimits.get(player.id)) continue;
+        if (!canUse(player)) continue;
+        if (slot === qbSlot && !stackQuarterbacks.has(player.id)) continue;
         if (ids.has(player.id) || (teams.get(player.team) || 0) >= profile.maxTeam) continue;
         const isHitter = profile.maxHitters && slot.label !== "P";
         if (isHitter && (hitters.get(player.team) || 0) >= profile.maxHitters) continue;
@@ -328,7 +362,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     lineups.push(best);
     for (const id of best.ids) usage.set(id,(usage.get(id) || 0)+1);
   }
-  return {lineups,limited};
+  return {lineups,limited,restriction};
 }
 
 export function reviewCSV(lineups,sport = "NBA") {
