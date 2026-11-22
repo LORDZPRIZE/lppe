@@ -100,7 +100,17 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
 
   const players = new Map();
   let skipped = 0;
-  for (const row of parseCSV(salaryCSV)) {
+  const salaryRows = parseCSV(salaryCSV);
+  const isProjectionPreview = salaryRows.length && salaryRows.every(row =>
+    !row.id && !row.playerid && Object.hasOwn(row, "player") &&
+    Object.hasOwn(row, "pos") && Object.hasOwn(row, "sal") && Object.hasOwn(row, "fpts"));
+  if (isProjectionPreview) {
+    const count = salaryRows.length;
+    throw new Error(`This projections file has ${count} player ${count === 1 ? "row" : "rows"} and no FanDuel player IDs. ` +
+      "Choose your exact contest’s FanDuel player-list CSV in the salary field. " +
+      "You can add this file in the optional projections field.");
+  }
+  for (const row of salaryRows) {
     const id = row.id || row.playerid;
     const name = playerName(row);
     const slots = positionCodes(row.rosterposition || "",sport,allowed);
