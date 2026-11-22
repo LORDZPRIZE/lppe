@@ -10,6 +10,7 @@ self.addEventListener("message",({data}) => {
       points:Number.isFinite(player.points) ? player.ceiling : NaN
     })) : players;
     const result = buildLineups(pool,count,difference,160000,sport,options);
+    result.exactFirst = Boolean(options?.exactFirst && result.lineups.length);
     if (highCeiling) {
       const originals = new Map(players.map(player => [player.id,player]));
       for (const lineup of result.lineups) {

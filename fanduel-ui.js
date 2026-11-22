@@ -132,6 +132,11 @@ function renderPlayers() {
       }
       player.selection = selection.value;
       if (lastRemoval?.player === player) clearRemoval();
+      if (lastRemoval && selection.value === "lock") {
+        objective.value = "projection";
+        rebuildAfterRemoval();
+        return;
+      }
       clearLineups();
       renderSlateCheck();
     });
@@ -224,7 +229,9 @@ function renderLineups(result,requested,highCeiling) {
     status.textContent = "Built "+lineups.length+" of "+requested+" lineups. Ranked by modeled top-10% finish share across "+
       result.simulation.scenarios+" scenarios and "+result.simulation.opponents+" modeled opponents. Estimates use slate projections and synthetic opponents.";
   }
-  if (result.limited) status.textContent += " The search reached its limit. A better lineup or additional alternatives may exist.";
+  if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
+  if (result.limited) status.textContent += result.exactFirst ? " Additional lineup searches reached their limit." :
+    " The search reached its limit. A better lineup or additional alternatives may exist.";
   if (lastRemoval) {
     const {player,previousLineup} = lastRemoval;
     const summary = removalSummary(player,previousLineup,lineups[0]);
@@ -354,7 +361,8 @@ function buildCurrentLineups() {
   });
   const pool = gpp ? players : players.map(player => ({...player,maxExposure:100}));
   optimizer.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
-    options:{exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
+    options:{exactFirst:Boolean(lastRemoval && objective.value === "projection"),
+      exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
 }
 function showBuildResults() {
   const panel = byId("fdResultsPanel");

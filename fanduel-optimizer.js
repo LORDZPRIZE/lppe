@@ -143,7 +143,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   return {players:[...players.values()],skipped};
 }
 
-export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0} = {}) {
+export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false} = {}) {
   const profile = rosterProfile(sport);
   const roster = profile.roster;
   const salaryCap = profile.salaryCap;
@@ -178,6 +178,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   }
   const lineups = [];
   let limited = false;
+  const projectionOrder = exactFirst ? [...eligible].sort((a,b) => b.points-a.points) : [];
   for (let number = 0; number < count; number++) {
     const selected = [];
     const ids = new Set();
@@ -185,6 +186,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     const hitters = new Map();
     const overlaps = lineups.map(() => 0);
     const maximumOverlap = roster.length-difference;
+    const nodeLimit = exactFirst && number === 0 ? Infinity : searchLimit;
     let nodes = 0;
     let best = null;
     function search(index,salary,points,locksRemaining) {
@@ -192,6 +194,16 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       if (salary + salaryFloor[index] > salaryCap || locksRemaining > slots.length-index ||
           (best && points+pointsCeiling[index] <= best.points) ||
           overlaps.some(overlap => overlap > maximumOverlap)) return;
+      if (nodeLimit === Infinity && best && index < slots.length) {
+        let remaining = slots.length-index;
+        let ceiling = points;
+        for (const player of projectionOrder) {
+          if (ids.has(player.id) || (!lockedIds.has(player.id) && exposureLimits.get(player.id) === 0)) continue;
+          ceiling += player.points;
+          if (--remaining === 0) break;
+        }
+        if (remaining || ceiling+1e-9 <= best.points) return;
+      }
       if (locksRemaining && locked.some(player => !ids.has(player.id) && !possible[index].has(player.id))) return;
       if (index === slots.length) {
         if (teams.size < 3) return;
@@ -204,7 +216,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
         return;
       }
       const slot = slots[index];
-      for (let rank = 0; rank < slot.pool.length && nodes < searchLimit; rank++) {
+      for (let rank = 0; rank < slot.pool.length && nodes < nodeLimit; rank++) {
         const player = slot.pool[rank];
         if (!lockedIds.has(player.id) && (usage.get(player.id) || 0) >= exposureLimits.get(player.id)) continue;
         if (ids.has(player.id) || (teams.get(player.team) || 0) >= profile.maxTeam) continue;
@@ -230,7 +242,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       }
     }
     search(0,0,0,locked.length);
-    if (nodes >= searchLimit) limited = true;
+    if (nodes >= nodeLimit) limited = true;
     if (!best) break;
     lineups.push(best);
     for (const id of best.ids) usage.set(id,(usage.get(id) || 0)+1);
