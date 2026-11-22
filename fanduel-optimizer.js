@@ -86,7 +86,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   const ownershipById = new Map();
   const ownershipByName = new Map();
   const readOwnership = row => {
-    const raw = row.ownershippct || row.projectedownership || row.ownership || "";
+    const raw = row.ownershippct || row.projectedownership || row.ownershipprojection || row.ownership || "";
     const percent = csvNumber(raw.trim().replace(/%$/, ""));
     return percent >= 0 && percent <= 100 ? percent/100 : undefined;
   };
@@ -98,7 +98,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   }
   if (projectionCSV.trim()) {
     for (const row of parseCSV(projectionCSV)) {
-      const projected = csvNumber(row.projection || row.projectedpoints || row.fantasypoints || row.fpts || row.fppg);
+      const projected = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
       if (!Number.isFinite(projected)) continue;
       const name = matchName(playerName(row));
       const team = teamCode(row.team || row.teamabbr,sport);
@@ -120,13 +120,18 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
 
   const players = new Map();
   let skipped = 0;
-  for (const row of parseCSV(salaryCSV)) {
-    const id = row.id || row.playerid;
+  const rows = parseCSV(salaryCSV);
+  const preview = rows.length > 0 && ["ppgprojection","slate","gamedate","opp"].every(key => key in rows[0]);
+  if (preview && new Set(rows.map(row => JSON.stringify([row.slate,row.gamedate]))).size > 1) {
+    throw new Error("This cheatsheet contains multiple slates or dates. Import one contest slate at a time.");
+  }
+  for (const row of rows) {
     const name = playerName(row);
     const slots = positionCodes(row.rosterposition || "",sport,allowed);
     const positions = slots.length ? slots : positionCodes(row.position || "",sport,allowed);
     const salary = csvNumber(row.salary);
     const team = teamCode(row.team || row.teamabbr,sport);
+    const id = row.id || row.playerid || (preview && name && team ? "preview:"+team+":"+matchName(name) : "");
     if (!id || !name || !positions.length || !Number.isInteger(salary) || salary <= 0 || !team) {
       skipped++;
       continue;
@@ -134,7 +139,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
     const matched = byId.get(id) ?? byName.get(matchName(name) + ":" + team);
     const ceiling = ceilingById.get(id) ?? ceilingByName.get(matchName(name) + ":" + team) ?? readCeiling(row);
     const ownership = ownershipById.get(id) ?? ownershipByName.get(matchName(name) + ":" + team) ?? readOwnership(row);
-    const provided = csvNumber(row.projection || row.projectedpoints || row.fpts);
+    const provided = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fpts);
     const average = csvNumber(row.fppg);
     const points = matched ?? (Number.isFinite(provided) ? provided : average);
     const source = matched != null ? "Projection CSV" : Number.isFinite(provided) ? "Salary CSV projection" :
@@ -148,12 +153,12 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
       existing.positions = [...new Set([...existing.positions, ...positions])];
       continue;
     }
-    const game = (row.game || row.gameid || row.matchup || "").toUpperCase().replace(/\s+/g,"");
+    const game = (row.game || row.gameid || row.matchup || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
     players.set(id,{id,name,positions,salary,team,points,ceiling,ownership,source,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
   if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
-  return {players:[...players.values()],skipped};
+  return {players:[...players.values()],skipped,preview};
 }
 
 export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false} = {}) {
@@ -189,6 +194,25 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     pointsCeiling[index] = pointsCeiling[index+1] + pool[0].points;
     possible[index] = new Set([...possible[index+1],...pool.map(player => player.id)]);
   }
+  // Relax uniqueness and team constraints to bound the points attainable at each budget.
+  // Rounding costs down keeps the bound safe even for nonstandard salary increments.
+  const budgetUnit = 100;
+  const budgetSteps = Math.floor(salaryCap / budgetUnit);
+  const budgetBounds = [new Float64Array(budgetSteps + 1)];
+  for (let index = slots.length - 1; index >= 0; index--) {
+    const next = budgetBounds[0];
+    const bounds = new Float64Array(budgetSteps + 1).fill(-Infinity);
+    let cheapest = Infinity;
+    for (const player of slots[index].pool) {
+      const cost = Math.floor(player.salary / budgetUnit);
+      if (cost >= cheapest) continue; // A higher-ranked option is already cheaper.
+      cheapest = cost;
+      for (let budget = cost; budget <= budgetSteps; budget++) {
+        bounds[budget] = Math.max(bounds[budget], player.points + next[budget-cost]);
+      }
+    }
+    budgetBounds.unshift(bounds);
+  }
   const lineups = [];
   let limited = false;
   const projectionOrder = exactFirst ? [...eligible].sort((a,b) => b.points-a.points) : [];
@@ -207,6 +231,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       if (salary + salaryFloor[index] > salaryCap || locksRemaining > slots.length-index ||
           (best && points+pointsCeiling[index] <= best.points) ||
           overlaps.some(overlap => overlap > maximumOverlap)) return;
+      const budgetBound = budgetBounds[index][Math.floor((salaryCap-salary)/budgetUnit)];
+      if (budgetBound === -Infinity || (best && points + budgetBound + 1e-9 < best.points)) return;
       if (nodeLimit === Infinity && best && index < slots.length) {
         let remaining = slots.length-index;
         let ceiling = points;

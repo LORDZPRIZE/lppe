@@ -153,13 +153,13 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <button id="fdUndoRemoval" type="button">Undo removal</button>
   </div>
   <div id="fdResultsPanel" hidden role="region" aria-labelledby="fdResultsHeading">
-   <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdExport" disabled>Download review CSV</button></div>
+   <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdCancel" hidden>Cancel build</button><button type="button" id="fdExport" disabled>Download review CSV</button></div>
    <p id="fdBuildStatus" role="status"></p>
    <div id="fdResults"></div>
   </div>
-  <details id="fdManualImport"><summary>Upload a FanDuel CSV</summary>
+  <details id="fdManualImport"><summary>Upload a FanDuel CSV or Daily Fantasy Fuel cheatsheet</summary>
   <form id="fdImport" class="controls">
-   <label>FanDuel salary CSV <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>
+   <label>Salary CSV or cheatsheet <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>
    <label>Projections CSV (optional) <input id="fdProjections" type="file" accept=".csv,text/csv"></label>
    <button type="submit" class="primary">Reload CSV and build</button>
   </form>
