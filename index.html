@@ -522,7 +522,11 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
    </form>
    <p id="outsideInputStatus" class="sub" role="status"></p>
   </details>
-  <h3>Saved picks</h3>
+  <div class="toolbar">
+   <h3>Saved picks</h3>
+   <button id="outsideCompareBooks" type="button" class="secondary" disabled>Compare sportsbook prices</button>
+  </div>
+  <p id="outsideBooksStatus" class="sub" role="status"></p>
   <ul id="outsideRows" class="outside-cards"></ul>
   <h3>6-pick GREEN entry</h3>
   <ul id="outsideEntries" class="outside-cards"></ul>
@@ -729,21 +733,36 @@ function render(){
  renderBuilderEstimate();
 }
 
+function builderGame(offer) {
+ if (!offer) return null;
+ const start = Date.parse(offer.eventStart);
+ const current = latestModel?.schedule?.filter(game =>
+  Math.abs(Date.parse(game.start)-start) <= maxTipoffDifference &&
+  game.teams.some(team => modelTeamKey(team) === modelTeamKey(offer.team)));
+ const game = current?.length === 1 ? current[0] : null;
+ const teams = game?.teams || [offer.team,offer.opponent];
+ return teams.every(Boolean) ? JSON.stringify(teams.map(team => modelTeamKey(team.trim().toUpperCase())).sort()) : null;
+}
+
 function renderBuilderEstimate() {
  clearTimeout(builderExpiryTimer);
  const now = Date.now();
  const chosen = selected.map(id => props.find(prop => prop.id === id)).filter(Boolean);
  const invalid = chosen.filter(prop => !builderOfferIsCurrent(prop,now));
+ const knownGames = chosen.map(prop => builderGame(prop.offer)).filter(Boolean);
+ const marketGames = chosen.map(prop => prop.offer?.gameId).filter(Boolean);
+ const sharedGame = new Set(knownGames).size < knownGames.length || new Set(marketGames).size < marketGames.length;
  document.getElementById("builderList").textContent = chosen.length ?
   chosen.map(prop => prop.player + " · " + prop.side + " " + prop.line + " " + prop.market + " (" +
    formatPickEstimate(prop.probability) + ")").join(" | ") : "No selections yet.";
  const estimate = document.getElementById("builderProbability");
- estimate.textContent = invalid.length ? "—" : chosen.length >= 2 ?
+ estimate.textContent = invalid.length || sharedGame ? "—" : chosen.length >= 2 ?
   (chosen.reduce((value,prop) => value*prop.probability,1)*100).toFixed(2) + "%" : "Select 2 to 6 GREEN props";
  const status = document.getElementById("builderEstimateStatus");
- status.hidden = !invalid.length;
+ status.hidden = !invalid.length && !sharedGame;
  status.textContent = invalid.length ?
-  "Expired or injury-flagged picks: " + invalid.map(prop => prop.player).join(", ") + ". Remove them and check today’s lines." : "";
+  "Expired or injury-flagged picks: " + invalid.map(prop => prop.player).join(", ") + ". Remove them and check today’s lines." :
+  sharedGame ? "Two picks share an NBA game. An all-hit estimate requires a model for those related outcomes." : "";
  const nextExpiry = Math.min(...chosen.map(builderOfferExpiry).filter(time => time > now));
  if (Number.isFinite(nextExpiry)) {
   builderExpiryTimer = setTimeout(renderBuilderEstimate,Math.max(1,nextExpiry-now));
@@ -888,66 +907,79 @@ function comparisonIssue(prop,now,today) {
  return "";
 }
 
-function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all", side = "all"} = {}) {
- const today = pacificDay.format(now);
- const key = line => JSON.stringify([modelPlayerKey(line.player),
-  supportedMarkets.get(line.market.trim().toLowerCase()),line.line]);
- const fresh = value => {
-  const age = now - Date.parse(value);
-  return age >= 0 && age < maxQuoteAge;
- };
+function marketQuoteKey(line) {
+ return JSON.stringify([modelPlayerKey(line.player),supportedMarkets.get(line.market.trim().toLowerCase()),line.line]);
+}
+
+function indexMarketQuotes(sportsbook,now) {
  const indexed = new Map();
+ const today = pacificDay.format(now);
  for (const quote of sportsbook) {
-  if (!fresh(quote.updatedAt) || !quote.eventId || !quote.bookmaker.trim() ||
-      Math.abs(quote.americanOdds) < 100 || !supportedMarkets.has(quote.market.trim().toLowerCase())) continue;
-  const match = key(quote);
-  if (!indexed.has(match)) indexed.set(match, []);
-  indexed.get(match).push(quote);
+  const age = now-Date.parse(quote.updatedAt);
+  const start = Date.parse(quote.eventStart);
+  if (!(age >= 0 && age < maxQuoteAge) || !(start > now) || pacificDay.format(start) !== today ||
+      !quote.eventId || !quote.bookmaker.trim() || Math.abs(quote.americanOdds) < 100 ||
+      !supportedMarkets.has(quote.market.trim().toLowerCase())) continue;
+  const key = marketQuoteKey(quote);
+  if (!indexed.has(key)) indexed.set(key,[]);
+  indexed.get(key).push(quote);
  }
- const implied = odds => odds > 0 ? 100 / (odds + 100) : -odds / (100 - odds);
+ return indexed;
+}
+
+function compareExactMarketQuotes(quotes,eventStart) {
+ const matching = Number.isFinite(eventStart) ? quotes.filter(quote =>
+  Math.abs(Date.parse(quote.eventStart)-eventStart) <= maxTipoffDifference) : quotes;
+ const gameIds = new Set(matching.map(quote => quote.eventId));
+ const gameId = gameIds.size === 1 ? matching[0].eventId : null;
+ const books = new Map();
+ for (const quote of gameId ? matching : []) {
+  const bookKey = quote.bookmaker.trim().toLowerCase();
+  const updated = Date.parse(quote.updatedAt);
+  const previous = books.get(bookKey);
+  if (previous && updated < previous.updated) continue;
+  if (!previous || updated > previous.updated) {
+   books.set(bookKey,{name:quote.bookmaker,updated,MORE:new Set(),LESS:new Set()});
+  }
+  books.get(bookKey)[quote.side].add(quote.americanOdds);
+ }
+ const implied = odds => odds > 0 ? 100/(odds+100) : -odds/(100-odds);
+ const estimates = [];
+ let expiresAt = Math.min(eventStart ?? Infinity,...matching.map(quote => Date.parse(quote.eventStart)));
+ for (const book of books.values()) {
+  if (book.MORE.size !== 1 || book.LESS.size !== 1) continue;
+  const moreOdds = [...book.MORE][0], lessOdds = [...book.LESS][0];
+  const more = implied(moreOdds), less = implied(lessOdds);
+  expiresAt = Math.min(expiresAt,book.updated+maxQuoteAge);
+  estimates.push({bookmaker:book.name,moreOdds,lessOdds,more:more/(more+less),updated:book.updated});
+ }
+ const unavailable = gameIds.size > 1 ? "Multiple sportsbook games matched." :
+  estimates.length < 2 ? "Fewer than two fresh, two-sided sportsbook matches." : "";
+ const ordered = estimates.map(estimate => estimate.more).sort((a,b) => a-b);
+ const more = unavailable ? null :
+  (ordered[Math.floor(ordered.length/2)] + ordered[Math.floor((ordered.length-1)/2)])/2;
+ return {more,unavailable,estimates,gameId,expiresAt};
+}
+
+function rankMarketProps(prizePicks,sportsbook,now = Date.now(),{tier = "all",side = "all"} = {}) {
+ const today = pacificDay.format(now);
+ const indexed = indexMarketQuotes(sportsbook,now);
  const ranked = [];
  for (const prop of prizePicks) {
-  const starts = Date.parse(prop.eventStart);
-  let unavailable = comparisonIssue(prop,now,today);
-  const quotes = (unavailable ? [] : indexed.get(key(prop)) || []).filter(quote => {
-   const bookStart = Date.parse(quote.eventStart);
-   return bookStart > now && Math.abs(bookStart - starts) <= maxTipoffDifference;
-  });
-  const gameIds = new Set(quotes.map(quote => quote.eventId));
-  if (gameIds.size > 1) unavailable = "Multiple sportsbook games matched.";
-  const gameId = gameIds.size === 1 ? quotes[0].eventId : null;
-  const books = new Map();
-  for (const quote of gameId ? quotes : []) {
-   const bookKey = quote.bookmaker.trim().toLowerCase();
-   const updated = Date.parse(quote.updatedAt);
-   const previous = books.get(bookKey);
-   if (previous && updated < previous.updated) continue;
-   if (!previous || updated > previous.updated) {
-    books.set(bookKey,{name:quote.bookmaker,updated,MORE:new Set(),LESS:new Set()});
-   }
-   books.get(bookKey)[quote.side].add(quote.americanOdds);
-  }
-  const estimates = [];
-  let oldest = Date.parse(prop.observedAt);
-  for (const book of books.values()) {
-   if (book.MORE.size !== 1 || book.LESS.size !== 1) continue;
-   const moreOdds = [...book.MORE][0], lessOdds = [...book.LESS][0];
-   const more = implied(moreOdds), less = implied(lessOdds);
-   oldest = Math.min(oldest,book.updated);
-   estimates.push({bookmaker:book.name,moreOdds,lessOdds,more:more/(more+less),updated:book.updated});
-  }
-  if (!unavailable && estimates.length < 2) unavailable = "Fewer than two fresh, two-sided sportsbook matches.";
-  const ordered = estimates.map(estimate => estimate.more).sort((a,b) => a-b);
-  const middle = Math.floor(ordered.length/2);
-  const more = unavailable ? null :
-   (ordered[middle] + ordered[Math.floor((ordered.length-1)/2)])/2;
+  const propIssue = comparisonIssue(prop,now,today);
+  const quotes = propIssue ? [] : indexed.get(marketQuoteKey(prop)) || [];
+  const estimate = compareExactMarketQuotes(quotes,Date.parse(prop.eventStart));
+  const {estimates,gameId} = estimate;
+  const unavailable = propIssue || estimate.unavailable;
+  const more = unavailable ? null : estimate.more;
+  const expiresAt = Math.min(estimate.expiresAt,Date.parse(prop.observedAt)+maxQuoteAge);
   for (const item of prop.sides) {
    const pickTier = item.tier?.trim().toLowerCase();
    if (side !== "all" && item.side !== side) continue;
    if (tier === "no-goblins" ? pickTier === "goblin" : tier !== "all" && pickTier !== tier) continue;
    if (pickTier === "demon" && item.side !== "more") continue;
    const chance = more === null ? null : item.side === "more" ? more : 1-more;
-   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,expiresAt:Math.min(starts,oldest+maxQuoteAge),rankedAt:now,unavailable});
+   ranked.push({...prop,side:item.side.toUpperCase(),tier:item.tier,chance,books:estimates.length,estimates,gameId,expiresAt,rankedAt:now,unavailable});
   }
  }
  return ranked.sort((a,b)=>(b.chance ?? -1)-(a.chance ?? -1) || b.books-a.books);
@@ -2482,10 +2514,41 @@ function researchOutsidePick(data,pick,now) {
   player:player.player,team,eventStart:games[0].start};
 }
 
+const outsideCompareBooks = document.getElementById("outsideCompareBooks");
+const outsideBooksStatus = document.getElementById("outsideBooksStatus");
+let outsideQuotes;
+let outsideQuotesChecked = 0;
+
+function outsideMarketEligible(pick,today) {
+ return pick.date === today && modelMarketColumns[pick.market].length === 1;
+}
+
+outsideCompareBooks.addEventListener("click",async () => {
+ outsideCompareBooks.disabled = true;
+ outsideBooksStatus.textContent = "Checking current sportsbook prices…";
+ try {
+  const current = latestBoard?.sportsbook || outsideQuotes || [];
+  const fresh = indexMarketQuotes(current,Date.now()).size;
+  outsideQuotes = fresh ? current : await loadSportsbookLines();
+  outsideQuotesChecked = Date.now();
+  outsideBooksStatus.textContent = outsideQuotes ?
+   "Checked " + new Date(outsideQuotesChecked).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}) +
+   ". PrizePicks availability is checked separately." : "Sportsbook prices are temporarily unavailable.";
+ } finally {
+  renderOutsideOptimizer();
+ }
+});
+
 function renderOutsideOptimizer() {
  clearTimeout(outsideExpiry);
  const now = Date.now();
  const today = outsideSlateDate(now);
+ outsideCompareBooks.disabled = document.getElementById("refreshLines").disabled ||
+  !outsidePicks.some(pick => outsideMarketEligible(pick,today));
+ if (!outsideQuotesChecked) {
+  outsideBooksStatus.textContent = "Exact-price comparison covers points, rebounds, assists and threes. Refreshing prices may use sportsbook credits.";
+ }
+ const manualQuotes = outsideQuotes === undefined ? null : indexMarketQuotes(outsideQuotes,now);
  const rows = document.getElementById("outsideRows");
  const entries = document.getElementById("outsideEntries");
  rows.replaceChildren();
@@ -2541,6 +2604,21 @@ function renderOutsideOptimizer() {
    const stats = document.createElement("small");
    stats.textContent = "Recent stats unavailable for this player and upcoming slate.";
    title.append(stats);
+  }
+  if (manualQuotes && outsideMarketEligible(pick,today)) {
+   const quotes = manualQuotes.get(marketQuoteKey(pick)) || [];
+   const price = compareExactMarketQuotes(quotes,research ? Date.parse(research.eventStart) : undefined);
+   const note = document.createElement("small");
+   if (price.more === null) {
+    note.textContent = price.unavailable;
+   } else {
+    const chance = pick.side === "MORE" ? price.more : 1-price.more;
+    note.textContent = "Sportsbook estimate · " + formatPickEstimate(chance) + " · " +
+     price.estimates.length + " books · " + marketEstimateRange({...price,side:pick.side}) +
+     (Number.isInteger(pick.line) ? " if no tie" : "");
+    expiries.push(price.expiresAt);
+   }
+   title.append(note);
   }
   const result = document.createElement("span");
   result.className = "outside-status";
@@ -2686,10 +2764,13 @@ async function scanAndRankProps() {
   if (!prizePicks) status.textContent = document.getElementById("prizePicksStatus").textContent;
   const now = Date.now();
   const today = pacificDay.format(now);
-  const hasOutsideSlate = outsidePicks.some(pick => pick.date === outsideSlateDate(now));
-  const needsOdds = (estimateSource.value === "auto" || hasOutsideSlate) && prizePicks && !prizePicks.savedBoard &&
+  const date = outsideSlateDate(now);
+  const outsideToday = new Set(outsidePicks.filter(pick => outsideMarketEligible(pick,date))
+   .map(pick => marketQuoteKey(pick) + pick.side));
+  const needsOdds = prizePicks && !prizePicks.savedBoard &&
    prizePicks.lines.some(prop => !comparisonIssue(prop,now,today) &&
-    modelMarketColumns[supportedMarkets.get(prop.market.trim().toLowerCase())].length === 1);
+    modelMarketColumns[supportedMarkets.get(prop.market.trim().toLowerCase())].length === 1 &&
+    (estimateSource.value === "auto" || prop.sides.some(side => outsideToday.has(marketQuoteKey(prop) + side.side.toUpperCase()))));
   if (needsOdds) status.textContent = "Checking sportsbook quotes…";
   const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
   nbaAvailability = await availabilityRequest;
@@ -2759,7 +2840,8 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds,{searchOnly = false} 
     const item = document.createElement("p");
     item.textContent = quote.bookmaker + " · MORE " + formatOdds(quote.moreOdds) +
      " · LESS " + formatOdds(quote.lessOdds) + " · " + prop.side + " estimate " +
-     (100*(prop.side === "MORE" ? quote.more : 1-quote.more)).toFixed(1) + "%";
+     (100*(prop.side === "MORE" ? quote.more : 1-quote.more)).toFixed(1) + "% · " +
+     new Date(quote.updated).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
     details.append(item);
    }
    if (Number.isFinite(prop.openingLine)) {
