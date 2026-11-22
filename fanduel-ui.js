@@ -279,13 +279,14 @@ function renderPlayerRows() {
     nameCell.textContent = player.name;
     const meta = document.createElement("small");
     meta.className = "player-mobile-meta";
-    meta.textContent = [player.positions.join("/"),player.team,player.status,player.source || "Missing projection"]
+    const injury = player.injurySource ? player.status+" ("+player.injurySource+")" : player.status;
+    meta.textContent = [player.positions.join("/"),player.team,injury,player.source || "Missing projection"]
       .filter(Boolean).join(" · ");
     nameCell.append(meta);
     for (const [value,desktopOnly] of [
       [player.positions.join("/"),true],[player.team,true],[dollars.format(player.salary),false],
       [Number.isFinite(player.points) ? player.points.toFixed(1) : "—",false],
-      [player.source || "Missing",true],[player.status || "—",true]
+      [player.source || "Missing",true],[injury || "—",true]
     ]) {
       const cell = row.insertCell();
       cell.textContent = value;
@@ -862,12 +863,14 @@ async function loadPublicPool(listOnly = false) {
     playerPage = 0;
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
     const coverage = data.projectionCoverage;
+    const injuries = data.injuryCoverage;
     const estimateSummary = coverage ?
       " Daily Fantasy Fuel projections matched "+coverage.matched+" of "+coverage.eligible+
       " available players (updated "+new Date(coverage.updatedAt).toLocaleTimeString()+"). Other players use FanDuel FPPG when available." :
       data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
     byId("fdStatus").textContent = data.label+" · "+data.date+" · "+players.length+" players across "+data.gameCount+
       " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+estimateSummary+
+      (injuries ? " ESPN injury updates excluded "+injuries.excluded+" additional players." : "")+
       (removedLocks.length ? " Unlocked after refresh: "+removedLocks.join(", ")+".": "");
     byId("fdPool").hidden = false;
     renderPlayers();
