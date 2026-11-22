@@ -109,7 +109,7 @@ async function refreshPrizePicksBoard(request, env) {
       await env.PRIZEPICKS_BOARD.put("cooldown",JSON.stringify(details));
       return limited(details,saved);
     }
-    if (!response.ok) return json({error:"PrizePicks provider unavailable"},502);
+    if (!response.ok) return json({error:"PrizePicks provider unavailable",providerStatus:response.status},502);
     const data = await response.json();
     if (data.meta?.mode !== "live" || data.meta.is_demo === true || !Array.isArray(data.data)) {
       return json({error:"PrizePicks provider returned an unexpected response"},502);
@@ -168,12 +168,33 @@ async function prizePicksLines(env) {
 
 export default {
   async scheduled(controller,env) {
-    if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) return;
-    const request = new Request("https://lppe-api.lord-joseph.workers.dev/api/prizepicks");
-    const response = await refreshPrizePicksBoard(request,env);
-    if (!response.ok) return;
-    const board = await response.json();
-    if (!board.savedBoard) await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(board));
+    const scheduledAt = new Date(controller.scheduledTime).toISOString();
+    const log = (outcome,details = {}) => console.log(JSON.stringify({
+      event:"prizepicks_refresh",scheduledAt,outcome,...details
+    }));
+    if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) {
+      log("missing_configuration",{keyConfigured:Boolean(env.PRIZEPICKS_API_KEY),kvConfigured:Boolean(env.PRIZEPICKS_BOARD)});
+      return;
+    }
+    try {
+      const request = new Request("https://lppe-api.lord-joseph.workers.dev/api/prizepicks");
+      const response = await refreshPrizePicksBoard(request,env);
+      const board = await response.json();
+      if (!response.ok) {
+        log("refresh_failed",{status:response.status,reason:board.error,providerStatus:board.providerStatus,
+          providerCode:board.providerCode,retryAt:board.retryAt});
+        return;
+      }
+      if (board.savedBoard) {
+        log("retained_previous_board",{providerCode:board.providerCode,retryAt:board.retryAt});
+        return;
+      }
+      await env.PRIZEPICKS_BOARD.put("board",JSON.stringify(board));
+      log("saved",{lineCount:board.lines.length,observedAt:board.observedAt});
+    } catch {
+      log("scheduled_handler_failed");
+      throw new Error("PrizePicks scheduled refresh could not save its result");
+    }
   },
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, {status:204,
