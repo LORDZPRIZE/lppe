@@ -213,7 +213,8 @@ test("duplicate offers and accent variants do not crowd out distinct GREEN entri
   const offer = (player,gameId,chance) => ({
     player,gameId,chance,market:"Points",line:24.5,side:"MORE",tier:"standard",expiresAt:Date.now()+300000
   });
-  const duplicates = Array.from({length:40},() => offer("José Smith","game-1",0.8));
+  const first = offer("José Smith","game-1",0.8);
+  const duplicates = Array.from({length:40},() => ({...first}));
   const ranked = suggest([...duplicates,offer("Jose Smith","game-2",0.75),
     offer("Mike Jones","game-2",0.7),offer("Sam Young","game-1",0.65)],2,30);
   assert.equal(ranked.length,3);
@@ -264,4 +265,41 @@ test("recent minutes compares disjoint windows and requires four games", async (
   assert.equal(change(games.slice(0,3)),null);
   const {recent,previous,previousCount} = change(games);
   assert.deepEqual([recent,previous,previousCount],[32,24,4]);
+});
+
+test("bulk import previews valid, duplicate and malformed lines without changing saved picks", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const section = (start,end) => html.slice(html.indexOf(start),html.indexOf(end));
+  const preview = vm.runInNewContext([
+    section("const supportedMarkets","const pacificDay"),
+    section("const modelPlayerKey","const modelTeamKey"),
+    section("function parseOutsidePicks","let outsidePicks"),
+    section("function outsidePickIdentity","function recordOutsideNBAEstimates"),
+    "previewOutsideImport"
+  ].join("\n"));
+  const rows = preview([
+    "José Smith | Points | 20.5 | more",
+    "Jose Smith | points | 20.5 | MORE",
+    "Invalid row",
+    "2026-11-23 | Other | Jane Brown | assists | 4.5 | LESS"
+  ].join("\n"),"2026-11-22","PrizePicks",[]);
+  assert.deepEqual(Array.from(rows,row => row.pick?.date ?? row.message),
+    ["2026-11-22","Duplicate pick","Check the player, market, line and side","2026-11-23"]);
+});
+
+test("entered predictions keep the first model estimate across imports from different sources", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const source = html.slice(html.indexOf("function recordOutsideNBAEstimates"),html.indexOf("function researchOutsidePick"));
+  const record = vm.runInNewContext(source+"\nrecordOutsideNBAEstimates",{
+    modelPlayerKey: player => player.toLowerCase(),
+    researchOutsidePick: (model,pick) => model && {...model,player:pick.player,team:"BOS",eventStart}
+  });
+  const ledger = {entries:{}};
+  const pick = {player:"Jose Smith",market:"points",line:20.5,side:"MORE",source:"PrizePicks"};
+  record(ledger,[pick],{chance:.62},now);
+  record(ledger,[{...pick,source:"Other"}],{chance:.55},now+60000);
+  const [entry] = Object.values(ledger.entries);
+  assert.equal(Object.keys(ledger.entries).length,1);
+  assert.equal(entry.chance,.62);
+  assert.equal(entry.saved,now);
 });
