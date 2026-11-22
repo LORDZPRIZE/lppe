@@ -30,11 +30,11 @@ function clearRemoval() {
   byId("fdRemovalStatus").textContent = "";
 }
 
-function removePlayer(id) {
+function removePlayer(id, lineup = lineups[0]) {
   const player = players.find(candidate => candidate.id === id);
   if (!player || player.selection === "exclude") return;
   lastRemoval = {
-    player,previousSelection:player.selection,previousObjective:objective.value,previousTopLineup:lineups[0]?.ids
+    player,previousSelection:player.selection,previousObjective:objective.value,previousLineup:lineup
   };
   player.selection = "exclude";
   objective.value = "projection";
@@ -47,6 +47,7 @@ function rebuildAfterRemoval() {
   clearLineups();
   renderPlayers();
   buildCurrentLineups();
+  showBuildResults();
 }
 
 byId("fdUndoRemoval").addEventListener("click",() => {
@@ -202,6 +203,18 @@ importForm.addEventListener("submit",async event => {
   }
 });
 
+function removalSummary(player,previous,rebuilt) {
+  const removed = player.name + " excluded.";
+  if (!rebuilt) return removed + " No valid replacement lineup found. You can undo the removal.";
+  if (!previous?.ids.has(player.id)) return removed + " Lineups rebuilt.";
+  const additions = rebuilt.picks.filter(pick => !previous.ids.has(pick.player.id)).map(pick => pick.player.name);
+  const delta = rebuilt.points - previous.points;
+  const change = Math.abs(delta) < .005 ? "unchanged" :
+    (delta > 0 ? "+" : "−") + Math.abs(delta).toFixed(2) + " FPTS";
+  return removed + " New top lineup adds " + additions.join(", ") + ". Projected total " +
+    previous.points.toFixed(2) + " → " + rebuilt.points.toFixed(2) + " FPTS (" + change + ").";
+}
+
 function renderLineups(result,requested,highCeiling) {
   const status = byId("fdBuildStatus");
   lineups = result.simulation ? result.lineups : [...result.lineups].sort((a,b) => highCeiling ? b.ceiling - a.ceiling : b.points - a.points);
@@ -213,12 +226,10 @@ function renderLineups(result,requested,highCeiling) {
   }
   if (result.limited) status.textContent += " The search reached its limit. A better lineup or additional alternatives may exist.";
   if (lastRemoval) {
-    const {player,previousTopLineup} = lastRemoval;
-    const additions = previousTopLineup?.has(player.id) && lineups.length
-      ? lineups[0].picks.filter(pick => !previousTopLineup.has(pick.player.id)).map(pick => pick.player.name)
-      : [];
-    byId("fdRemovalStatus").textContent = player.name+" removed."+
-      (additions.length ? " Added to the top lineup: "+additions.join(", ")+".":"");
+    const {player,previousLineup} = lastRemoval;
+    const summary = removalSummary(player,previousLineup,lineups[0]);
+    byId("fdRemovalStatus").textContent = summary;
+    status.textContent += " " + summary;
   }
   const output = byId("fdResults");
   for (const [index,lineup] of lineups.entries()) {
@@ -256,7 +267,7 @@ function renderLineups(result,requested,highCeiling) {
       remove.textContent = "Remove";
       remove.setAttribute("aria-label","Remove "+player.name+" and rebuild for projected points");
       remove.addEventListener("click",() => {
-        removePlayer(player.id);
+        removePlayer(player.id,lineup);
         byId("fdUndoRemoval").focus();
       });
       row.cells[1].append(remove);
@@ -345,7 +356,15 @@ function buildCurrentLineups() {
   optimizer.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
     options:{exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
 }
-build.addEventListener("click",buildCurrentLineups);
+function showBuildResults() {
+  const panel = byId("fdResultsPanel");
+  if (!panel.hidden) panel.scrollIntoView({block:"start"});
+}
+
+build.addEventListener("click",event => {
+  buildCurrentLineups();
+  if (event.isTrusted) showBuildResults();
+});
 
 async function loadPublicPool() {
   autoRequest?.abort();
