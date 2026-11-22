@@ -176,7 +176,6 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <p class="muted" id="fdSlateCheck" role="status"></p>
   <details id="fdGames" hidden><summary>Games in this slate</summary><ul id="fdGameList"></ul></details>
   <div class="controls">
-   <label>Find a player or team <input id="fdSearch" type="search" placeholder="Player or team"></label>
    <label>Mode <select id="fdMode"><option value="gpp">GPP tournament</option><option value="cash">Cash</option></select></label>
    <label data-gpp>Lineups <input id="fdCount" type="number" min="1" max="20" value="5" required></label>
    <label data-gpp>Minimum different players per lineup <input id="fdDifference" type="number" min="1" max="9" value="2" required></label>
@@ -186,6 +185,13 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   </div>
   <p class="muted" id="fdExposureHint">Exposure limits use the requested lineup count and round down. The lower of the overall and player limits applies. Locks are exempt.</p>
   <p class="muted" id="fdTeamRules"></p>
+  <div class="controls">
+   <label>Find a player or team <input id="fdSearch" type="search" placeholder="Player or team"></label>
+   <label>Position <select id="fdPositionFilter"></select></label>
+   <label>Selection <select id="fdSelectionFilter"><option value="">All players</option><option value="available">Available</option><option value="lock">Locked</option><option value="exclude">Excluded</option></select></label>
+   <label>Sort players <select id="fdPlayerSort"><option value="projection">Projected points</option><option value="value">Points per $1,000</option><option value="ceiling">Ceiling points</option><option value="salary">Lowest salary</option></select></label>
+  </div>
+  <p class="muted" id="fdVisiblePlayers" role="status"></p>
   <div class="tablewrap"><table><thead><tr><th>Player</th><th>Position</th><th>Team</th><th>Salary</th><th>FPTS</th><th>Source</th><th>Injury status</th><th>Selection</th><th data-gpp>Max exposure (%)</th></tr></thead>
    <tbody id="fdPlayers"></tbody></table></div>
  </section>

@@ -9,6 +9,16 @@ const sport = byId("fdSport");
 const salaries = byId("fdSalaries");
 const projections = byId("fdProjections");
 const search = byId("fdSearch");
+const positionFilter = byId("fdPositionFilter");
+const selectionFilter = byId("fdSelectionFilter");
+const playerSort = byId("fdPlayerSort");
+const sortPlayers = {
+  projection:(a,b) => (b.points ?? -Infinity) - (a.points ?? -Infinity),
+  value:(a,b) => ((b.points ?? -Infinity) / b.salary) - ((a.points ?? -Infinity) / a.salary),
+  ceiling:(a,b) => (Number.isFinite(b.ceiling) ? b.ceiling : -Infinity) -
+    (Number.isFinite(a.ceiling) ? a.ceiling : -Infinity),
+  salary:(a,b) => a.salary - b.salary
+};
 const count = byId("fdCount");
 const difference = byId("fdDifference");
 const exposure = byId("fdExposure");
@@ -22,6 +32,7 @@ let lineups = [];
 let optimizer;
 let autoRequest;
 let slateLockAt = null;
+let loadedSalaryFile;
 let lastRemoval;
 
 function clearRemoval() {
@@ -109,7 +120,14 @@ function renderPlayers() {
   const body = byId("fdPlayers");
   body.replaceChildren();
   const query = search.value.trim().toLowerCase();
-  for (const player of players.filter(player => (player.name+" "+player.team).toLowerCase().includes(query))) {
+  const visible = players.filter(player =>
+    (player.name+" "+player.team).toLowerCase().includes(query) &&
+    (!positionFilter.value || player.positions.includes(positionFilter.value)) &&
+    (!selectionFilter.value || player.selection === selectionFilter.value));
+  visible.sort((a,b) => sortPlayers[playerSort.value](a,b) || a.name.localeCompare(b.name));
+  byId("fdVisiblePlayers").textContent = visible.length ?
+    visible.length+" of "+players.length+" players shown" : "No players match these filters.";
+  for (const player of visible) {
     const row = body.insertRow();
     for (const value of [player.name,player.positions.join("/"),player.team,dollars.format(player.salary),
       Number.isFinite(player.points) ? player.points.toFixed(1) : "—",player.source || "Missing",player.status || "—"]) {
@@ -139,7 +157,8 @@ function renderPlayers() {
         return;
       }
       clearLineups();
-      renderSlateCheck();
+      if (selectionFilter.value) renderPlayers();
+      else renderSlateCheck();
     });
     row.insertCell().append(selection);
     if (mode.value === "gpp") {
@@ -188,15 +207,28 @@ importForm.addEventListener("submit",async event => {
     const projectionText = await projectionFile?.text();
     if (projectionFile && !projectionText.trim()) throw new Error("The projections file is empty. Choose another file or use the salary file alone.");
     const result = importPlayers(await salaryFile.text(),projectionText,sport.value);
+    if (salaryFile === loadedSalaryFile) {
+      const previous = new Map(players.map(player => [player.id,player]));
+      for (const player of result.players) {
+        const prior = previous.get(player.id);
+        if (!prior) continue;
+        player.selection = prior.selection === "lock" && !Number.isFinite(player.points) ?
+          "available" : prior.selection;
+        player.maxExposure = prior.maxExposure;
+      }
+    } else {
+      search.value = positionFilter.value = selectionFilter.value = "";
+    }
+    loadedSalaryFile = salaryFile;
     slateLockAt = null;
     clearRemoval();
     clearLineups();
-    players = result.players.sort((a,b) => (b.points ?? -Infinity)-(a.points ?? -Infinity) || a.name.localeCompare(b.name));
+    players = result.players;
     const missing = players.filter(player => !Number.isFinite(player.points)).length;
     const averages = players.filter(player => player.source === "FanDuel FPPG").length;
     const excluded = players.filter(player => player.selection === "exclude").length;
     byId("fdStatus").textContent = players.length+" players loaded. "+averages+" use historical FPPG, "+
-      missing+" have no projection, and "+excluded+" were excluded based on CSV injury status."+
+      missing+" have no projection, and "+excluded+" are excluded."+
       (result.skipped ? " Skipped "+result.skipped+" rows without usable player data." : "");
     if (projectionFile) byId("fdStatus").textContent += " Custom projections matched "+result.matched+" of "+players.length+" players.";
     if (result.preview) byId("fdStatus").textContent += " Cheatsheet loaded. Review exports use local IDs for players without FanDuel IDs.";
@@ -242,6 +274,7 @@ function renderLineups(result,requested,highCeiling) {
     status.textContent = "Built "+lineups.length+" of "+requested+" lineups. Ranked by modeled top-10% finish share across "+
       result.simulation.scenarios+" scenarios and "+result.simulation.opponents+" modeled opponents. Estimates use slate projections and synthetic opponents.";
   }
+  if (result.restriction) status.textContent += " " + result.restriction;
   if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
   if (result.limited) status.textContent += result.exactFirst ? " Additional lineup searches reached their limit." :
     " The search reached its limit. A better lineup or additional alternatives may exist.";
@@ -444,6 +477,7 @@ async function loadPublicPool() {
     clearLineups();
     clearRemoval();
     slateLockAt = data.lockAt;
+    loadedSalaryFile = undefined;
     players = data.players;
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
     const baseline = data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
@@ -471,6 +505,9 @@ function applySport() {
   byId("fdTeamRules").textContent = "Lock or exclude players before building. Use at least three teams and at most "+
     profile.maxTeam+" players per team"+(profile.maxHitters ? ", including at most "+profile.maxHitters+" hitters" : "")+
     ". Check current player availability before using a lineup.";
+  const positions = [...new Set(profile.roster.flatMap(([,eligible]) => eligible))];
+  positionFilter.replaceChildren(new Option("All positions",""),
+    ...positions.map(position => new Option(position,position)));
   difference.max = profile.roster.length;
   difference.value = Math.min(difference.valueAsNumber || 2,profile.roster.length);
 }
@@ -484,6 +521,8 @@ sport.addEventListener("change",() => {
   clearRemoval();
   players = [];
   slateLockAt = null;
+  loadedSalaryFile = undefined;
+  search.value = selectionFilter.value = "";
   importForm.reset();
   byId("fdSalaryOnly").hidden = true;
   clearLineups();
@@ -514,6 +553,9 @@ applyMode();
 loadPublicPool();
 
 search.addEventListener("input",renderPlayers);
+for (const filter of [positionFilter,selectionFilter,playerSort]) {
+  filter.addEventListener("change",renderPlayers);
+}
 count.addEventListener("change",applyMode);
 difference.addEventListener("change",applyMode);
 exposure.addEventListener("change",applyMode);
