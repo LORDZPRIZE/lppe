@@ -166,6 +166,42 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   return {players:pool,skipped,preview,matched};
 }
 
+function requiredLockSlots(locked, profile) {
+  if (!locked.length) return 0;
+  if (locked.length > profile.roster.length) throw new Error("Lock at most " + profile.roster.length + " players.");
+  if (locked.reduce((sum,player) => sum + player.salary,0) > profile.salaryCap) {
+    throw new Error("Locked salaries exceed the salary cap. Unlock at least one player.");
+  }
+  const teams = new Map();
+  for (const player of locked) {
+    const total = (teams.get(player.team) || 0) + 1;
+    if (total > profile.maxTeam) throw new Error("Too many locks from " + player.team + ". Keep at most " + profile.maxTeam + " from one team.");
+    teams.set(player.team,total);
+  }
+
+  // Any group of locks needs at least as many distinct eligible slots as players.
+  // Classic rosters have at most nine slots, including FLEX and multi-position slots.
+  const eligibleSlots = locked.map(player => profile.roster.reduce((mask,[,positions],index) =>
+    player.positions.some(position => positions.includes(position)) ? mask | (1 << index) : mask, 0));
+  let required = 0;
+  for (let group = 1; group < (1 << locked.length); group++) {
+    let slots = 0;
+    const names = [];
+    for (let index = 0; index < locked.length; index++) {
+      if (!(group & (1 << index))) continue;
+      slots |= eligibleSlots[index];
+      names.push(locked[index].name);
+    }
+    const labels = profile.roster.filter((_,index) => slots & (1 << index)).map(([label]) => label);
+    if (labels.length === names.length) required |= slots;
+    if (labels.length < names.length) {
+      throw new Error(names.join(", ") + " need " + names.length + " slots. Eligible slots: " +
+        (labels.join(", ") || "none") + ". Unlock at least one of these players.");
+    }
+  }
+  return required;
+}
+
 export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false} = {}) {
   const profile = rosterProfile(sport);
   const roster = profile.roster;
@@ -177,7 +213,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   const eligible = players.filter(player => player.selection !== "exclude" && Number.isFinite(player.points));
   const locked = players.filter(player => player.selection === "lock");
   if (locked.some(player => !Number.isFinite(player.points))) throw new Error("A locked player is missing a projection.");
-  if (locked.length > roster.length) throw new Error("Lock at most " + roster.length + " players.");
+  const reservedSlots = requiredLockSlots(locked,profile);
   if (new Set(eligible.map(player => player.team)).size < 3) return {lineups:[],limited:false};
   const usage = new Map();
   const exposureLimits = new Map(eligible.map(player => [
@@ -185,7 +221,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   ]));
   const lockedIds = new Set(locked.map(player => player.id));
   const slots = roster.map(([label,positions],index) => ({
-    label,index,pool:eligible.filter(player => player.positions.some(position => positions.includes(position)))
+    label,index,pool:eligible.filter(player => (!(reservedSlots & (1 << index)) || lockedIds.has(player.id)) &&
+      player.positions.some(position => positions.includes(position)))
       .sort((a,b) => b.points-a.points || a.salary-b.salary || a.id.localeCompare(b.id))
   })).sort((a,b) => a.pool.length-b.pool.length || a.index-b.index);
   if (slots.some(slot => !slot.pool.length)) return {lineups:[],limited:false};
