@@ -2,6 +2,8 @@ import {readFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
 import {buildLineups, importPlayers, parseCSV} from "../fanduel-optimizer.js";
 
+import {createContestSimulator} from "./nfl-contest-sim.mjs";
+
 const mean = values => values.reduce((sum,value) => sum+value,0)/values.length;
 const round = value => Number(value.toFixed(3));
 const read = path => readFileSync(path,"utf8");
@@ -18,6 +20,13 @@ function benchmarkSlate(slate,root,count) {
     }
     actuals.set(row.id,Number(row.actualfpts));
   }
+  if (Boolean(slate.scenarios) !== Boolean(slate.field)) {
+    throw new Error("Contest simulation requires both scenarios and field CSVs.");
+  }
+  const simulate = slate.scenarios ? createContestSimulator(
+    readSlateFile(slate.scenarios),readSlateFile(slate.field),players
+  ) : null;
+  const candidates = [];
   const snapshots = [
     ["Projection",players,1,{}],
     ["High Ceiling",players.map(player => ({
@@ -25,7 +34,7 @@ function benchmarkSlate(slate,root,count) {
     })),1,{}],
     ["Diversified + QB stack",players,2,{stack:1}]
   ];
-  return snapshots.map(([strategy,pool,difference,options]) => {
+  const strategies = snapshots.map(([strategy,pool,difference,options]) => {
     if (!pool.some(player => player.selection !== "exclude" && Number.isFinite(player.points))) {
       return {strategy,skipped:"No eligible players with estimates for this objective."};
     }
@@ -33,20 +42,37 @@ function benchmarkSlate(slate,root,count) {
     if (lineups.length !== count) {
       return {strategy,built:lineups.length,limited,skipped:"Could not build the requested number of lineups."};
     }
+    candidates.push(...lineups);
+    return summarize(strategy,lineups,limited);
+  });
+  if (simulate && candidates.length) {
+    const unique = new Map(candidates.map(lineup => [JSON.stringify([...lineup.ids].sort()),lineup]));
+    const ranked = [...unique.values()].sort((a,b) => {
+      const left = simulate(a);
+      const right = simulate(b);
+      return right.topOnePercentShare-left.topOnePercentShare || right.winShare-left.winShare ||
+        left.fieldDuplicates-right.fieldDuplicates;
+    });
+    strategies.push(summarize("Contest simulation selection",ranked.slice(0,count),strategies.some(result => result.limited)));
+  }
+  return strategies;
+
+  function summarize(strategy,lineups,limited) {
     const scores = lineups.map(lineup => lineup.picks.reduce((sum,{player}) => {
       if (!actuals.has(player.id)) throw new Error("Missing actual score for "+player.name+" ("+player.id+").");
       return sum+actuals.get(player.id);
     },0));
     const result = {
-      strategy,built:count,limited,
+      strategy,built:lineups.length,limited,
       lineupScores:scores.map(round),meanActualFpts:round(mean(scores)),bestActualFpts:round(Math.max(...scores))
     };
     if (Number.isFinite(slate.cashScore)) result.cashCutoffHits = scores.filter(score => round(score) >= round(slate.cashScore)).length;
     if (Number.isFinite(slate.topOnePercentScore)) {
       result.topOnePercentCutoffHits = scores.filter(score => round(score) >= round(slate.topOnePercentScore)).length;
     }
+    if (simulate) result.contestSimulation = lineups.map(simulate);
     return result;
-  });
+  }
 }
 
 try {

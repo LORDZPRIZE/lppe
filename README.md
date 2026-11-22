@@ -24,3 +24,12 @@ Run `node scripts/benchmark-nfl.mjs path/to/manifest.json` with Node.js 22.7 or 
 Paths are relative to the manifest. Use archived pre-kickoff salary, injury status, and projections for the exact FanDuel slate. The projections file is optional if the salary file already has those estimates. High Ceiling requires a numeric `Ceiling` column. The actuals file needs `ID,Actual FPTS` using the same player IDs, including defenses and zero-point players. Missing actuals for selected players stop the run.
 
 Cutoffs are optional. Replace the sample numbers with actual contest scores. Hits include ties at the cutoff and do not measure exact payout or ROI. The diversified strategy combines a two-player minimum difference with a QB plus one teammate at WR or TE. Hold out later slates from any tuning before comparing strategies.
+
+### Contest simulation inputs
+
+To simulate a benchmark slate against an opponent field, add both `"scenarios": "scenarios.csv"` and `"field": "field.csv"` to that slate in the manifest.
+
+- **Scenarios** use `Scenario,ID,FPTS`. Each scenario is a full set of joint player outcomes for the same slate. Players from the same game must share the same scenario when their scores come from a correlated game model. Supply a numeric score, including explicit zeroes, for every candidate and opponent player in each scenario.
+- **Field** uses `QB,RB1,RB2,WR1,WR2,WR3,TE,FLEX,DEF` and the salary CSV's player IDs. Each row is one opponent entry. Retain repeated rosters so the benchmark counts duplicate entries.
+- The benchmark reports observed duplicate rosters in the supplied field and average win and top-1% shares across scenarios. Tied entries share the places available to them. Top-1% places are rounded down, with a minimum of one, and include one candidate against the supplied field at a time.
+- The simulation strategy ranks the union of candidates from the baseline strategies by top-1% share, win share, and then fewer field duplicates. It selects the same number of lineups and evaluates their actual scores alongside the baseline results. Use pre-kickoff simulations and a pre-kickoff modeled field for comparisons you intend to reproduce live.
