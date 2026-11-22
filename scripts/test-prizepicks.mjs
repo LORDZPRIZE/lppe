@@ -7,6 +7,7 @@ import worker from "../worker/lppe-api.js";
 
 const now = Date.parse("2026-11-22T20:20:00Z");
 const observedAt = new Date(now-60000).toISOString();
+const firstSlot = Date.parse("2026-11-22T18:00:00Z");
 const eventStart = "2026-11-22T22:00:00Z";
 const compactOffer = {
   id:"pp_1",league:"NBA",player:"José Smith",team:"BOS",stat:"Points",period:"Full Game",
@@ -40,7 +41,7 @@ test("scheduled refresh saves compact live offers and reuses the validator witho
       mode:"live",source_status:"partial",observed_at:observedAt
     }},{headers:{ETag:'"1"'}});
   });
-  await worker.scheduled({scheduledTime:now},env);
+  await worker.scheduled({scheduledTime:firstSlot},env);
   const first = await (await worker.fetch(request,env)).json();
   assert.equal(first.partial,true);
   assert.deepEqual(first.lines,[{id:"pp_1",player:"José Smith",team:"BOS",market:"Points",
@@ -48,15 +49,15 @@ test("scheduled refresh saves compact live offers and reuses the validator witho
     eventStart,opponent:"NYK",openingLine:19.5,observedAt}]);
   assert.equal(first.lastRefresh.outcome,"saved");
 
-  await worker.scheduled({scheduledTime:now},env);
+  await worker.scheduled({scheduledTime:firstSlot},env);
   assert.equal(provider.mock.callCount(),1);
-  await worker.scheduled({scheduledTime:now+5*3600000},env);
+  await worker.scheduled({scheduledTime:firstSlot+5*3600000},env);
   const second = await (await worker.fetch(request,env)).json();
   assert.equal(second.lastRefresh.outcome,"unchanged");
   assert.equal(second.lines[0].observedAt,observedAt);
 
   provider.mock.mockImplementation(async () => new Response(null,{status:401}));
-  await worker.scheduled({scheduledTime:now+10*3600000},env);
+  await worker.scheduled({scheduledTime:firstSlot+8*3600000},env);
   const failed = await (await worker.fetch(request,env)).json();
   assert.deepEqual(failed.lines,first.lines);
   assert.equal(failed.lastRefresh.providerStatus,401);
@@ -71,7 +72,7 @@ test("scheduled refresh exposes provider limits and rejects demo data", async t 
   const provider = t.mock.method(globalThis,"fetch",async () => Response.json({
     data:[compactOffer],meta:{mode:"demo"}
   }));
-  await worker.scheduled({scheduledTime:now},env);
+  await worker.scheduled({scheduledTime:firstSlot},env);
   const demo = await (await worker.fetch(request,env)).json();
   assert.equal(demo.scheduled,true);
   assert.equal(demo.lines.length,0);
@@ -79,7 +80,7 @@ test("scheduled refresh exposes provider limits and rejects demo data", async t 
 
   provider.mock.mockImplementation(async () => Response.json({error:{code:"RATE_LIMIT_EXCEEDED"}},
     {status:429,headers:{"Retry-After":"120"}}));
-  await worker.scheduled({scheduledTime:now+5*3600000},env);
+  await worker.scheduled({scheduledTime:firstSlot+5*3600000},env);
   const limited = await worker.fetch(request,env);
   assert.equal(limited.status,429);
   assert.equal((await limited.json()).providerCode,"RATE_LIMIT_EXCEEDED");
@@ -170,4 +171,35 @@ test("half-point estimates react to the spread and sum to one across sides", asy
   const push = estimate([25,18,20,30,31],20,"MORE","points");
   assert.equal(push.ties,1);
   assert.equal(push.chance,0.625);
+});
+
+test("pregame scheduling checks before tipoff and limits provider reads across schedule changes", async t => {
+  const env = {PRIZEPICKS_API_KEY:"test-key",PRIZEPICKS_BOARD:mockKV(),PRIZEPICKS_PREGAME_REFRESH:"1"};
+  const day = "2026-11-22";
+  const game = hour => ({id:String(hour),date:day+"T"+hour+":30:00Z",season:{type:2}});
+  let upcoming = [game(18),game(20),game(22),game(23)];
+  let requests = 0;
+  t.mock.method(globalThis,"fetch",async url => {
+    if (url.includes("espn.com")) return Response.json({events:upcoming});
+    requests++;
+    return Response.json({data:[compactOffer],meta:{mode:"live",source_status:"fresh",observed_at:observedAt}});
+  });
+  async function tick(slot) {
+    await worker.scheduled({scheduledTime:Date.parse(day+"T"+slot+":00Z")},env);
+  }
+  await tick("18:00");
+  assert.equal(requests,0);
+  await tick("18:15");
+  await tick("18:15");
+  assert.equal(requests,1);
+  await tick("20:15");
+  await tick("22:15");
+  assert.equal(requests,3);
+  upcoming = [game(23)];
+  await tick("23:15");
+  assert.equal(requests,3);
+  const request = new Request("https://worker.example/api/prizepicks");
+  const board = await (await worker.fetch(request,env)).json();
+  assert.equal(board.refreshPolicy,"pregame");
+  assert.equal(board.lastRefresh.outcome,"saved");
 });
