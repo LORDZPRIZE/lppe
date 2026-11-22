@@ -138,8 +138,8 @@ importForm.addEventListener("submit",async event => {
 
 function renderLineups(result,requested) {
   const status = byId("fdBuildStatus");
-  lineups = result.lineups;
-  status.textContent = lineups.length ? "Built "+lineups.length+" of "+requested+" requested lineups." :
+  lineups = [...result.lineups].sort((a,b) => b.points - a.points);
+  status.textContent = lineups.length ? "Built "+lineups.length+" of "+requested+" requested lineups. Ranked by total projected points." :
     "No valid lineup found. Check projections, locks, exclusions, and roster eligibility.";
   if (result.limited) status.textContent += " The search reached its limit. A better lineup or additional alternatives may exist.";
   const output = byId("fdResults");
@@ -147,7 +147,10 @@ function renderLineups(result,requested) {
     const details = document.createElement("details");
     details.open = index === 0;
     const summary = document.createElement("summary");
-    summary.textContent = "Lineup "+(index+1)+" · "+lineup.points.toFixed(1)+" projected FPTS · "+dollars.format(lineup.salary);
+    const total = lineup.points.toFixed(2);
+    const projected = document.createElement("strong");
+    projected.textContent = total+" total projected FPTS";
+    summary.append("Lineup "+(index+1)+" · ",projected," · "+dollars.format(lineup.salary));
     const wrapper = document.createElement("div");
     wrapper.className = "tablewrap";
     const table = document.createElement("table");
@@ -161,10 +164,18 @@ function renderLineups(result,requested) {
     const body = table.createTBody();
     for (const {slot,player} of lineup.picks) {
       const row = body.insertRow();
-      for (const value of [profiles[sport.value].roster[slot][0],player.name,player.team,dollars.format(player.salary),player.points.toFixed(1)]) {
+      for (const value of [profiles[sport.value].roster[slot][0],player.name,player.team,dollars.format(player.salary),player.points.toFixed(2)]) {
         row.insertCell().textContent = value;
       }
     }
+    const totals = table.createTFoot().insertRow();
+    const totalLabel = document.createElement("th");
+    totalLabel.scope = "row";
+    totalLabel.colSpan = 3;
+    totalLabel.textContent = "Lineup total";
+    totals.append(totalLabel);
+    totals.insertCell().textContent = dollars.format(lineup.salary);
+    totals.insertCell().textContent = total;
     wrapper.append(table);
     details.append(summary,wrapper);
     output.append(details);

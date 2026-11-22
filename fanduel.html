@@ -18,6 +18,7 @@ button:disabled{opacity:.45;cursor:default}a:focus-visible,button:focus-visible,
 .tablewrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:640px}
 td,th{text-align:left;padding:10px;border-bottom:1px solid #293650;font-size:.875rem}
 details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
+#fdResults tfoot{font-weight:bold}#fdResults summary strong{color:#7debb7}
 #fdStatus{min-height:1.5em}.results-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 </style>
 </head>
@@ -34,6 +35,7 @@ details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
    <label>Sport <select id="fdSport"><option value="NBA">NBA</option><option value="NFL">NFL</option><option value="MLB">MLB</option><option value="CFB">College football</option></select></label>
    <button type="button" id="fdAutoLoad" class="primary">Load slate and build</button>
   </div>
+  <p class="muted">Goal: Maximize total projected FanDuel points within the salary cap and your lineup rules.</p>
   <p id="fdStatus" role="status" aria-live="polite"></p>
   <div id="fdResultsPanel" hidden role="region" aria-labelledby="fdResultsHeading">
    <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdExport" disabled>Download review CSV</button></div>
