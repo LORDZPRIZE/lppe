@@ -137,3 +137,20 @@ test("outside research uses only an unambiguous upcoming game and retains push c
   assert.equal(inspect(data,pick,Date.parse(eventStart)),null);
   assert.equal(inspect({...data,players:[player,{...player,team:"NYK"}]},pick,now),null);
 });
+
+test("NBA slate partitions remain disjoint even when scoreboards overlap or arrive out of order", async () => {
+  const code = await readFile(new URL("../functions/api/nba/model.js",import.meta.url),"utf8");
+  const schedule = code.slice(code.indexOf("function slateGames"),code.indexOf("async function recentNBA"));
+  const split = vm.runInNewContext(schedule+"\nslateGames",{
+    pacificSlate:new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angeles",dateStyle:"short"})
+  });
+  const game = (id,date) => ({id,date,season:{type:2}});
+  const first = game("1","2026-11-22T23:00Z");
+  const second = game("2","2026-11-23T00:00Z");
+  const third = game("3","2026-11-23T00:00Z");
+  const tomorrow = game("4","2026-11-24T00:00Z");
+  const events = [third,first,tomorrow,second,second];
+  const date = new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angeles",dateStyle:"short"}).format(now);
+  assert.deepEqual(Array.from(split(events,date,0),game => game.id),["1","3"]);
+  assert.deepEqual(Array.from(split(events,date,1),game => game.id),["2"]);
+});
