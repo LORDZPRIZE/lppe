@@ -154,3 +154,20 @@ test("NBA slate partitions remain disjoint even when scoreboards overlap or arri
   assert.deepEqual(Array.from(split(events,date,0),game => game.id),["1","3"]);
   assert.deepEqual(Array.from(split(events,date,1),game => game.id),["2"]);
 });
+
+test("half-point estimates react to the spread and sum to one across sides", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const probability = html.slice(html.indexOf("function normalCDF"),html.indexOf("function grade("));
+  const model = html.slice(html.indexOf("const modelSpreadFloor"),html.indexOf("function estimateNBAProps"));
+  const estimate = vm.runInNewContext(probability+model+"\nlineHitEstimate");
+  const values = [25,18,25,30,31];
+  const more = estimate(values,20.5,"MORE","points");
+  const less = estimate(values,20.5,"LESS","points");
+  assert.equal(more.hits,4);
+  assert.equal(more.method,"Hit rate + spread");
+  assert(Math.abs(more.chance+less.chance-1) < 1e-12);
+  assert(more.chance > estimate(values,21.5,"MORE","points").chance);
+  const push = estimate([25,18,20,30,31],20,"MORE","points");
+  assert.equal(push.ties,1);
+  assert.equal(push.chance,0.625);
+});
