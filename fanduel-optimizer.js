@@ -158,7 +158,12 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
       selection:unavailable(status) ? "exclude" : "available"});
   }
   if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
-  return {players:[...players.values()],skipped,preview};
+  const pool = [...players.values()];
+  const matched = pool.filter(player => player.source === "Projection CSV").length;
+  if (projectionCSV.trim() && !matched) {
+    throw new Error("No projections matched this slate. Choose a matching file with player IDs or names and teams, or use the salary file alone.");
+  }
+  return {players:pool,skipped,preview,matched};
 }
 
 export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false} = {}) {
