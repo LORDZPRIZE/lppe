@@ -811,6 +811,7 @@ async function loadSportsbookLines(){
 
 let prizePicksRetryAt = 0;
 let prizePicksLimitMessage = "";
+let prizePicksRefreshPolicy = "fixed";
 
 function showPrizePicksLimit(data) {
  const retryAt = Date.parse(data.retryAt);
@@ -843,12 +844,14 @@ async function loadPrizePicksLines(scan = false) {
   if (response.status === 429) {
    const limit = await response.json().catch(() => ({}));
    renderFeedRefresh(limit.lastRefresh);
+   prizePicksRefreshPolicy = limit.refreshPolicy || "fixed";
    status.textContent = showPrizePicksLimit(limit);
    return;
   }
   if (!response.ok) throw new Error("PrizePicks request failed");
   const data = await response.json();
   renderFeedRefresh(data.lastRefresh);
+  prizePicksRefreshPolicy = data.refreshPolicy || "fixed";
   if (data.connected === false) {
    status.textContent = "The PrizePicks feed is awaiting configuration.";
    return;
@@ -2137,7 +2140,7 @@ const todayPicksLimit = 8;
 let todayPicksExpiry;
 let lastScanStartedAt = 0;
 const scanInterval = 5 * 60 * 1000;
-// UTC schedule in worker/wrangler.toml.
+// Fixed UTC slots for older Worker releases.
 const snapshotHours = [2,18,23];
 
 function nextPrizePicksSnapshot(now,retryAt) {
@@ -2149,8 +2152,15 @@ function nextPrizePicksSnapshot(now,retryAt) {
 }
 
 function showNextPrizePicksSnapshot(timing,now) {
- const next = new Date(nextPrizePicksSnapshot(now,prizePicksRetryAt));
- timing.textContent = "Next scheduled PrizePicks refresh: " + next.toLocaleString([],{
+ if (prizePicksRefreshPolicy === "pregame" && prizePicksRetryAt <= now) {
+  timing.textContent = "Automatic snapshots run before selected NBA tipoffs, up to three per UTC day.";
+  timing.hidden = false;
+  return;
+ }
+ const next = new Date(prizePicksRefreshPolicy === "pregame" ?
+  prizePicksRetryAt : nextPrizePicksSnapshot(now,prizePicksRetryAt));
+ const label = prizePicksRefreshPolicy === "pregame" ? "Provider retries after " : "Next scheduled PrizePicks refresh: ";
+ timing.textContent = label + next.toLocaleString([],{
   month:"short",day:"numeric",hour:"numeric",minute:"2-digit",timeZoneName:"short"
  }) + ". Checking this page reads the latest saved snapshot.";
  timing.hidden = false;

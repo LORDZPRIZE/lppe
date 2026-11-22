@@ -168,20 +168,87 @@ async function refreshPrizePicksBoard(env, saved) {
   }
 }
 
+const pregameInterval = 15*60000;
+const pregameDailyLimit = 3;
+const easternDate = new Intl.DateTimeFormat("en-US",{
+  timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"
+});
+
+function easternDateKey(time) {
+  const date = Object.fromEntries(easternDate.formatToParts(time).map(part => [part.type,part.value]));
+  return date.year + date.month + date.day;
+}
+
+function pregameWindows(events,time) {
+  const dayStart = Math.floor(time/86400000)*86400000;
+  const starts = [...new Map(events.filter(event => event?.id && [2,3].includes(event.season?.type) &&
+    !["STATUS_CANCELED","STATUS_POSTPONED"].includes(event.status?.type?.name))
+    .map(event => [event.id,Date.parse(event.date)])).values()].filter(Number.isFinite);
+  const windows = [...new Set(starts.map(start => Math.floor((start-10*60000)/pregameInterval)*pregameInterval))]
+    .filter(slot => slot >= dayStart && slot < dayStart+86400000);
+  const remaining = [...starts];
+  const selected = [];
+  while (selected.length < pregameDailyLimit && windows.length) {
+    const coverage = slot => remaining.filter(start => start > slot && start-slot <= 30*60000).length;
+    windows.sort((a,b) => coverage(b)-coverage(a) || a-b);
+    const slot = windows.shift();
+    if (!coverage(slot)) break;
+    selected.push(slot);
+    for (let index = remaining.length-1; index >= 0; index--) {
+      if (remaining[index] > slot && remaining[index]-slot <= 30*60000) remaining.splice(index,1);
+    }
+  }
+  return selected;
+}
+
+function fixedSnapshotTime(time) {
+  const date = new Date(time);
+  return date.getUTCMinutes() === 0 && [2,18,23].includes(date.getUTCHours());
+}
+
+async function shouldRefreshPregame(time) {
+  const scheduleUrl = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=";
+  const dayStart = Math.floor(time/86400000)*86400000;
+  const dates = [...new Set([easternDateKey(dayStart),easternDateKey(dayStart+86399999)])];
+  try {
+    const scoreboards = await Promise.all(dates.map(async date => {
+      const response = await fetch(scheduleUrl+date,{signal:AbortSignal.timeout(8000)});
+      if (!response.ok) throw new Error("ESPN schedule unavailable");
+      const board = await response.json();
+      if (!Array.isArray(board.events)) throw new Error("Unexpected ESPN schedule");
+      return board.events;
+    }));
+    return pregameWindows(scoreboards.flat(),time).includes(time);
+  } catch {
+    // Retain the original snapshots when the schedule cannot be checked.
+    return fixedSnapshotTime(time);
+  }
+}
+
+async function claimPregameRefresh(env,scheduledTime,scheduledAt) {
+  if (!await shouldRefreshPregame(scheduledTime)) return false;
+  const budgetKey = "refresh-budget/" + scheduledAt.slice(0,10);
+  const slots = await env.PRIZEPICKS_BOARD.get(budgetKey,"json") ?? [];
+  if (slots.includes(scheduledAt) || slots.length >= pregameDailyLimit) return false;
+  await env.PRIZEPICKS_BOARD.put(budgetKey,JSON.stringify([...slots,scheduledAt]),{expirationTtl:172800});
+  return true;
+}
+
 async function prizePicksLines(env) {
   if (!env.PRIZEPICKS_API_KEY || !env.PRIZEPICKS_BOARD) {
     return json({connected:false,source:"prizepicksapi.com",lines:[]});
   }
+  const refreshPolicy = env.PRIZEPICKS_PREGAME_REFRESH === "1" ? "pregame" : "fixed";
   const [board,cooldown,lastRefresh] = await Promise.all([
     env.PRIZEPICKS_BOARD.get("board","json"),
     env.PRIZEPICKS_BOARD.get("cooldown","json"),
     env.PRIZEPICKS_BOARD.get("lastRefresh","json")
   ]);
   if (cooldown && Date.parse(cooldown.retryAt) > Date.now()) {
-    return board ? json({...board,...cooldown,savedBoard:true,lastRefresh}) :
-      json({error:"PrizePicks provider limit reached",...cooldown,lastRefresh},429);
+    return board ? json({...board,...cooldown,savedBoard:true,lastRefresh,refreshPolicy}) :
+      json({error:"PrizePicks provider limit reached",...cooldown,lastRefresh,refreshPolicy},429);
   }
-  return json({...board ?? {connected:true,source:"prizepicksapi.com",lines:[],scheduled:true},lastRefresh});
+  return json({...board ?? {connected:true,source:"prizepicksapi.com",lines:[],scheduled:true},lastRefresh,refreshPolicy});
 }
 
 export default {
@@ -204,6 +271,10 @@ export default {
         log("already_refreshed");
         return;
       }
+      const due = env.PRIZEPICKS_PREGAME_REFRESH === "1" ?
+        await claimPregameRefresh(env,controller.scheduledTime,scheduledAt) :
+        fixedSnapshotTime(controller.scheduledTime);
+      if (!due) return;
       // The validator belongs to the last successfully saved board.
       const saved = {board:previous.value,etag:previous.value ? previous.metadata?.etag : null};
       const response = await refreshPrizePicksBoard(env,saved);
@@ -241,7 +312,7 @@ export default {
     if (request.method !== "GET") return json({error:"Method not allowed"},405);
     const path = new URL(request.url).pathname;
     if (path === "/" || path === "/health") return json({
-      app:"LPPE",status:"online",version:"0.5",message:"LPPE API is running"});
+      app:"LPPE",status:"online",version:"0.6",message:"LPPE API is running"});
     if (path === "/api/props") return json({sport:"NBA",live:false,
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});

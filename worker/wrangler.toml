@@ -4,6 +4,9 @@ compatibility_date = "2026-11-12"
 keep_vars = true
 workers_dev = true
 
+[vars]
+PRIZEPICKS_PREGAME_REFRESH = "1"
+
 [observability.logs]
 enabled = true
 invocation_logs = true
@@ -13,4 +16,4 @@ binding = "PRIZEPICKS_BOARD"
 id = "bb9802fc725c488cb7f43ef56002f689"
 
 [triggers]
-crons = ["0 2,18,23 * * *"]
+crons = ["*/15 * * * *"]
