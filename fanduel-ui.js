@@ -12,6 +12,7 @@ const count = byId("fdCount");
 const difference = byId("fdDifference");
 const exposure = byId("fdExposure");
 const stack = byId("fdStack");
+const objective = byId("fdObjective");
 const mode = byId("fdMode");
 const build = byId("fdBuild");
 const exportButton = byId("fdExport");
@@ -136,10 +137,10 @@ importForm.addEventListener("submit",async event => {
   }
 });
 
-function renderLineups(result,requested) {
+function renderLineups(result,requested,highCeiling) {
   const status = byId("fdBuildStatus");
-  lineups = [...result.lineups].sort((a,b) => b.points - a.points);
-  status.textContent = lineups.length ? "Built "+lineups.length+" of "+requested+" requested lineups. Ranked by total projected points." :
+  lineups = [...result.lineups].sort((a,b) => highCeiling ? b.ceiling - a.ceiling : b.points - a.points);
+  status.textContent = lineups.length ? "Built "+lineups.length+" of "+requested+" requested lineups. Ranked by "+(highCeiling ? "total ceiling estimates." : "total projected points.") :
     "No valid lineup found. Check projections, locks, exclusions, and roster eligibility.";
   if (result.limited) status.textContent += " The search reached its limit. A better lineup or additional alternatives may exist.";
   const output = byId("fdResults");
@@ -151,6 +152,7 @@ function renderLineups(result,requested) {
     const projected = document.createElement("strong");
     projected.textContent = total+" total projected FPTS";
     summary.append("Lineup "+(index+1)+" · ",projected," · "+dollars.format(lineup.salary));
+    if (highCeiling) summary.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
     const wrapper = document.createElement("div");
     wrapper.className = "tablewrap";
     const table = document.createElement("table");
@@ -202,19 +204,24 @@ build.addEventListener("click",() => {
     optimizer = undefined;
     build.disabled = false;
   };
+  const highCeiling = objective.value === "ceiling";
+  if (highCeiling && !players.some(player => player.selection !== "exclude" && Number.isFinite(player.ceiling))) {
+    byId("fdBuildStatus").textContent = "High Ceiling needs a numeric Ceiling column matched to players in this slate.";
+    return finish();
+  }
   optimizer = new Worker("/fanduel-worker.js",{type:"module"});
   optimizer.addEventListener("message",({data}) => {
     finish();
     if (slateLockAt && slateLockAt <= Date.now()) {
       byId("fdBuildStatus").textContent = "The slate reached its first game start during the search.";
     } else if (data.error) byId("fdBuildStatus").textContent = data.error;
-    else renderLineups(data,requested);
+    else renderLineups(data,requested,highCeiling);
   });
   optimizer.addEventListener("error",() => {
     finish();
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
-  optimizer.postMessage({players,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
+  optimizer.postMessage({players,highCeiling,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
     options:{exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
 });
 async function loadPublicPool() {
@@ -287,6 +294,7 @@ function applyMode() {
   clearLineups();
   if (players.length) renderSlateCheck();
 }
+objective.addEventListener("change",clearLineups);
 mode.addEventListener("change",applyMode);
 applySport();
 applyMode();
