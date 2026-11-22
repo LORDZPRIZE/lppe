@@ -90,6 +90,25 @@ function renderPlayers() {
       renderSlateCheck();
     });
     row.insertCell().append(selection);
+    if (mode.value === "gpp") {
+      const cap = document.createElement("input");
+      cap.type = "number";
+      cap.min = "0";
+      cap.max = "100";
+      cap.required = true;
+      cap.value = player.maxExposure ?? 100;
+      cap.setAttribute("aria-label",player.name+" maximum exposure percent");
+      cap.addEventListener("change",() => {
+        if (!cap.reportValidity()) {
+          cap.value = player.maxExposure ?? 100;
+          return;
+        }
+        player.maxExposure = cap.valueAsNumber;
+        clearLineups();
+        renderSlateCheck();
+      });
+      row.insertCell().append(cap);
+    }
   }
 }
 
@@ -182,6 +201,29 @@ function renderLineups(result,requested,highCeiling) {
     details.append(summary,wrapper);
     output.append(details);
   }
+  if (lineups.length > 1) {
+    const exposureByPlayer = new Map();
+    for (const lineup of lineups) {
+      for (const {player} of lineup.picks) {
+        const entry = exposureByPlayer.get(player.id) ?? {player,count:0};
+        entry.count++;
+        exposureByPlayer.set(player.id,entry);
+      }
+    }
+    const portfolio = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Player exposure across "+lineups.length+" built lineups";
+    const list = document.createElement("ul");
+    const entries = [...exposureByPlayer.values()].sort((a,b) => b.count-a.count || a.player.name.localeCompare(b.player.name));
+    const percentage = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
+    for (const {player,count} of entries) {
+      const item = document.createElement("li");
+      item.textContent = player.name+" ("+player.team+") · "+percentage.format(count/lineups.length)+" · "+count+"/"+lineups.length;
+      list.append(item);
+    }
+    portfolio.append(summary,list);
+    output.prepend(portfolio);
+  }
   exportButton.disabled = !lineups.length;
 }
 
@@ -221,7 +263,8 @@ build.addEventListener("click",() => {
     finish();
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
-  optimizer.postMessage({players,highCeiling,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
+  const pool = gpp ? players : players.map(player => ({...player,maxExposure:100}));
+  optimizer.postMessage({players:pool,highCeiling,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
     options:{exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
 });
 async function loadPublicPool() {
@@ -295,7 +338,10 @@ function applyMode() {
   if (players.length) renderSlateCheck();
 }
 objective.addEventListener("change",clearLineups);
-mode.addEventListener("change",applyMode);
+mode.addEventListener("change",() => {
+  applyMode();
+  renderPlayers();
+});
 applySport();
 applyMode();
 loadPublicPool();
