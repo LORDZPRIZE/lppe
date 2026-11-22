@@ -5,6 +5,8 @@ const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDi
 const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const importForm = byId("fdImport");
 const autoLoad = byId("fdAutoLoad");
+const liveSlate = byId("fdLiveSlate");
+const refreshSlates = byId("fdRefreshSlates");
 const sport = byId("fdSport");
 const salaries = byId("fdSalaries");
 const projections = byId("fdProjections");
@@ -97,7 +99,7 @@ byId("fdResumeSlate").addEventListener("click",() => {
   }
   autoRequest?.abort();
   autoRequest = undefined;
-  autoLoad.disabled = false;
+  autoLoad.disabled = !liveSlate.value;
   clearRemoval();
   clearLineups();
   resetImport();
@@ -437,7 +439,7 @@ importForm.addEventListener("submit",async event => {
     importForm.querySelector("button").disabled = false;
     byId("fdSalaryOnly").disabled = false;
     byId("fdResumeSlate").disabled = false;
-    autoLoad.disabled = false;
+    autoLoad.disabled = !liveSlate.value;
     sport.disabled = false;
   }
 });
@@ -730,18 +732,37 @@ build.addEventListener("click",event => {
   if (event.isTrusted) showBuildResults();
 });
 
-async function loadPublicPool() {
+async function loadPublicPool(listOnly = false) {
+  const previousId = liveSlate.value;
+  if (!listOnly && !previousId) return;
+  if (listOnly) {
+    liveSlate.disabled = true;
+    liveSlate.replaceChildren(new Option("Looking for slates…",""));
+  }
   autoRequest?.abort();
   const request = new AbortController();
   autoRequest = request;
   autoLoad.disabled = true;
-  byId("fdStatus").textContent = "Looking for an upcoming FanDuel player pool…";
+  byId("fdStatus").textContent = listOnly ? "Looking for upcoming FanDuel slates…" : "Loading the selected FanDuel slate…";
   const timeout = setTimeout(()=>request.abort(),25000);
   try {
-    const response = await fetch("/api/nba/fanduel?sport="+sport.value,{signal:request.signal});
+    const query = new URLSearchParams({sport:sport.value});
+    if (listOnly) query.set("list","1");
+    else query.set("slate",previousId);
+    const response = await fetch("/api/nba/fanduel?"+query,{signal:request.signal});
     const data = await response.json();
     if (autoRequest !== request || request.signal.aborted) return;
     if (!response.ok) throw new Error(data.error || "No public FanDuel player pool is available.");
+    if (listOnly) {
+      if (!data.slates?.length) throw new Error("No upcoming Classic slates are available. You can import a FanDuel contest CSV.");
+      liveSlate.replaceChildren(new Option("Choose a slate",""),...data.slates.map(slate => new Option(
+        [slate.label,slate.lockAt && new Date(slate.lockAt).toLocaleString(),
+          slate.games && slate.games+" games"].filter(Boolean).join(" · "),slate.id)));
+      if (data.slates.some(slate => slate.id === previousId)) liveSlate.value = previousId;
+      liveSlate.disabled = false;
+      byId("fdStatus").textContent = "Choose the slate that matches your FanDuel contest, then build.";
+      return;
+    }
     if (!Array.isArray(data.players) || !(data.lockAt > Date.now())) throw new Error("The public pool has expired.");
     clearLineups();
     clearRemoval();
@@ -761,12 +782,13 @@ async function loadPublicPool() {
     if (autoRequest !== request) return;
     byId("fdStatus").textContent = request.signal.aborted ? "Automatic slate loading timed out. You can import a FanDuel CSV." :
       error.message || "Automatic slate loading is unavailable.";
+    if (listOnly) liveSlate.replaceChildren(new Option("No live slates loaded",""));
     if (!players.length) byId("fdManualImport").open = true;
   } finally {
     clearTimeout(timeout);
     if (autoRequest === request) {
       autoRequest = undefined;
-      autoLoad.disabled = false;
+      autoLoad.disabled = !liveSlate.value;
     }
   }
 }
@@ -783,9 +805,13 @@ function applySport() {
   difference.max = profile.roster.length;
   difference.value = Math.min(difference.valueAsNumber || 2,profile.roster.length);
 }
-autoLoad.addEventListener("click",() => {
-  if (salaries.files.length) importForm.requestSubmit();
-  else loadPublicPool();
+autoLoad.addEventListener("click",() => loadPublicPool());
+refreshSlates.addEventListener("click",() => loadPublicPool(true));
+liveSlate.addEventListener("change",() => {
+  autoRequest?.abort();
+  autoRequest = undefined;
+  autoLoad.disabled = !liveSlate.value;
+  byId("fdStatus").textContent = liveSlate.value ? "Slate selected. Tap Load slate and build." : "Choose a slate.";
 });
 sport.addEventListener("change",() => {
   autoRequest?.abort();
@@ -801,7 +827,8 @@ sport.addEventListener("change",() => {
   byId("fdPool").hidden = true;
   applySport();
   applyMode();
-  loadPublicPool();
+  liveSlate.value = "";
+  loadPublicPool(true);
 });
 function applyMode() {
   const cash = mode.value === "cash";
@@ -824,7 +851,7 @@ mode.addEventListener("change",() => {
 applySport();
 applyMode();
 showSavedSlate();
-loadPublicPool();
+loadPublicPool(true);
 
 function resetPlayerPage() {
   playerPage = 0;

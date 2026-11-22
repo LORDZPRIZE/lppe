@@ -76,7 +76,7 @@ export function normalizePublicSlate({rows,updatedAt},events,now) {
     provider:"Daily Fantasy Fuel",poolType:"public preview",label:"Published FanDuel pool"};
 }
 
-export function selectProviderSlate(data,now,sport = "NBA") {
+function eligibleProviderSlates(data,now,sport) {
   const profile = profiles[sport];
   return data.filter(slate => {
     const starts = Date.parse(slate.starts_at);
@@ -87,7 +87,11 @@ export function selectProviderSlate(data,now,sport = "NBA") {
       !/single|showdown|quarter|half|tiers|mvp|express|super\s*flex|snake draft|\b(?:test|dnp|dummy|qtr)\b/i.test(slate.label || "");
   }).sort((a,b) => easternDay(Date.parse(a.starts_at)).localeCompare(easternDay(Date.parse(b.starts_at))) ||
     Number(/main/i.test(b.label))-Number(/main/i.test(a.label)) ||
-    b.games-a.games || Date.parse(a.starts_at)-Date.parse(b.starts_at))[0];
+    b.games-a.games || Date.parse(a.starts_at)-Date.parse(b.starts_at));
+}
+
+export function selectProviderSlate(data,now,sport = "NBA") {
+  return eligibleProviderSlates(data,now,sport)[0];
 }
 
 export function normalizeProviderPlayers(data,slate,sport = "NBA") {
@@ -109,11 +113,11 @@ export function normalizeProviderPlayers(data,slate,sport = "NBA") {
     provider:"FanDuelAPI.com",poolType:"salary feed",label:slate.label || "FanDuel " + profile.name + " Classic"};
 }
 
-async function providerPool(env,sport) {
+function providerReader(env) {
   const key = env.FANDUEL_API_KEY.trim();
   if (!/^fd_[A-Za-z0-9_-]+$/.test(key)) throw new Error("The FanDuel salary API secret must contain only the full fd_ key.");
   const headers = {Authorization:"Bearer "+key,Accept:"application/json"};
-  async function read(path) {
+  return async function read(path) {
     let response;
     try {
       response = await fetch(salaryProvider+path,{headers,signal:AbortSignal.timeout(12000)});
@@ -126,12 +130,28 @@ async function providerPool(env,sport) {
     const body = await response.json().catch(() => null);
     if (!Array.isArray(body?.data)) throw new Error("The FanDuel salary API returned an unexpected response.");
     return body.data;
+  };
+}
+
+async function listProviderSlates(cache,key,read,sport) {
+  const cached = await cache.match(key);
+  if (cached) {
+    const slates = await cached.json();
+    const upcoming = slates.filter(slate => Date.parse(slate.starts_at) > Date.now());
+    if (upcoming.length) return upcoming;
   }
-  let slate = selectProviderSlate(await read("/dfs/slates?sport="+sport+"&started=false&limit=50"),Date.now(),sport);
-  if (!slate && sport === "CFB") {
-    slate = selectProviderSlate(await read("/dfs/slates?sport=NCAAF&started=false&limit=50"),Date.now(),sport);
+  const fetchSlates = async code => eligibleProviderSlates(
+    await read("/dfs/slates?sport="+code+"&started=false&limit=50"),Date.now(),sport
+  );
+  let slates = await fetchSlates(sport);
+  if (!slates.length && sport === "CFB") slates = await fetchSlates("NCAAF");
+  if (slates.length) {
+    try { await cache.put(key,Response.json(slates,{headers:{"Cache-Control":"public, max-age=120"}})); } catch {}
   }
-  if (!slate) return {error:"No upcoming " + profiles[sport].name + " Classic slate was returned by the salary provider."};
+  return slates;
+}
+
+async function providerPool(read,slate,sport) {
   const rows = [];
   while (rows.length < slate.players && rows.length < 800) {
     const limit = Math.min(200,slate.players-rows.length);
@@ -156,21 +176,43 @@ async function publicPool() {
 }
 
 export async function onRequestGet({request,env}) {
-  const sport = new URL(request.url).searchParams.get("sport")?.toUpperCase() || "NBA";
+  const {searchParams} = new URL(request.url);
+  const sport = searchParams.get("sport")?.toUpperCase() || "NBA";
+  const list = searchParams.get("list") === "1";
+  const slateId = searchParams.get("slate");
+  if (slateId !== null && !/^[a-z0-9_-]{1,128}$/i.test(slateId)) return reply({error:"Invalid slate selection."},400);
   if (!Object.hasOwn(profiles,sport)) return reply({error:"Unsupported FanDuel Classic sport."},400);
   const configured = Boolean(env.FANDUEL_API_KEY);
   if (!configured && sport !== "NBA") return reply({
     error:"Automatic " + profiles[sport].name + " loading needs the salary API key. Import a FanDuel contest CSV to build now."
   },503);
-  const key = new Request(new URL("/lppe-internal/fanduel-pool-v4/"+sport+"/"+(configured ? "provider" : "public"),request.url));
   try {
     const cache = caches.default;
+    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v5/"+sport+"/"+suffix,request.url));
+    let slate;
+    let read;
+    if (configured) {
+      read = providerReader(env);
+      const slates = await listProviderSlates(cache,cacheKey("slates"),read,sport);
+      if (list) return reply({slates:slates.map(item => ({
+        id:String(item.id),label:item.label || "FanDuel " + profiles[sport].name + " Classic",
+        lockAt:Date.parse(item.starts_at),games:item.games
+      }))});
+      slate = slateId === null ? slates[0] : slates.find(item => String(item.id) === slateId);
+      if (!slate) return reply({error:slateId === null ?
+        "No upcoming " + profiles[sport].name + " Classic slate was returned by the salary provider." :
+        "This slate is no longer available. Refresh the slate list and choose another."},404);
+    } else {
+      if (list) return reply({slates:[{id:"public",label:"NBA public preview"}]});
+      if (slateId !== null && slateId !== "public") return reply({error:"This slate is no longer available."},404);
+    }
+    const key = cacheKey(configured ? "provider/"+slate.id : "public");
     const cached = await cache.match(key);
     if (cached) {
       const data = await cached.json();
       if (data.lockAt > Date.now()) return reply(data);
     }
-    const data = configured ? await providerPool(env,sport) : await publicPool();
+    const data = configured ? await providerPool(read,slate,sport) : await publicPool();
     if (data.error) return reply(data,404);
     const ttl = Math.max(1,Math.min(600,Math.floor((data.lockAt-Date.now())/1000)));
     try { await cache.put(key,Response.json(data,{headers:{"Cache-Control":"public, max-age="+ttl}})); } catch {}
