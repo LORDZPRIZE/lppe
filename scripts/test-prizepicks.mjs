@@ -113,3 +113,27 @@ test("market ranks the median of fresh and complete exact-line sportsbook quotes
   assert.equal(rank([prop],odds,Date.parse(observedAt)+1800000)[0].chance,null);
   assert.equal(rank([prop],[...odds,quote("Book F","MORE",-100,{eventId:"ambiguous"})],now)[0].chance,null);
 });
+
+test("outside research uses only an unambiguous upcoming game and retains push counts", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const source = (from,to) => html.slice(html.indexOf(from),html.indexOf(to));
+  const inspect = vm.runInNewContext([
+    source("const modelMarketColumns","function nbaStatValue"),
+    source("function nbaStatValue","let nbaAvailability"),
+    source("function recentModelGames","function estimateNBAProps"),
+    source("const outsideDate","function renderOutsideOptimizer"),
+    "researchOutsidePick"
+  ].join("\n"),{dayMillis:86400000});
+  const pick = {date:"2026-11-22",player:"Jose Smith",market:"points",line:20,side:"MORE"};
+  const player = {player:"José Smith",team:"BOS",games:[24,22,20,18,25].map((points,index) => ({
+    date:new Date(now-(index+1)*86400000).toISOString(),minutes:30,values:[points,0,0,0]
+  }))};
+  const data = {players:[player],schedule:[{start:eventStart,teams:["BOS","NYK"]}]};
+  const result = inspect(data,pick,now);
+  assert.equal(result.hits,3);
+  assert.equal(result.count,5);
+  assert.equal(result.ties,1);
+  assert.equal(result.chance,0.625);
+  assert.equal(inspect(data,pick,Date.parse(eventStart)),null);
+  assert.equal(inspect({...data,players:[player,{...player,team:"NYK"}]},pick,now),null);
+});
