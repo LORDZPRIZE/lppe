@@ -92,13 +92,21 @@ function renderPlayers() {
   }
 }
 
+for (const input of [salaries,projections]) {
+  input.addEventListener("change",() => {
+    if (salaries.files.length && !salaries.disabled) importForm.requestSubmit();
+  });
+}
+
 importForm.addEventListener("submit",async event => {
   event.preventDefault();
+  if (!salaries.files.length || salaries.disabled) return;
   autoRequest?.abort();
   autoRequest = undefined;
   autoLoad.disabled = true;
   sport.disabled = true;
   slateLockAt = null;
+  salaries.disabled = projections.disabled = true;
   importForm.querySelector("button").disabled = true;
   clearLineups();
   byId("fdPool").hidden = true;
@@ -116,10 +124,12 @@ importForm.addEventListener("submit",async event => {
       (result.skipped ? " Skipped "+result.skipped+" rows without usable player data." : "");
     byId("fdPool").hidden = false;
     renderPlayers();
+    build.click();
   } catch (error) {
     players = [];
     byId("fdStatus").textContent = error.message || "Could not read the player pool.";
   } finally {
+    salaries.disabled = projections.disabled = false;
     importForm.querySelector("button").disabled = false;
     autoLoad.disabled = false;
     sport.disabled = false;
