@@ -65,6 +65,7 @@ byId("fdUndoRemoval").addEventListener("click",() => {
 function clearLineups() {
   optimizer?.terminate();
   optimizer = undefined;
+  byId("fdCancel").hidden = true;
   build.disabled = false;
   lineups = [];
   exportButton.disabled = true;
@@ -194,6 +195,7 @@ importForm.addEventListener("submit",async event => {
     byId("fdStatus").textContent = players.length+" players loaded. "+averages+" use historical FPPG, "+
       missing+" have no projection, and "+excluded+" were excluded based on CSV injury status."+
       (result.skipped ? " Skipped "+result.skipped+" rows without usable player data." : "");
+    if (result.preview) byId("fdStatus").textContent += " Cheatsheet loaded. Review exports use local IDs for players without FanDuel IDs.";
     byId("fdPool").hidden = false;
     renderPlayers();
     build.click();
@@ -257,7 +259,7 @@ function renderLineups(result,requested,highCeiling) {
     value.append(projected,units);
     const meta = document.createElement("span");
     meta.className = "lineup-meta";
-    meta.textContent = dollars.format(lineup.salary)+" salary";
+    meta.textContent = dollars.format(lineup.salary)+" used · "+dollars.format(profiles[sport.value].salaryCap-lineup.salary)+" remaining";
     if (highCeiling) meta.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
     if (lineup.tournament) {
       const {top,win,duplicates} = lineup.tournament;
@@ -371,6 +373,7 @@ function buildCurrentLineups() {
   const finish = () => {
     optimizer?.terminate();
     optimizer = undefined;
+    byId("fdCancel").hidden = true;
     build.disabled = false;
   };
   const highCeiling = objective.value === "ceiling";
@@ -380,6 +383,7 @@ function buildCurrentLineups() {
     return finish();
   }
   optimizer = new Worker("/fanduel-worker.js",{type:"module"});
+  byId("fdCancel").hidden = false;
   optimizer.addEventListener("message",({data}) => {
     finish();
     if (slateLockAt && slateLockAt <= Date.now()) {
@@ -393,9 +397,16 @@ function buildCurrentLineups() {
   });
   const pool = gpp ? players : players.map(player => ({...player,maxExposure:100}));
   optimizer.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
-    options:{exactFirst:Boolean(lastRemoval && objective.value === "projection"),
+    options:{exactFirst:objective.value === "projection",
       exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
 }
+byId("fdCancel").addEventListener("click",() => {
+  clearLineups();
+  byId("fdResultsPanel").hidden = false;
+  byId("fdBuildStatus").textContent = "Build canceled. Your slate and player selections are ready for another build.";
+  build.focus();
+});
+
 function showBuildResults() {
   const panel = byId("fdResultsPanel");
   if (!panel.hidden) panel.scrollIntoView({block:"start"});
