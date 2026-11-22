@@ -34,6 +34,7 @@ const difference = byId("fdDifference");
 const exposure = byId("fdExposure");
 const stack = byId("fdStack");
 const depth = byId("fdSearchDepth");
+const refine = byId("fdRefine");
 const avoidQuestionable = byId("fdAvoidQuestionable");
 const uncertainAvailability = status => /^(q|questionable|gtd|game[ -]time decision|day[ -]to[ -]day|dtd)$/i.test(status || "");
 const objective = byId("fdObjective");
@@ -175,6 +176,7 @@ function clearLineups() {
   optimizer = undefined;
   buildProgress = undefined;
   byId("fdCancel").hidden = true;
+  refine.hidden = true;
   build.disabled = false;
   lineups = [];
   exportButton.disabled = true;
@@ -546,6 +548,7 @@ function renderLineups(result,requested,highCeiling) {
   }
   if (result.restriction) status.textContent += " " + result.restriction;
   if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
+  refine.hidden = !result.limited || depth.value === "deep" || mode.value !== "gpp";
   if (result.limited) status.textContent += result.exactFirst ? " Additional lineup searches reached their limit." :
     " The search reached its limit. A better lineup or additional alternatives may exist.";
   if (lastRemoval) {
@@ -737,6 +740,11 @@ function buildCurrentLineups() {
   activeWorker.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,
     sport:sport.value,deep:gpp && depth.value === "deep",options});
 }
+refine.addEventListener("click",() => {
+  depth.value = "deep";
+  byId("fdDepthHint").hidden = false;
+  buildCurrentLineups();
+});
 byId("fdCancel").addEventListener("click",() => {
   const completed = buildProgress;
   clearLineups();
