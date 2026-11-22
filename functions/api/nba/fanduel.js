@@ -1,7 +1,8 @@
-import { importPlayers, matchName, profiles, salaryCap, teamCode } from "../../../fanduel-optimizer.js";
+import { importPlayers, matchName, profiles, salaryCap, teamCode, unavailable } from "../../../fanduel-optimizer.js";
 
 const source = "https://www.dailyfantasyfuel.com/nba/projections/fanduel/";
 const scoreboard = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=";
+const injuryFeed = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries";
 const eastern = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"});
 const salaryProvider = "https://fanduelapi.com/api/v1";
 const noStore = {"Cache-Control":"no-store"};
@@ -218,6 +219,56 @@ export function addNBAProjections(pool,{rows,updatedAt},now) {
   return matched ? {...pool,players,projectionCoverage:{matched,eligible,updatedAt}} : pool;
 }
 
+export function applyNBAInjuryReport(pool,report,now) {
+  const reportAge = now-Date.parse(report?.timestamp);
+  if (!Array.isArray(report?.injuries) || !(reportAge >= -120000 && reportAge <= 3600000)) return pool;
+
+  const health = new Map();
+  const salaryReadAt = Date.parse(pool.updatedAt);
+  for (const group of report.injuries) {
+    if (!Array.isArray(group?.injuries)) continue;
+    for (const entry of group.injuries) {
+      if (!entry) continue;
+      const name = entry.athlete?.displayName;
+      const team = teamCode(entry.athlete?.team?.abbreviation);
+      const updated = Date.parse(entry.date);
+      if (!name || !team || !(updated <= now+120000 && now-updated <= 72*3600000) ||
+          (Number.isFinite(salaryReadAt) && updated <= salaryReadAt)) continue;
+      const key = JSON.stringify([matchName(name),team]);
+      if (!health.has(key) || updated > health.get(key).updated) {
+        health.set(key,{updated,status:entry.status,returnDate:entry.details?.returnDate});
+      }
+    }
+  }
+  const identities = new Map();
+  const identity = player => JSON.stringify([matchName(player.name),player.team]);
+  for (const player of pool.players) {
+    const key = identity(player);
+    identities.set(key,(identities.get(key) || 0)+1);
+  }
+  let excluded = 0;
+  const players = pool.players.map(player => {
+    const key = identity(player);
+    const entry = health.get(key);
+    // Reject day-to-day records and single-game reports with unclear applicability.
+    if (!entry || entry.status !== "Out" || identities.get(key) !== 1 ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(entry.returnDate) || entry.returnDate <= pool.date ||
+        unavailable(player.status)) return player;
+    excluded++;
+    return {...player,status:"Out",selection:"exclude",injurySource:"ESPN"};
+  });
+  return excluded ? {...pool,players,injuryCoverage:{excluded,updatedAt:report.timestamp}} : pool;
+}
+
+async function currentNBAInjuries() {
+  try {
+    const response = await fetch(injuryFeed,{signal:AbortSignal.timeout(3500)});
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function currentNBAProjections() {
   try {
     const response = await fetch(source,{signal:AbortSignal.timeout(3500)});
@@ -255,7 +306,7 @@ export async function onRequestGet({request,env}) {
   },503);
   try {
     const cache = caches.default;
-    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v6/"+sport+"/"+suffix,request.url));
+    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v7/"+sport+"/"+suffix,request.url));
     let slate;
     let read;
     if (configured) {
@@ -281,12 +332,15 @@ export async function onRequestGet({request,env}) {
     }
     const isLiveNBA = configured && sport === "NBA";
     const projectionsRequest = isLiveNBA ? currentNBAProjections() : null;
+    const injuriesRequest = isLiveNBA ? currentNBAInjuries() : null;
     const scheduleRequest = isLiveNBA ?
       nbaSchedule(easternDay(Date.parse(slate.starts_at)),3500).catch(() => []) : null;
     let data = configured ? await providerPool(read,slate,sport) : await publicPool();
     if (data.error) return reply(data,404);
     const projections = await projectionsRequest;
     if (scheduleRequest) data = attachNBAGames(data,await scheduleRequest,Date.now());
+    const injuries = await injuriesRequest;
+    if (injuries) data = applyNBAInjuryReport(data,injuries,Date.now());
     if (projections) data = addNBAProjections(data,projections,Date.now());
     if (data.lockAt <= Date.now()) return reply({error:"The salary slate has already locked."},404);
     const ttl = Math.max(1,Math.min(600,Math.floor((data.lockAt-Date.now())/1000)));

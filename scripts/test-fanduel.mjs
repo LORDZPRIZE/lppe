@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
-import { addNBAProjections, attachNBAGames } from "../functions/api/nba/fanduel.js";
+import { addNBAProjections, applyNBAInjuryReport, attachNBAGames } from "../functions/api/nba/fanduel.js";
 import { rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
@@ -186,4 +186,33 @@ test("custom live projections preserve salary, selection and fallback estimates"
   assert.deepEqual(result.players.slice(1),baseline.slice(1));
   assert.equal(baseline[0].points,11);
   assert.throws(() => applyPlayerProjections(baseline,csv,"NFL",{date:"2026-11-24"}),/Projection CSV/);
+});
+
+test("recent confirmed NBA absences can exclude additional players without clearing provider statuses", () => {
+  const now = Date.parse("2026-11-22T20:00:00Z");
+  const entry = (displayName,status,returnDate,team = "CHI") => ({
+    status,date:"2026-11-22T18:00:00Z",details:{returnDate},
+    athlete:{displayName,team:{abbreviation:team}}
+  });
+  const players = ["Alex Smith","Jamie Jones","John Miller","Casey Cook"].map(name => ({
+    name,team:"CHI",selection:name === "Jamie Jones" ? "exclude" : "available",
+    status:name === "Jamie Jones" ? "Out" : ""
+  }));
+  const data = {date:"2026-11-22",players,updatedAt:"2026-11-22T12:00:00Z"};
+  const injuries = {
+    timestamp:new Date(now).toISOString(),
+    injuries:[{injuries:[
+      entry("Alex Smith","Out","2026-11-26"),
+      entry("Jamie Jones","Day-To-Day","2026-11-22"),
+      entry("John Miller","Out","2026-11-22"),
+      entry("Casey Cook","Out","2026-11-26","BOS")
+    ]}]
+  };
+  const result = applyNBAInjuryReport(data,injuries,now);
+  assert.deepEqual(result.players.map(player => player.selection),["exclude","exclude","available","available"]);
+  assert.equal(result.injuryCoverage.excluded,1);
+  assert.equal(result.players[0].injurySource,"ESPN");
+  const current = {...data,updatedAt:"2026-11-22T19:59:00Z"};
+  assert.equal(applyNBAInjuryReport(current,injuries,now),current);
+  assert.equal(applyNBAInjuryReport(data,injuries,now+3600001),data);
 });
