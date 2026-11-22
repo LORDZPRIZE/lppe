@@ -34,7 +34,7 @@ function positionCodes(raw, sport, allowed) {
     .map(position => aliases[position] || position).filter(position => allowed.has(position)))];
 }
 
-function parseCSV(source) {
+export function parseCSV(source) {
   const records = [];
   let record = [], field = "", quoted = false;
   for (let i = 0; i < source.length; i++) {
