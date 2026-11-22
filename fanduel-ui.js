@@ -175,19 +175,22 @@ importForm.addEventListener("submit",async event => {
   if (!salaries.files.length || salaries.disabled) return;
   autoRequest?.abort();
   autoRequest = undefined;
+  byId("fdSalaryOnly").hidden = !projections.files.length;
   autoLoad.disabled = true;
   sport.disabled = true;
-  slateLockAt = null;
   salaries.disabled = projections.disabled = true;
   importForm.querySelector("button").disabled = true;
-  clearRemoval();
-  clearLineups();
-  byId("fdPool").hidden = true;
+  byId("fdSalaryOnly").disabled = true;
   try {
     const salaryFile = salaries.files[0];
     const projectionFile = projections.files[0];
     if (salaryFile.size > 5_000_000 || projectionFile?.size > 5_000_000) throw new Error("Use CSV files under 5 MB.");
-    const result = importPlayers(await salaryFile.text(),await projectionFile?.text(),sport.value);
+    const projectionText = await projectionFile?.text();
+    if (projectionFile && !projectionText.trim()) throw new Error("The projections file is empty. Choose another file or use the salary file alone.");
+    const result = importPlayers(await salaryFile.text(),projectionText,sport.value);
+    slateLockAt = null;
+    clearRemoval();
+    clearLineups();
     players = result.players.sort((a,b) => (b.points ?? -Infinity)-(a.points ?? -Infinity) || a.name.localeCompare(b.name));
     const missing = players.filter(player => !Number.isFinite(player.points)).length;
     const averages = players.filter(player => player.source === "FanDuel FPPG").length;
@@ -195,19 +198,27 @@ importForm.addEventListener("submit",async event => {
     byId("fdStatus").textContent = players.length+" players loaded. "+averages+" use historical FPPG, "+
       missing+" have no projection, and "+excluded+" were excluded based on CSV injury status."+
       (result.skipped ? " Skipped "+result.skipped+" rows without usable player data." : "");
+    if (projectionFile) byId("fdStatus").textContent += " Custom projections matched "+result.matched+" of "+players.length+" players.";
     if (result.preview) byId("fdStatus").textContent += " Cheatsheet loaded. Review exports use local IDs for players without FanDuel IDs.";
     byId("fdPool").hidden = false;
     renderPlayers();
     build.click();
   } catch (error) {
-    players = [];
-    byId("fdStatus").textContent = error.message || "Could not read the player pool.";
+    byId("fdStatus").textContent = (error.message || "Could not read the player pool.") +
+      (players.length ? " Your previous slate is still loaded." : "");
+    byId("fdManualImport").open = true;
   } finally {
     salaries.disabled = projections.disabled = false;
     importForm.querySelector("button").disabled = false;
+    byId("fdSalaryOnly").disabled = false;
     autoLoad.disabled = false;
     sport.disabled = false;
   }
+});
+
+byId("fdSalaryOnly").addEventListener("click",() => {
+  projections.value = "";
+  importForm.requestSubmit();
 });
 
 function removalSummary(player,previous,rebuilt) {
@@ -474,6 +485,7 @@ sport.addEventListener("change",() => {
   players = [];
   slateLockAt = null;
   importForm.reset();
+  byId("fdSalaryOnly").hidden = true;
   clearLineups();
   byId("fdPool").hidden = true;
   applySport();
