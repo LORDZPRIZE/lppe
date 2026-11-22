@@ -102,14 +102,15 @@ export function inspectSalaryCSV(source) {
   return {rows,preview,slates:[...slates.values()]};
 }
 
-export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {inspection,slateKey} = {}) {
-  const profile = rosterProfile(sport);
-  const allowed = new Set(profile.roster.flatMap(([,positions]) => positions));
-  const {rows,preview,slates} = inspection ?? inspectSalaryCSV(salaryCSV);
-  const selectedSlate = slateKey ?? (slates.length === 1 ? slates[0].key : undefined);
-  if (slates.length > 1 && !slates.some(slate => slate.key === selectedSlate)) {
-    throw new Error("This cheatsheet contains multiple slates or dates. Choose a slate before building.");
-  }
+const readOwnership = row => {
+  const raw = row.ownershippct || row.projectedownership || row.ownershipprojection || row.ownership || "";
+  const percent = csvNumber(raw.trim().replace(/%$/, ""));
+  return percent >= 0 && percent <= 100 ? percent/100 : undefined;
+};
+const readCeiling = row => csvNumber(row.ceiling || row.ceilingfpts || row.projectedceiling);
+
+export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{selectedSlate,date} = {}) {
+  if (!projectionCSV.trim()) return {players,matched:0};
   const byId = new Map();
   const byName = new Map();
   const ceilingById = new Map();
@@ -118,46 +119,72 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
   const ownershipByName = new Map();
   const projectionVariants = new Map();
   const salaryVariants = new Map();
-  const salaryRows = slates.length > 1 ? rows.filter(row => cheatsheetKey(row) === selectedSlate) : rows;
-  const readOwnership = row => {
-    const raw = row.ownershippct || row.projectedownership || row.ownershipprojection || row.ownership || "";
-    const percent = csvNumber(raw.trim().replace(/%$/, ""));
-    return percent >= 0 && percent <= 100 ? percent/100 : undefined;
-  };
-  const readCeiling = row => csvNumber(row.ceiling || row.ceilingfpts || row.projectedceiling);
   function addProjection(map, key, points) {
     if (!key) return;
     if (map.has(key) && map.get(key) !== points) map.set(key, null);
     else map.set(key, points);
   }
-  if (projectionCSV.trim()) {
-    for (const row of parseCSV(projectionCSV)) {
-      if (selectedSlate && row.slate && row.gamedate && cheatsheetKey(row) !== selectedSlate) continue;
-      const projected = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
-      if (!Number.isFinite(projected)) continue;
-      const displayName = playerName(row);
-      const name = matchName(displayName);
-      const team = teamCode(row.team || row.teamabbr,sport);
-      recordNameVariant(projectionVariants,displayName,team);
-      addProjection(byId,row.id || row.playerid,projected);
-      if (name && team) addProjection(byName,name + ":" + team,projected);
-      const ownership = readOwnership(row);
-      if (ownership !== undefined) {
-        addProjection(ownershipById,row.id || row.playerid,ownership);
-        if (name && team) addProjection(ownershipByName,name + ":" + team,ownership);
-      }
-      const ceiling = readCeiling(row);
-      if (Number.isFinite(ceiling)) {
-        addProjection(ceilingById,row.id || row.playerid,ceiling);
-        if (name && team) addProjection(ceilingByName,name + ":" + team,ceiling);
-      }
+  for (const row of parseCSV(projectionCSV)) {
+    if (selectedSlate && row.slate && row.gamedate && cheatsheetKey(row) !== selectedSlate) continue;
+    if (date && row.gamedate && row.gamedate !== date) continue;
+    const projected = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
+    if (!Number.isFinite(projected)) continue;
+    const displayName = playerName(row);
+    const name = matchName(displayName);
+    const team = teamCode(row.team || row.teamabbr,sport);
+    recordNameVariant(projectionVariants,displayName,team);
+    addProjection(byId,row.id || row.playerid,projected);
+    if (name && team) addProjection(byName,name + ":" + team,projected);
+    const ownership = readOwnership(row);
+    if (ownership !== undefined) {
+      addProjection(ownershipById,row.id || row.playerid,ownership);
+      if (name && team) addProjection(ownershipByName,name + ":" + team,ownership);
     }
-    if (!byId.size && !byName.size) throw new Error("Projection CSV needs a numeric Projection column and an ID or player name plus team.");
-    for (const row of salaryRows) {
-      recordNameVariant(salaryVariants,playerName(row),teamCode(row.team || row.teamabbr,sport));
+    const ceiling = readCeiling(row);
+    if (Number.isFinite(ceiling)) {
+      addProjection(ceilingById,row.id || row.playerid,ceiling);
+      if (name && team) addProjection(ceilingByName,name + ":" + team,ceiling);
     }
   }
+  if (!byId.size && !byName.size) throw new Error("Projection CSV needs a numeric Projection column and an ID or player name plus team.");
+  const playerNames = new Map();
+  for (const player of players) {
+    const identity = matchName(player.name)+":"+player.team;
+    playerNames.set(identity,(playerNames.get(identity) || 0)+1);
+    recordNameVariant(salaryVariants,player.name,player.team);
+  }
+  let matchedCount = 0;
+  const updated = players.map(player => {
+    const {id,name,team} = player;
+    const nameKey = matchName(name)+":"+team;
+    const variantKey = nameVariant(name)+":"+team;
+    const variants = projectionVariants.get(variantKey);
+    // Use a name fallback only when it identifies one salary player.
+    const uniqueName = playerNames.get(nameKey) === 1 ? nameKey : undefined;
+    const alternate = uniqueName && salaryVariants.get(variantKey)?.size === 1 && variants?.size === 1 ?
+      variants.values().next().value : undefined;
+    const points = byId.get(id) ?? byName.get(uniqueName) ?? byName.get(alternate);
+    if (points == null) return player;
+    matchedCount++;
+    return {...player,points,source:"Projection CSV",
+      ceiling:ceilingById.get(id) ?? ceilingByName.get(uniqueName) ?? ceilingByName.get(alternate) ?? player.ceiling,
+      ownership:ownershipById.get(id) ?? ownershipByName.get(uniqueName) ?? ownershipByName.get(alternate) ?? player.ownership};
+  });
+  if (!matchedCount) {
+    throw new Error("No projections matched this slate. Choose a matching file with player IDs or names and teams.");
+  }
+  return {players:updated,matched:matchedCount};
+}
 
+export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {inspection,slateKey} = {}) {
+  const profile = rosterProfile(sport);
+  const allowed = new Set(profile.roster.flatMap(([,positions]) => positions));
+  const {rows,preview,slates} = inspection ?? inspectSalaryCSV(salaryCSV);
+  const selectedSlate = slateKey ?? (slates.length === 1 ? slates[0].key : undefined);
+  if (slates.length > 1 && !slates.some(slate => slate.key === selectedSlate)) {
+    throw new Error("This cheatsheet contains multiple slates or dates. Choose a slate before building.");
+  }
+  const salaryRows = slates.length > 1 ? rows.filter(row => cheatsheetKey(row) === selectedSlate) : rows;
   const players = new Map();
   let skipped = 0;
   for (const row of salaryRows) {
@@ -171,19 +198,10 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       skipped++;
       continue;
     }
-    const nameKey = matchName(name) + ":" + team;
-    const variantKey = nameVariant(name) + ":" + team;
-    const variants = projectionVariants.get(variantKey);
-    // Match suffix differences only where both files identify one name on this team.
-    const alternate = salaryVariants.get(variantKey)?.size === 1 && variants?.size === 1 ?
-      variants.values().next().value : undefined;
-    const matched = byId.get(id) ?? byName.get(nameKey) ?? byName.get(alternate);
-    const ceiling = ceilingById.get(id) ?? ceilingByName.get(nameKey) ?? ceilingByName.get(alternate) ?? readCeiling(row);
-    const ownership = ownershipById.get(id) ?? ownershipByName.get(nameKey) ?? ownershipByName.get(alternate) ?? readOwnership(row);
     const provided = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fpts);
     const average = csvNumber(row.fppg);
-    const points = matched ?? (Number.isFinite(provided) ? provided : average);
-    const source = matched != null ? "Projection CSV" : Number.isFinite(provided) ? "Salary CSV projection" :
+    const points = Number.isFinite(provided) ? provided : average;
+    const source = Number.isFinite(provided) ? "Salary CSV projection" :
       Number.isFinite(average) ? "FanDuel FPPG" : "";
     const status = row.injuryindicator || row.injurystatus || row.status || "";
     if (players.has(id)) {
@@ -201,16 +219,11 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       continue;
     }
     const game = (row.game || row.gameid || row.matchup || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
-    players.set(id,{id,name,positions,salary,team,points,ceiling,ownership,source,status,game,
+    players.set(id,{id,name,positions,salary,team,points,ceiling:readCeiling(row),ownership:readOwnership(row),source,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
   if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
-  const pool = [...players.values()];
-  const matched = pool.filter(player => player.source === "Projection CSV").length;
-  if (projectionCSV.trim() && !matched) {
-    throw new Error("No projections matched this slate. Choose a matching file with player IDs or names and teams, or use the salary file alone.");
-  }
-  return {players:pool,skipped,preview,matched};
+  return {...applyPlayerProjections([...players.values()],projectionCSV,sport,{selectedSlate}),skipped,preview};
 }
 
 function requiredLockSlots(locked, profile) {

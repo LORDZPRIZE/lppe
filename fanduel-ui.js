@@ -1,4 +1,4 @@
-import { importPlayers, inspectSalaryCSV, profiles, reviewCSV } from "./fanduel-optimizer.js";
+import { applyPlayerProjections, importPlayers, inspectSalaryCSV, profiles, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -6,6 +6,9 @@ const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",m
 const importForm = byId("fdImport");
 const autoLoad = byId("fdAutoLoad");
 const liveSlate = byId("fdLiveSlate");
+const liveProjections = byId("fdLiveProjections");
+const restoreLiveProjections = byId("fdUseLiveProjections");
+const liveProjectionStatus = byId("fdLiveProjectionStatus");
 const refreshSlates = byId("fdRefreshSlates");
 const sport = byId("fdSport");
 const salaries = byId("fdSalaries");
@@ -41,6 +44,7 @@ let optimizer;
 let buildProgress;
 let autoRequest;
 let slateLockAt = null;
+let loadedLiveSlate;
 let loadedSalaryFile;
 let loadedSlateKey;
 let inspectedFile;
@@ -111,6 +115,7 @@ byId("fdResumeSlate").addEventListener("click",() => {
     if (Object.hasOwn(saved.settings,control.id)) control.value = saved.settings[control.id];
   }
   slateLockAt = null;
+  loadedLiveSlate = undefined;
   importedSlateName = saved.name;
   players = saved.players;
   applyMode();
@@ -226,7 +231,9 @@ function checkSlate(pool, profile, selectedSport) {
 function renderSlateCheck() {
   const profile = profiles[sport.value];
   const {eligible,games,warnings} = checkSlate(players,profile,sport.value);
-  byId("fdSlateCheck").textContent = players.length + " players · " + eligible + " eligible · " +
+  const slateName = loadedLiveSlate?.name || importedSlateName;
+  byId("fdSlateCheck").textContent = (slateName ? slateName+" · " : "") +
+    players.length + " players · " + eligible + " eligible · " +
     (games.length ? games.length + " listed games" : "game details unavailable") + " · " +
     dollars.format(profile.salaryCap) + " cap · " + profile.roster.length + " roster slots. " +
     (warnings.join(" ") || "Confirm these games match your FanDuel contest.");
@@ -240,6 +247,8 @@ function renderSlateCheck() {
 }
 
 function renderPlayers() {
+  byId("fdLiveOverrides").hidden = !loadedLiveSlate;
+  restoreLiveProjections.hidden = !loadedLiveSlate?.projectionText;
   renderSlateCheck();
   byId("fdSaveControls").hidden = !importedSlateName;
   renderPlayerRows();
@@ -291,7 +300,9 @@ function renderPlayerRows() {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = label;
-      option.disabled = value === "lock" && !Number.isFinite(player.points);
+      const blockedByStatus = Boolean(loadedLiveSlate && unavailable(player.status));
+      option.disabled = (value !== "exclude" && blockedByStatus) ||
+        (value === "lock" && !Number.isFinite(player.points));
       selection.append(option);
     }
     selection.value = player.selection;
@@ -414,6 +425,7 @@ importForm.addEventListener("submit",async event => {
     importedSlateName = [salaryFile.name,chosen?.name,chosen?.date].filter(Boolean).join(" · ");
     byId("fdSaveStatus").textContent = "";
     slateLockAt = null;
+    loadedLiveSlate = undefined;
     clearRemoval();
     clearLineups();
     players = result.players;
@@ -512,6 +524,9 @@ function compareLineups(highCeiling,simulation) {
 function renderLineups(result,requested,highCeiling) {
   const status = byId("fdBuildStatus");
   lineups = result.simulation ? result.lineups : [...result.lineups].sort((a,b) => highCeiling ? b.ceiling - a.ceiling : b.points - a.points);
+  const heading = byId("fdResultsHeading");
+  const slateName = loadedLiveSlate?.name || importedSlateName;
+  heading.textContent = slateName ? "Lineups · "+slateName : "Lineups";
   status.textContent = lineups.length ? "Built "+lineups.length+" of "+requested+" requested lineups. Ranked by "+(highCeiling ? "total ceiling estimates." : "total projected points.") :
     "No valid lineup found. Check projections, locks, exclusions, and roster eligibility.";
   if (result.simulation) {
@@ -550,6 +565,10 @@ function renderLineups(result,requested,highCeiling) {
     const meta = document.createElement("span");
     meta.className = "lineup-meta";
     meta.textContent = dollars.format(lineup.salary)+" used · "+dollars.format(profiles[sport.value].salaryCap-lineup.salary)+" remaining";
+    const historical = lineup.picks.filter(({player}) => player.source === "FanDuel FPPG").length;
+    const uncertain = lineup.picks.filter(({player}) => /^(q|questionable|gtd|game time decision)$/i.test(player.status || ""));
+    if (historical) meta.append(" · "+historical+" using historical FPPG");
+    if (uncertain.length) meta.append(" · Status to check: "+uncertain.map(({player}) => player.name).join(", "));
     if (highCeiling) meta.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
     if (lineup.tournament) {
       const {top,win,duplicates} = lineup.tournament;
@@ -732,6 +751,47 @@ build.addEventListener("click",event => {
   if (event.isTrusted) showBuildResults();
 });
 
+function updateLiveProjections(text) {
+  const slate = loadedLiveSlate;
+  const baseline = players.map(player => {
+    const {points,ceiling,ownership,source} = slate.baseline.get(player.id);
+    return {...player,points,ceiling,ownership,source};
+  });
+  const result = applyPlayerProjections(baseline,text,sport.value,{date:slate.date});
+  players = result.players;
+  for (const player of players) {
+    if (player.selection === "lock" && !Number.isFinite(player.points)) player.selection = "available";
+  }
+  slate.projectionText = text;
+  clearRemoval();
+  clearLineups();
+  renderPlayers();
+  buildCurrentLineups();
+  return result.matched;
+}
+
+liveProjections.addEventListener("change",async () => {
+  const current = loadedLiveSlate;
+  const file = liveProjections.files[0];
+  if (!current || !file) return;
+  try {
+    if (file.size > 5_000_000) throw new Error("Use a CSV under 5 MB.");
+    const text = await file.text();
+    if (loadedLiveSlate !== current || liveProjections.files[0] !== file) return;
+    if (!text.trim()) throw new Error("The projections CSV is empty.");
+    const matched = updateLiveProjections(text);
+    liveProjectionStatus.textContent = "Custom projections matched "+matched+" of "+players.length+" players.";
+  } catch (error) {
+    if (loadedLiveSlate === current) liveProjectionStatus.textContent = error.message;
+  }
+});
+
+restoreLiveProjections.addEventListener("click",() => {
+  liveProjections.value = "";
+  updateLiveProjections("");
+  liveProjectionStatus.textContent = "Live slate projections restored.";
+});
+
 async function loadPublicPool(listOnly = false) {
   const previousId = liveSlate.value;
   if (!listOnly && !previousId) return;
@@ -764,21 +824,51 @@ async function loadPublicPool(listOnly = false) {
       return;
     }
     if (!Array.isArray(data.players) || !(data.lockAt > Date.now())) throw new Error("The public pool has expired.");
+    const sameSlate = loadedLiveSlate?.id === previousId;
+    const priorSelections = new Map(sameSlate ? players.map(player => [player.id,player]) : []);
+    const baseline = new Map(data.players.map(player => [player.id,player]));
+    let selectedPlayers = data.players.map(player => ({...player}));
+    let projectionText = sameSlate ? loadedLiveSlate.projectionText : "";
+    liveProjectionStatus.textContent = "";
+    if (projectionText) {
+      try {
+        const result = applyPlayerProjections(selectedPlayers,projectionText,sport.value,{date:data.date});
+        selectedPlayers = result.players;
+        liveProjectionStatus.textContent = "Custom projections matched "+result.matched+" of "+selectedPlayers.length+" players.";
+      } catch {
+        projectionText = "";
+        liveProjectionStatus.textContent = "Custom projections did not match this refresh. Live slate estimates are in use.";
+      }
+    }
+    if (!projectionText) liveProjections.value = "";
+    const removedLocks = [];
+    for (const player of selectedPlayers) {
+      const previous = priorSelections.get(player.id);
+      if (!previous) continue;
+      player.maxExposure = previous.maxExposure;
+      if (previous.selection === "lock" && (player.selection === "exclude" || !Number.isFinite(player.points))) {
+        removedLocks.push(player.name);
+      } else if (player.selection !== "exclude" && !unavailable(previous.status)) {
+        player.selection = previous.selection;
+      }
+    }
     clearLineups();
     clearRemoval();
     slateLockAt = data.lockAt;
+    loadedLiveSlate = {id:previousId,date:data.date,name:data.label+" · "+data.date,baseline,projectionText};
     loadedSalaryFile = loadedSlateKey = undefined;
     importedSlateName = undefined;
-    players = data.players;
+    players = selectedPlayers;
     playerPage = 0;
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
     const coverage = data.projectionCoverage;
-    const baseline = coverage ?
+    const estimateSummary = coverage ?
       " Daily Fantasy Fuel projections matched "+coverage.matched+" of "+coverage.eligible+
       " available players (updated "+new Date(coverage.updatedAt).toLocaleTimeString()+"). Other players use FanDuel FPPG when available." :
       data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
     byId("fdStatus").textContent = data.label+" · "+data.date+" · "+players.length+" players across "+data.gameCount+
-      " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+baseline;
+      " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+estimateSummary+
+      (removedLocks.length ? " Unlocked after refresh: "+removedLocks.join(", ")+".": "");
     byId("fdPool").hidden = false;
     renderPlayers();
     buildCurrentLineups();
@@ -815,7 +905,11 @@ liveSlate.addEventListener("change",() => {
   autoRequest?.abort();
   autoRequest = undefined;
   autoLoad.disabled = !liveSlate.value;
-  byId("fdStatus").textContent = liveSlate.value ? "Slate selected. Tap Load slate and build." : "Choose a slate.";
+  const selected = liveSlate.value;
+  const current = loadedLiveSlate?.name || importedSlateName;
+  const selectedMessage = selected ? "Tap Load slate and build to use this selection." : "Choose a slate.";
+  byId("fdStatus").textContent = selectedMessage+
+    (current ? " Currently loaded: "+current+"." : "");
 });
 sport.addEventListener("change",() => {
   autoRequest?.abort();
@@ -823,6 +917,7 @@ sport.addEventListener("change",() => {
   clearRemoval();
   players = [];
   slateLockAt = null;
+  loadedLiveSlate = undefined;
   importedSlateName = undefined;
   search.value = selectionFilter.value = "";
   playerPage = 0;

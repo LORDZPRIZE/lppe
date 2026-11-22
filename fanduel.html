@@ -199,6 +199,15 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
  <section id="fdPool" hidden aria-labelledby="fdPoolHeading">
   <h2 id="fdPoolHeading">Player pool</h2>
   <p class="muted" id="fdSlateCheck" role="status"></p>
+  <details id="fdLiveOverrides" hidden>
+   <summary>Use custom projections for this live slate</summary>
+   <div class="controls">
+    <label>Custom projections CSV <input id="fdLiveProjections" type="file" accept=".csv,text/csv"></label>
+    <button type="button" id="fdUseLiveProjections" hidden>Restore live projections</button>
+   </div>
+   <p class="muted">Include Projection and either ID or Name and Team. Ceiling and Ownership % are optional.</p>
+   <p id="fdLiveProjectionStatus" role="status"></p>
+  </details>
   <details id="fdGames" hidden><summary>Games in this slate</summary><ul id="fdGameList"></ul></details>
   <div class="controls">
    <label>Mode <select id="fdMode"><option value="gpp">GPP tournament</option><option value="cash">Cash</option></select></label>
