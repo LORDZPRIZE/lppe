@@ -285,6 +285,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
    <div class="feed-state">
    <p id="todayPicksStatus" class="sub" role="status">Checking for fresh PrizePicks lines…</p>
    <p id="todayPicksTiming" class="sub" hidden></p>
+   <p id="todayFeedHealth" class="sub" hidden></p>
    </div>
    </div>
    <div class="slate-filters">
@@ -305,7 +306,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 <div data-view="nbaPropRankings">
  <section class="section" id="nbaPropRankings">
   <h2>Today’s NBA Prop Rankings</h2>
-  <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate removes sportsbook margin and does not account for PrizePicks payouts.</p>
+  <p class="sub">Compares matching PrizePicks lines with prices from at least two sportsbooks. The market estimate is the median of the matched sportsbooks’ probabilities after removing their margins. PrizePicks payouts are evaluated separately.</p>
   <label class="board-search">Player <input id="liveBoardPlayer" type="search" placeholder="Search player"></label>
   <details class="disclosure">
    <summary>Filters and estimate settings</summary>
@@ -781,11 +782,14 @@ async function loadPrizePicksLines(scan = false) {
  try {
   const response = await fetch("/api/prizepicks-board" + (scan ? "?scan=1" : ""), {signal:controller.signal});
   if (response.status === 429) {
-   status.textContent = showPrizePicksLimit(await response.json().catch(() => ({})));
+   const limit = await response.json().catch(() => ({}));
+   renderFeedRefresh(limit.lastRefresh);
+   status.textContent = showPrizePicksLimit(limit);
    return;
   }
   if (!response.ok) throw new Error("PrizePicks request failed");
   const data = await response.json();
+  renderFeedRefresh(data.lastRefresh);
   if (data.connected === false) {
    status.textContent = "The PrizePicks feed is awaiting configuration.";
    return;
@@ -822,7 +826,7 @@ async function loadPrizePicksLines(scan = false) {
 document.getElementById("refreshPrizePicks").addEventListener("click", () => loadPrizePicksLines());
 const supportedMarkets = new Map([
  ["points","points"],["rebounds","rebounds"],["assists","assists"],
- ["three-pointers","three-pointers"],["3-pt made","three-pointers"],
+ ["three-pointers","three-pointers"],["3-pointers made","three-pointers"],["3-pt made","three-pointers"],
  ["points + rebounds + assists","points + rebounds + assists"],["pts+rebs+asts","points + rebounds + assists"],
  ["points + rebounds","points + rebounds"],["pts+rebs","points + rebounds"],
  ["points + assists","points + assists"],["pts+asts","points + assists"],
@@ -837,8 +841,8 @@ function comparisonIssue(prop,now,today) {
  if (!Number.isFinite(starts)) return "Game time is unavailable.";
  if (starts <= now || pacificDay.format(starts) !== today) return "Game is outside today’s upcoming slate.";
  const age = now - Date.parse(prop.observedAt);
- if (!(age >= 0 && age <= maxQuoteAge)) return "The PrizePicks line is outside the freshness window.";
- if (prop.period.toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.toLowerCase())) {
+ if (!(age >= 0 && age < maxQuoteAge)) return "The PrizePicks line is outside the freshness window.";
+ if (prop.period.trim().toLowerCase() !== "full game" || !supportedMarkets.has(prop.market.trim().toLowerCase())) {
   return "This market or period is outside sportsbook comparison coverage.";
  }
  return "";
@@ -846,15 +850,16 @@ function comparisonIssue(prop,now,today) {
 
 function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all", side = "all"} = {}) {
  const today = pacificDay.format(now);
- const key = line => JSON.stringify([line.player.trim().toLowerCase(),
+ const key = line => JSON.stringify([modelPlayerKey(line.player),
   supportedMarkets.get(line.market.trim().toLowerCase()),line.line]);
  const fresh = value => {
   const age = now - Date.parse(value);
-  return age >= 0 && age <= maxQuoteAge;
+  return age >= 0 && age < maxQuoteAge;
  };
  const indexed = new Map();
  for (const quote of sportsbook) {
-  if (!fresh(quote.updatedAt) || !quote.eventId || Math.abs(quote.americanOdds) < 100) continue;
+  if (!fresh(quote.updatedAt) || !quote.eventId || !quote.bookmaker.trim() ||
+      Math.abs(quote.americanOdds) < 100 || !supportedMarkets.has(quote.market.trim().toLowerCase())) continue;
   const match = key(quote);
   if (!indexed.has(match)) indexed.set(match, []);
   indexed.get(match).push(quote);
@@ -873,20 +878,29 @@ function rankMarketProps(prizePicks, sportsbook, now = Date.now(), {tier = "all"
   const gameId = gameIds.size === 1 ? quotes[0].eventId : null;
   const books = new Map();
   for (const quote of gameId ? quotes : []) {
-   if (!books.has(quote.bookmaker)) books.set(quote.bookmaker,{MORE:new Set(),LESS:new Set()});
-   books.get(quote.bookmaker)[quote.side].add(quote.americanOdds);
+   const bookKey = quote.bookmaker.trim().toLowerCase();
+   const updated = Date.parse(quote.updatedAt);
+   const previous = books.get(bookKey);
+   if (previous && updated < previous.updated) continue;
+   if (!previous || updated > previous.updated) {
+    books.set(bookKey,{name:quote.bookmaker,updated,MORE:new Set(),LESS:new Set()});
+   }
+   books.get(bookKey)[quote.side].add(quote.americanOdds);
   }
   const estimates = [];
   let oldest = Date.parse(prop.observedAt);
-  for (const [bookmaker,book] of books) {
+  for (const book of books.values()) {
    if (book.MORE.size !== 1 || book.LESS.size !== 1) continue;
    const moreOdds = [...book.MORE][0], lessOdds = [...book.LESS][0];
    const more = implied(moreOdds), less = implied(lessOdds);
-   oldest = Math.min(oldest,...quotes.filter(q=>q.bookmaker === bookmaker).map(q=>Date.parse(q.updatedAt)));
-   estimates.push({bookmaker,moreOdds,lessOdds,more:more/(more+less)});
+   oldest = Math.min(oldest,book.updated);
+   estimates.push({bookmaker:book.name,moreOdds,lessOdds,more:more/(more+less),updated:book.updated});
   }
   if (!unavailable && estimates.length < 2) unavailable = "Fewer than two fresh, two-sided sportsbook matches.";
-  const more = unavailable ? null : estimates.reduce((sum,value) => sum+value.more,0)/estimates.length;
+  const ordered = estimates.map(estimate => estimate.more).sort((a,b) => a-b);
+  const middle = Math.floor(ordered.length/2);
+  const more = unavailable ? null :
+   (ordered[middle] + ordered[Math.floor((ordered.length-1)/2)])/2;
   for (const item of prop.sides) {
    const pickTier = item.tier?.trim().toLowerCase();
    if (side !== "all" && item.side !== side) continue;
@@ -1389,7 +1403,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
  for (const prop of prizePicks?.savedBoard ? [] : prizePicks?.lines || []) {
   if (comparisonIssue(prop,now,today) || !prop.team) continue;
   const markets = byPlayer.get(modelPlayerKey(prop.player) + ":" + modelTeamKey(prop.team.trim().toUpperCase()));
-  const model = markets?.find(item => item.market === supportedMarkets.get(prop.market.toLowerCase()));
+  const model = markets?.find(item => item.market === supportedMarkets.get(prop.market.trim().toLowerCase()));
   if (!model) continue;
   const more = model.values.filter(value => value > prop.line).length;
   const less = model.values.filter(value => value < prop.line).length;
@@ -1461,6 +1475,25 @@ const resultWait = 4 * 60 * 60 * 1000;
 const resultsDate = new Intl.DateTimeFormat("en-US",{
  timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"
 });
+
+function renderFeedRefresh(refresh) {
+ const status = document.getElementById("todayFeedHealth");
+ const time = Date.parse(refresh?.scheduledAt);
+ status.hidden = !Number.isFinite(time);
+ if (status.hidden) return;
+ const checked = new Date(time).toLocaleString([],{
+  month:"short",day:"numeric",hour:"numeric",minute:"2-digit",timeZoneName:"short"
+ });
+ let outcome = "";
+ if (refresh.outcome === "saved") outcome = refresh.lineCount + " offers saved";
+ if (refresh.outcome === "unchanged") outcome = "snapshot unchanged";
+ if (refresh.outcome === "retained_previous_board") outcome = "provider limit reached";
+ if (refresh.outcome === "refresh_failed") {
+  outcome = refresh.providerStatus === 401 || refresh.providerStatus === 403 ?
+   "provider rejected authentication" : refresh.reason || "provider request failed";
+ }
+ status.textContent = "Last scheduled check " + checked + (outcome ? " · " + outcome : "") + ".";
+}
 
 function updatePrizePicksHealth(board) {
  const status = document.getElementById("prizePicksFreshness");
@@ -1842,7 +1875,7 @@ function addToWatchlist(prop) {
 function watchedOffer(item,lines,board,now) {
  const start = Date.parse(item.eventStart);
  if (Number.isFinite(start) && start <= now) return {status:"Scheduled start passed"};
- if (!board || board.savedBoard) return {status:"Live line unverified"};
+ if (!board || board.savedBoard || board.scheduled) return {status:"Live line unverified"};
  const identity = watchIdentity(item);
  const matches = lines.filter(prop => watchIdentity(prop) === identity);
  const byId = item.id ? matches.filter(prop => prop.id === item.id) : [];
@@ -2012,6 +2045,11 @@ function pickKey(prop) {
   prop.tier?.trim().toLowerCase()]);
 }
 
+function marketEstimateRange(prop) {
+ const probabilities = prop.estimates.map(quote => prop.side === "MORE" ? quote.more : 1-quote.more);
+ return formatPickEstimate(Math.min(...probabilities)) + "–" + formatPickEstimate(Math.max(...probabilities));
+}
+
 function formatPickEstimate(chance) {
  return (chance*100).toFixed(1) + "%";
 }
@@ -2096,7 +2134,7 @@ function renderTodayPicks() {
  const now = Date.now();
  if (!board || board.savedBoard || board.scheduled) {
   updateSlateStats(board?.scheduled ? 0 : "—",0);
-  status.textContent = board?.scheduled ? "Waiting for PrizePicks lines." :
+  status.textContent = board?.scheduled ? "Waiting for the first saved PrizePicks snapshot." :
    document.getElementById("prizePicksStatus").textContent || "Waiting for PrizePicks lines.";
   showNextPrizePicksSnapshot(timing,now);
   return;
@@ -2107,7 +2145,12 @@ function renderTodayPicks() {
  const fresh = board.lines.filter(prop => !comparisonIssue(prop,now,today));
  if (!fresh.length) {
   updateSlateStats(0,0);
-  status.textContent = "No fresh, supported PrizePicks lines for upcoming games today.";
+  const upcoming = board.lines.filter(prop => Date.parse(prop.eventStart) > now &&
+   pacificDay.format(Date.parse(prop.eventStart)) === today);
+  const newest = Math.max(...upcoming.map(prop => Date.parse(prop.observedAt)).filter(Number.isFinite));
+  status.textContent = newest <= now-maxQuoteAge && Number.isFinite(newest) ?
+   "The last PrizePicks snapshot for upcoming games is more than 30 minutes old." :
+   "No fresh, supported PrizePicks lines for upcoming games today.";
   showNextPrizePicksSnapshot(timing,now);
   return;
  }
@@ -2175,7 +2218,7 @@ function renderTodayPicks() {
   const summary = document.createElement("summary");
   summary.textContent = "Why this pick?";
   const marketNote = document.createElement("p");
-  marketNote.textContent = market ? "Market: " + formatPickEstimate(market.chance) + " · " + market.books + " books" :
+  marketNote.textContent = market ? "Market: " + formatPickEstimate(market.chance) + " · " + market.books + " books · " + marketEstimateRange(market) :
    "Market estimate unavailable.";
   const modelNote = document.createElement("p");
   modelNote.textContent = model ? "Stats model: " + formatPickEstimate(model.chance) + " · projected " +
@@ -2512,7 +2555,7 @@ async function scanAndRankProps() {
   const hasOutsideSlate = outsidePicks.some(pick => pick.date === outsideSlateDate(now));
   const needsOdds = (estimateSource.value === "auto" || hasOutsideSlate) && prizePicks && !prizePicks.savedBoard &&
    prizePicks.lines.some(prop => !comparisonIssue(prop,now,today) &&
-    modelMarketColumns[supportedMarkets.get(prop.market.toLowerCase())].length === 1);
+    modelMarketColumns[supportedMarkets.get(prop.market.trim().toLowerCase())].length === 1);
   if (needsOdds) status.textContent = "Checking sportsbook quotes…";
   const sportsbook = needsOdds ? await loadSportsbookLines() : undefined;
   nbaAvailability = await availabilityRequest;
@@ -2567,9 +2610,7 @@ function renderMarketBoard(prizePicks,sportsbook,needsOdds,{searchOnly = false} 
    badge.textContent = marketGrade + " · " + estimate;
    row.insertCell().append(badge);
    row.insertCell().textContent = prop.books;
-   const prices = prop.estimates.map(q=>100*(prop.side === "MORE" ? q.more : 1-q.more));
-   row.insertCell().textContent = prop.chance === null ? "—" :
-    Math.min(...prices).toFixed(1) + "% – " + Math.max(...prices).toFixed(1) + "%";
+   row.insertCell().textContent = prop.chance === null ? "—" : marketEstimateRange(prop);
    const details = document.createElement("details");
    const summary = document.createElement("summary");
    summary.textContent = "Why this prop?";
