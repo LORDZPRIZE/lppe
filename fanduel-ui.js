@@ -33,11 +33,13 @@ function clearRemoval() {
 function removePlayer(id) {
   const player = players.find(candidate => candidate.id === id);
   if (!player || player.selection === "exclude") return;
-  lastRemoval = {player,previousSelection:player.selection,previousObjective:objective.value};
+  lastRemoval = {
+    player,previousSelection:player.selection,previousObjective:objective.value,previousTopLineup:lineups[0]?.ids
+  };
   player.selection = "exclude";
   objective.value = "projection";
   byId("fdRemoval").hidden = false;
-  byId("fdRemovalStatus").textContent = player.name+" removed. Rebuilding for projected points.";
+  byId("fdRemovalStatus").textContent = player.name+" excluded from the build.";
   rebuildAfterRemoval();
 }
 
@@ -122,8 +124,13 @@ function renderPlayers() {
     }
     selection.value = player.selection;
     selection.addEventListener("change",() => {
+      if (selection.value === "exclude") {
+        removePlayer(player.id);
+        byId("fdUndoRemoval").focus();
+        return;
+      }
       player.selection = selection.value;
-      if (lastRemoval?.player === player && player.selection !== "exclude") clearRemoval();
+      if (lastRemoval?.player === player) clearRemoval();
       clearLineups();
       renderSlateCheck();
     });
@@ -205,6 +212,14 @@ function renderLineups(result,requested,highCeiling) {
       result.simulation.scenarios+" scenarios and "+result.simulation.opponents+" modeled opponents. Estimates use slate projections and synthetic opponents.";
   }
   if (result.limited) status.textContent += " The search reached its limit. A better lineup or additional alternatives may exist.";
+  if (lastRemoval) {
+    const {player,previousTopLineup} = lastRemoval;
+    const additions = previousTopLineup?.has(player.id) && lineups.length
+      ? lineups[0].picks.filter(pick => !previousTopLineup.has(pick.player.id)).map(pick => pick.player.name)
+      : [];
+    byId("fdRemovalStatus").textContent = player.name+" removed."+
+      (additions.length ? " Added to the top lineup: "+additions.join(", ")+".":"");
+  }
   const output = byId("fdResults");
   for (const [index,lineup] of lineups.entries()) {
     const details = document.createElement("details");
