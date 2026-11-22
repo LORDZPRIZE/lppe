@@ -9,16 +9,21 @@ self.addEventListener("message",({data}) => {
       ...player,
       points:Number.isFinite(player.points) ? player.ceiling : NaN
     })) : players;
-    const result = buildLineups(pool,count,difference,160000,sport,options);
-    result.exactFirst = Boolean(options?.exactFirst && result.lineups.length);
-    if (highCeiling) {
-      const originals = new Map(players.map(player => [player.id,player]));
-      for (const lineup of result.lineups) {
-        lineup.ceiling = lineup.points;
-        lineup.picks = lineup.picks.map(pick => ({...pick,player:originals.get(pick.player.id)}));
-        lineup.points = lineup.picks.reduce((sum,{player}) => sum + player.points,0);
-      }
+    const originals = highCeiling ? new Map(players.map(player => [player.id,player])) : null;
+    function displayLineup(lineup) {
+      if (!originals) return lineup;
+      const picks = lineup.picks.map(pick => ({...pick,player:originals.get(pick.player.id)}));
+      return {...lineup,picks,ceiling:lineup.points,
+        points:picks.reduce((sum,{player}) => sum + player.points,0)};
     }
+    const result = buildLineups(pool,count,difference,data.deep ? 1000000 : 160000,sport,{
+      ...options,
+      onLineup(lineup,limited) {
+        self.postMessage({progress:displayLineup(lineup),limited});
+      }
+    });
+    result.exactFirst = Boolean(options?.exactFirst && result.lineups.length);
+    if (highCeiling) result.lineups = result.lineups.map(displayLineup);
     if (data.tournament && sport === "NFL" && result.lineups.length) {
       const simulated = rankNFLTournament(players,result.lineups);
       result.lineups = simulated.lineups;

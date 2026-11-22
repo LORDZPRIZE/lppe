@@ -23,6 +23,7 @@ const count = byId("fdCount");
 const difference = byId("fdDifference");
 const exposure = byId("fdExposure");
 const stack = byId("fdStack");
+const depth = byId("fdSearchDepth");
 const objective = byId("fdObjective");
 const mode = byId("fdMode");
 const build = byId("fdBuild");
@@ -30,13 +31,14 @@ const exportButton = byId("fdExport");
 let players = [];
 let lineups = [];
 let optimizer;
+let buildProgress;
 let autoRequest;
 let slateLockAt = null;
 let loadedSalaryFile;
 let importedSlateName;
 const savedSlateKey = "lppe-fanduel-import-v1";
 const savedSlateLifetime = 48 * 60 * 60 * 1000;
-const slateSettings = [mode,objective,count,difference,exposure,stack];
+const slateSettings = [mode,objective,count,difference,exposure,stack,depth];
 
 function readSavedSlate() {
   try {
@@ -95,7 +97,9 @@ byId("fdResumeSlate").addEventListener("click",() => {
   search.value = selectionFilter.value = "";
   sport.value = saved.sport;
   applySport();
-  for (const control of slateSettings) control.value = saved.settings[control.id];
+  for (const control of slateSettings) {
+    if (Object.hasOwn(saved.settings,control.id)) control.value = saved.settings[control.id];
+  }
   slateLockAt = null;
   loadedSalaryFile = undefined;
   importedSlateName = saved.name;
@@ -152,6 +156,7 @@ byId("fdUndoRemoval").addEventListener("click",() => {
 function clearLineups() {
   optimizer?.terminate();
   optimizer = undefined;
+  buildProgress = undefined;
   byId("fdCancel").hidden = true;
   build.disabled = false;
   lineups = [];
@@ -507,29 +512,54 @@ function buildCurrentLineups() {
     byId("fdBuildStatus").textContent = "High Ceiling needs a numeric Ceiling column matched to players in this slate.";
     return finish();
   }
-  optimizer = new Worker("/fanduel-worker.js",{type:"module"});
+  const activeWorker = new Worker("/fanduel-worker.js",{type:"module"});
+  optimizer = activeWorker;
+  const options = {exactFirst:objective.value === "projection",
+    exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)};
+  buildProgress = {lineups:[],limited:false,requested,highCeiling,tournament,exactFirst:options.exactFirst};
   byId("fdCancel").hidden = false;
-  optimizer.addEventListener("message",({data}) => {
+  activeWorker.addEventListener("message",({data}) => {
+    if (optimizer !== activeWorker) return;
+    if (data.progress) {
+      buildProgress.lineups.push(data.progress);
+      buildProgress.limited = data.limited;
+      const completed = buildProgress.lineups.length;
+      byId("fdBuildStatus").textContent = completed === requested && tournament ?
+        "Ranking the completed lineups against modeled opponents…" :
+        "Building lineups… "+completed+" of "+requested+" complete.";
+      return;
+    }
     finish();
+    buildProgress = undefined;
     if (slateLockAt && slateLockAt <= Date.now()) {
       byId("fdBuildStatus").textContent = "The slate reached its first game start during the search.";
     } else if (data.error) byId("fdBuildStatus").textContent = data.error;
     else renderLineups(data,requested,highCeiling);
   });
-  optimizer.addEventListener("error",() => {
+  activeWorker.addEventListener("error",() => {
+    if (optimizer !== activeWorker) return;
     finish();
+    buildProgress = undefined;
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
   const pool = gpp ? players : players.map(player => ({...player,maxExposure:100}));
-  optimizer.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
-    options:{exactFirst:objective.value === "projection",
-      exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
+  activeWorker.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,
+    sport:sport.value,deep:gpp && depth.value === "deep",options});
 }
 byId("fdCancel").addEventListener("click",() => {
+  const completed = buildProgress;
   clearLineups();
   byId("fdResultsPanel").hidden = false;
-  byId("fdBuildStatus").textContent = "Build canceled. Your slate and player selections are ready for another build.";
-  build.focus();
+  const status = byId("fdBuildStatus");
+  if (completed?.lineups.length && !(slateLockAt && slateLockAt <= Date.now())) {
+    renderLineups(completed,completed.requested,completed.highCeiling);
+    status.textContent = "Build canceled. "+status.textContent+
+      (completed.tournament ? " Tournament simulation stopped before ranking." : "");
+    exportButton.focus();
+  } else {
+    status.textContent = "Build canceled. Your slate and player selections are ready for another build.";
+    build.focus();
+  }
 });
 
 function showBuildResults() {
@@ -622,6 +652,7 @@ function applyMode() {
   for (const label of document.querySelectorAll("[data-gpp]")) label.hidden = cash;
   byId("fdFootballStack").hidden = cash || !["NFL","CFB"].includes(sport.value);
   byId("fdExposureHint").hidden = cash;
+  byId("fdDepthHint").hidden = cash || depth.value !== "deep";
   build.textContent = cash ? "Build cash lineup" : "Build GPP lineups";
   clearLineups();
   if (players.length) renderSlateCheck();
@@ -644,6 +675,7 @@ count.addEventListener("change",applyMode);
 difference.addEventListener("change",applyMode);
 exposure.addEventListener("change",applyMode);
 stack.addEventListener("change",applyMode);
+depth.addEventListener("change",applyMode);
 exportButton.addEventListener("click",() => {
   const url = URL.createObjectURL(new Blob([reviewCSV(lineups,sport.value)],{type:"text/csv;charset=utf-8"}));
   const download = document.createElement("a");
