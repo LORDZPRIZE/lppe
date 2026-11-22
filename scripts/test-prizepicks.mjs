@@ -245,3 +245,23 @@ test("nearby lines count ties separately and use up to five valid games", async 
     [[9,4,1,5],[10,3,1,5],[11,2,1,5]]);
   assert.deepEqual(Array.from(sensitivity(games,"LESS",0.5),row => row.line),[0.5,1.5]);
 });
+
+test("agreement requires both sources to favor the exact side", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const source = html.slice(html.indexOf("function matchesPickEvidence"),html.indexOf("function renderTodayPicks"));
+  const matches = vm.runInNewContext(source+"\nmatchesPickEvidence");
+  assert.equal(matches("agreement",{chance:.63},{chance:.57}),true);
+  assert.equal(matches("agreement",{chance:.63},{chance:.50}),false);
+  assert.equal(matches("agreement",undefined,{chance:.63}),false);
+  assert.equal(matches("stats",undefined,{chance:.63}),true);
+});
+
+test("recent minutes compares disjoint windows and requires four games", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const source = html.slice(html.indexOf("function recentMinutesChange"),html.indexOf("function formatMinutesChange"));
+  const change = vm.runInNewContext(source+"\nrecentMinutesChange");
+  const games = [30,34,22,26,28,20,40].map(minutes => ({minutes}));
+  assert.equal(change(games.slice(0,3)),null);
+  const {recent,previous,previousCount} = change(games);
+  assert.deepEqual([recent,previous,previousCount],[32,24,4]);
+});
