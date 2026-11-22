@@ -1,5 +1,7 @@
 import { buildLineups } from "./fanduel-optimizer.js";
 
+import { rankNFLTournament } from "./fanduel-nfl-tournament.js";
+
 self.addEventListener("message",({data}) => {
   try {
     const {players,count,difference,sport,options,highCeiling} = data;
@@ -15,6 +17,11 @@ self.addEventListener("message",({data}) => {
         lineup.picks = lineup.picks.map(pick => ({...pick,player:originals.get(pick.player.id)}));
         lineup.points = lineup.picks.reduce((sum,{player}) => sum + player.points,0);
       }
+    }
+    if (data.tournament && sport === "NFL" && result.lineups.length) {
+      const simulated = rankNFLTournament(players,result.lineups);
+      result.lineups = simulated.lineups;
+      result.simulation = {opponents:simulated.opponents,scenarios:simulated.scenarios};
     }
     self.postMessage(result);
   } catch (error) {
