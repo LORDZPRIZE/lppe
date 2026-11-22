@@ -15,7 +15,7 @@ export function assessProp(prop, { now = Date.now(), maxLineAgeMs = MAX_LINE_AGE
   if (!prop.playerId || !prop.gameId || !prop.market || !["MORE","LESS"].includes(prop.side))
     reasons.push("Incomplete player, game, market or direction");
   if (!finite(prop.line) || prop.line < 0) reasons.push("Invalid or missing posted line");
-  if (!prop.lineSource || !prop.lineSource.includes("prizepicks"))
+  if (!prop.lineSource || !/^prizepicks(?:-|$)/i.test(prop.lineSource))
     reasons.push("PrizePicks source not verified");
   if (age(now, prop.lineObservedAt) > maxLineAgeMs) reasons.push("Posted line is stale or timestamp missing");
   if (!["standard","goblin","demon"].includes(prop.offerType))
@@ -28,9 +28,9 @@ export function assessProp(prop, { now = Date.now(), maxLineAgeMs = MAX_LINE_AGE
     reasons.push("Minutes projection unavailable");
   if (!finite(prop.projection) || !finite(prop.standardDeviation) || prop.standardDeviation <= 0)
     reasons.push("Independent projection or dispersion missing");
-  if (!prop.projectionSource || !prop.projectionObservedAt)
-    reasons.push("Projection provenance missing");
-  if (prop.gameStarted === true) reasons.push("Game already started");
+  if (!prop.projectionSource || !prop.projectionObservedAt || age(now, prop.projectionObservedAt) === Infinity)
+    reasons.push("Projection provenance missing or timestamp invalid");
+  if (prop.gameStarted !== false) reasons.push("Game start status not confirmed pregame");
   if (prop.offerType === "goblin" && prop.side === "LESS")
     reasons.push("Unsupported Goblin LESS selection");
   return { eligible: reasons.length === 0, reasons, confidence: null,
