@@ -121,7 +121,7 @@ test("outside research uses only an unambiguous upcoming game and retains push c
     source("const modelMarketColumns","function nbaStatValue"),
     source("function nbaStatValue","let nbaAvailability"),
     source("function recentModelGames","function estimateNBAProps"),
-    source("const outsideDate","function renderOutsideOptimizer"),
+    source("const outsideDate","const outsideCompareBooks ="),
     "researchOutsidePick"
   ].join("\n"),{dayMillis:86400000});
   const pick = {date:"2026-11-22",player:"Jose Smith",market:"points",line:20,side:"MORE"};
