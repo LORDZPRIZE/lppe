@@ -148,6 +148,11 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <button type="button" id="fdAutoLoad" class="primary">Load slate and build</button>
   </div>
   <p id="fdStatus" role="status" aria-live="polite"></p>
+  <div class="controls" id="fdSavedSlate" hidden>
+   <button type="button" id="fdResumeSlate">Resume saved slate</button>
+   <button type="button" id="fdForgetSlate">Clear saved slate</button>
+   <span class="muted" id="fdSavedSlateInfo"></span>
+  </div>
   <div class="controls" id="fdRemoval" hidden>
    <span id="fdRemovalStatus" role="status"></span>
    <button id="fdUndoRemoval" type="button">Undo removal</button>
@@ -185,6 +190,10 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   </div>
   <p class="muted" id="fdExposureHint">Exposure limits use the requested lineup count and round down. The lower of the overall and player limits applies. Locks are exempt.</p>
   <p class="muted" id="fdTeamRules"></p>
+  <div class="controls" id="fdSaveControls" hidden>
+   <button type="button" id="fdSaveSlate">Save slate on this device</button>
+   <span class="muted" id="fdSaveStatus" role="status"></span>
+  </div>
   <div class="controls">
    <label>Find a player or team <input id="fdSearch" type="search" placeholder="Player or team"></label>
    <label>Position <select id="fdPositionFilter"></select></label>

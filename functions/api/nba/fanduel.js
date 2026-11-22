@@ -61,8 +61,9 @@ export function normalizePublicSlate({rows,updatedAt},events,now) {
     if (!game.upcoming || game.starts <= now) return {error:"At least one game in the public pool has started. Import your specific slate to build for another contest."};
     usedGames.set(key,game.starts);
   }
-  const csv = ["ID,Name,Position,Team,Salary,Projection,Injury Indicator",
-    ...rows.map(row => [row.id,row.name,row.positions,row.team,row.salary,row.points,row.injury].map(csvCell).join(","))].join("\n");
+  const csv = ["ID,Name,Position,Team,Salary,Projection,Injury Indicator,Game",
+    ...rows.map(row => [row.id,row.name,row.positions,row.team,row.salary,row.points,row.injury,
+      [teamCode(row.team),teamCode(row.opponent)].sort().join("/")].map(csvCell).join(","))].join("\n");
   const {players,skipped} = importPlayers(csv);
   const usable = players.filter(player => player.selection !== "exclude" && Number.isFinite(player.points));
   if (usable.length < 9 || usedGames.size < 2) return {error:"The public pool does not have enough eligible players."};
@@ -155,7 +156,7 @@ export async function onRequestGet({request,env}) {
   if (!configured && sport !== "NBA") return reply({
     error:"Automatic " + profiles[sport].name + " loading needs the salary API key. Import a FanDuel contest CSV to build now."
   },503);
-  const key = new Request(new URL("/lppe-internal/fanduel-pool-v3/"+sport+"/"+(configured ? "provider" : "public"),request.url));
+  const key = new Request(new URL("/lppe-internal/fanduel-pool-v4/"+sport+"/"+(configured ? "provider" : "public"),request.url));
   try {
     const cache = caches.default;
     const cached = await cache.match(key);
