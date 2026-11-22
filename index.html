@@ -453,10 +453,11 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 <div data-view="builder">
  <section class="section" id="builder">
   <h2>Smart GREEN-Only Builder</h2>
-  <p class="sub">Only GREEN candidates can be added. The builder does not guarantee positive expected value or independent outcomes.</p>
+  <p class="sub">Build with 2–6 GREEN picks and one pick per player. The all-hit estimate assumes independent outcomes.</p>
   <div class="card">
    <div class="value" id="builderProbability">--</div>
-   <small>Illustrative combined probability, assuming independence</small>
+   <small>All-hit estimate</small>
+   <p class="sub" id="builderEstimateStatus" role="status" hidden></p>
    <div id="builderList" class="sub" style="margin-top:14px">No selections yet.</div>
    <div class="builder-actions">
     <button type="button" id="recheckBuilder" disabled>Recheck entry</button>
@@ -507,6 +508,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
    <button id="outsideRefresh" type="button" class="outside-primary">Check today’s lines</button>
   </div>
   <p id="outsideStatus" class="sub" role="status"></p>
+  <p class="sub">Enter a line from PrizePicks or another source. LPPE can check recent NBA results for that line while the live board is unavailable.</p>
   <details id="outsideFormPanel">
    <summary>Add an outside pick</summary>
    <form id="outsideForm" class="outside-form">
@@ -647,6 +649,17 @@ const builderRecheckStatus = document.getElementById("builderRecheckStatus");
 const builderRecheckResults = document.getElementById("builderRecheckResults");
 let builderRevision = 0;
 let recheckingBuilder = false;
+let builderExpiryTimer;
+
+function builderOfferExpiry(prop) {
+ const offer = prop.offer;
+ return offer ? Math.min(Date.parse(offer.observedAt)+maxQuoteAge,
+  Date.parse(offer.eventStart),offer.expiresAt ?? Infinity) : Infinity;
+}
+
+function builderOfferIsCurrent(prop,now) {
+ return builderOfferExpiry(prop) > now && (!prop.offer || !availabilityHold(prop.offer));
+}
 
 function resetBuilderRecheck() {
  builderRevision++;
@@ -658,11 +671,22 @@ function resetBuilderRecheck() {
 function togglePick(id){
  const p=props.find(x=>x.id===id);
  if(!p||grade(p.probability)!=="GREEN")return;
- if(selected.includes(id))selected=selected.filter(x=>x!==id);
- else if(selected.length<MAX_PICKS)selected.push(id);
- else {
-  alert("Six selections maximum.");
-  return;
+ if (selected.includes(id)) {
+  selected = selected.filter(x => x !== id);
+ } else {
+  if (!builderOfferIsCurrent(p,Date.now())) {
+   alert("This pick has expired or now has an injury flag. Check today’s lines again.");
+   return;
+  }
+  if (selected.some(chosen => modelPlayerKey(props.find(prop => prop.id === chosen).player) === modelPlayerKey(p.player))) {
+   alert("The Builder allows one pick per player.");
+   return;
+  }
+  if (selected.length >= MAX_PICKS) {
+   alert("Six selections maximum.");
+   return;
+  }
+  selected.push(id);
  }
  resetBuilderRecheck();
  render();
@@ -702,12 +726,28 @@ function render(){
   button.textContent = active ? "Remove from Builder" : "Add to Builder";
   button.setAttribute("aria-pressed",String(active));
  }
- const chosen=selected.map(id=>props.find(p=>p.id===id)).filter(Boolean);
- document.getElementById("builderList").textContent=chosen.length?
- chosen.map(p=>`${p.player} — ${p.market} ${p.side} (${(p.probability*100).toFixed(1)}%)`).join(" | "):
- "No selections yet.";
- document.getElementById("builderProbability").textContent=chosen.length>=2?
- (chosen.reduce((v,p)=>v*p.probability,1)*100).toFixed(2)+"%":"Select 2 to 6 GREEN props";
+ renderBuilderEstimate();
+}
+
+function renderBuilderEstimate() {
+ clearTimeout(builderExpiryTimer);
+ const now = Date.now();
+ const chosen = selected.map(id => props.find(prop => prop.id === id)).filter(Boolean);
+ const invalid = chosen.filter(prop => !builderOfferIsCurrent(prop,now));
+ document.getElementById("builderList").textContent = chosen.length ?
+  chosen.map(prop => prop.player + " · " + prop.side + " " + prop.line + " " + prop.market + " (" +
+   formatPickEstimate(prop.probability) + ")").join(" | ") : "No selections yet.";
+ const estimate = document.getElementById("builderProbability");
+ estimate.textContent = invalid.length ? "—" : chosen.length >= 2 ?
+  (chosen.reduce((value,prop) => value*prop.probability,1)*100).toFixed(2) + "%" : "Select 2 to 6 GREEN props";
+ const status = document.getElementById("builderEstimateStatus");
+ status.hidden = !invalid.length;
+ status.textContent = invalid.length ?
+  "Expired or injury-flagged picks: " + invalid.map(prop => prop.player).join(", ") + ". Remove them and check today’s lines." : "";
+ const nextExpiry = Math.min(...chosen.map(builderOfferExpiry).filter(time => time > now));
+ if (Number.isFinite(nextExpiry)) {
+  builderExpiryTimer = setTimeout(renderBuilderEstimate,Math.max(1,nextExpiry-now));
+ }
 }
 
 function clearBuilder(){
@@ -1374,12 +1414,24 @@ function availabilityHold(prop) {
   (/^out$/i.test(report.status) && returnAt > start && age < 30*86400000));
 }
 
+function recentModelGames(player,now) {
+ return player.games.filter(game => Date.parse(game.date) < now)
+  .sort((a,b) => Date.parse(b.date)-Date.parse(a.date));
+}
+
+function lineHitEstimate(values,line,side) {
+ const more = values.filter(value => value > line).length;
+ const less = values.filter(value => value < line).length;
+ if (more + less < 4) return null;
+ const hits = side === "MORE" ? more : less;
+ return {hits,ties:values.length-more-less,chance:(hits+2)/(more+less+4)};
+}
+
 function estimateNBAProps(data,prizePicks,now,filters) {
  const byPlayer = new Map();
  const projections = [];
  for (const player of data.players) {
-  const completed = player.games.filter(game => Date.parse(game.date) < now)
-   .sort((a,b) => Date.parse(b.date)-Date.parse(a.date));
+  const completed = recentModelGames(player,now);
   const games = completed.filter(game => now - Date.parse(game.date) <= 11*86400000);
   if (games.length < 4) continue;
   const minutes = games.reduce((sum,game) => sum + game.minutes,0) / games.length;
@@ -1405,18 +1457,15 @@ function estimateNBAProps(data,prizePicks,now,filters) {
   const markets = byPlayer.get(modelPlayerKey(prop.player) + ":" + modelTeamKey(prop.team.trim().toUpperCase()));
   const model = markets?.find(item => item.market === supportedMarkets.get(prop.market.trim().toLowerCase()));
   if (!model) continue;
-  const more = model.values.filter(value => value > prop.line).length;
-  const less = model.values.filter(value => value < prop.line).length;
-  if (more + less < 4) continue;
   for (const item of prop.sides) {
    const tier = item.tier?.trim().toLowerCase();
    if (filters.side !== "all" && item.side !== filters.side) continue;
    if (filters.tier === "no-goblins" ? tier === "goblin" : filters.tier !== "all" && tier !== filters.tier) continue;
    if (tier === "demon" && item.side !== "more") continue;
-   const hits = item.side === "more" ? more : less;
-   sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,
-    observedAt:prop.observedAt,openingLine:prop.openingLine,opponent:prop.opponent,tier:item.tier,side:item.side.toUpperCase(),
-    hits,ties:model.games-more-less,chance:(hits+2)/(more+less+4)});
+   const side = item.side.toUpperCase();
+   const estimate = lineHitEstimate(model.values,prop.line,side);
+   if (estimate) sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,
+    observedAt:prop.observedAt,openingLine:prop.openingLine,opponent:prop.opponent,tier:item.tier,side,...estimate});
   }
  }
  return {sides:sides.sort((a,b) => b.chance-a.chance),
@@ -2137,6 +2186,10 @@ function renderTodayPicks() {
   status.textContent = board?.scheduled ? "Waiting for the first saved PrizePicks snapshot." :
    document.getElementById("prizePicksStatus").textContent || "Waiting for PrizePicks lines.";
   showNextPrizePicksSnapshot(timing,now);
+  const link = document.createElement("a");
+  link.href = "#outsideFormPanel";
+  link.textContent = "Research a line you enter";
+  timing.append(" ",link);
   return;
  }
 
@@ -2152,6 +2205,10 @@ function renderTodayPicks() {
    "The last PrizePicks snapshot for upcoming games is more than 30 minutes old." :
    "No fresh, supported PrizePicks lines for upcoming games today.";
   showNextPrizePicksSnapshot(timing,now);
+  const link = document.createElement("a");
+  link.href = "#outsideFormPanel";
+  link.textContent = "Research a line you enter";
+  timing.append(" ",link);
   return;
  }
  const modeled = latestModel ? estimateNBAProps(latestModel,{lines:fresh},now,filters).sides : [];
@@ -2370,6 +2427,25 @@ function outsideSlateDate(now) {
  return date.year + "-" + date.month + "-" + date.day;
 }
 
+function researchOutsidePick(data,pick,now) {
+ if (pick.date !== outsideSlateDate(now) || !data?.schedule) return null;
+ const players = data.players.filter(player => modelPlayerKey(player.player) === modelPlayerKey(pick.player));
+ if (players.length !== 1) return null;
+ const player = players[0];
+ const team = modelTeamKey(player.team);
+ const games = data.schedule.filter(game => Date.parse(game.start) > now &&
+  outsideSlateDate(Date.parse(game.start)) === pick.date && game.teams.some(value => modelTeamKey(value) === team));
+ if (games.length !== 1) return null;
+
+ const recent = recentModelGames(player,now).filter(game => now-Date.parse(game.date) <= 11*dayMillis);
+ const values = recent.map(game => nbaStatValue(game.values,pick.market));
+ if (!values.every(Number.isFinite)) return null;
+ const result = lineHitEstimate(values,pick.line,pick.side);
+ if (!result) return null;
+ return {...result,count:recent.length,minutes:recent.reduce((sum,game) => sum+game.minutes,0)/recent.length,
+  player:player.player,team,eventStart:games[0].start};
+}
+
 function renderOutsideOptimizer() {
  clearTimeout(outsideExpiry);
  const now = Date.now();
@@ -2384,6 +2460,7 @@ function renderOutsideOptimizer() {
   rankMarketProps(fresh,latestBoard.sportsbook,now) : [];
  const minBooks = Number(document.getElementById("minBooks").value);
  const candidates = new Map();
+ const expiries = [];
  for (const [index,pick] of outsidePicks.entries()) {
   const sameProp = prop => modelPlayerKey(prop.player) === modelPlayerKey(pick.player) &&
    supportedMarkets.get(prop.market.trim().toLowerCase()) === pick.market;
@@ -2414,6 +2491,21 @@ function renderOutsideOptimizer() {
   const line = document.createElement("small");
   line.textContent = (pick.side === "MORE" ? "More" : "Less") + " than " + pick.line + " " + pick.market + " · " + pick.source;
   title.append(player,line);
+  const research = researchOutsidePick(latestModel,pick,now);
+  if (research) {
+   const stats = document.createElement("small");
+   stats.textContent = "Recent stats · " + research.hits + "/" + research.count + " cleared" +
+    (research.ties ? " · " + research.ties + " ties" : "") + " · " + research.minutes.toFixed(1) +
+    " avg min · " + formatPickEstimate(research.chance) + " estimate" + (Number.isInteger(pick.line) ? " if no tie" : "");
+   const injury = availabilityReport(research);
+   if (availabilityHold(research)) stats.textContent += " · ESPN " + injury.status;
+   title.append(stats);
+   expiries.push(Date.parse(research.eventStart));
+  } else if (latestModel && pick.date === today) {
+   const stats = document.createElement("small");
+   stats.textContent = "Recent stats unavailable for this player and upcoming slate.";
+   title.append(stats);
+  }
   const result = document.createElement("span");
   result.className = "outside-status";
   result.dataset.green = String(decision.startsWith("GREEN"));
@@ -2449,8 +2541,9 @@ function renderOutsideOptimizer() {
   summary.textContent = available + " of 6 eligible slots filled. Each pick needs a different player and game.";
  }
  entries.append(summary);
- if (picks.length) {
-  outsideExpiry = setTimeout(renderOutsideOptimizer,Math.max(1,Math.min(...picks.map(prop => prop.expiresAt))-now));
+ expiries.push(...picks.map(prop => prop.expiresAt));
+ if (expiries.length) {
+  outsideExpiry = setTimeout(renderOutsideOptimizer,Math.max(1,Math.min(...expiries)-now));
  }
 }
 
@@ -2486,7 +2579,11 @@ outsideForm.addEventListener("submit",event => {
   outsideForm.elements.player.value = "";
   outsideForm.elements.line.value = "";
   outsideForm.elements.player.focus();
-  if (latestBoard?.prizePicks && !latestBoard.sportsbook?.length) scanAndRankProps();
+  const board = latestBoard?.prizePicks;
+  const now = Date.now();
+  if (!board?.savedBoard && !latestBoard?.sportsbook?.length && pick.date === outsideSlateDate(now) &&
+      board?.lines.some(line => modelPlayerKey(line.player) === modelPlayerKey(pick.player) &&
+       !comparisonIssue(line,now,pacificDay.format(now)))) scanAndRankProps();
  } catch (error) {
   document.getElementById("outsideInputStatus").textContent = error.message;
  }
@@ -2495,6 +2592,7 @@ const outsideRefresh = document.getElementById("outsideRefresh");
 outsideRefresh.addEventListener("click",scanAndRankProps);
 
 function useLatestBoard() {
+ renderBuilderEstimate();
  renderOutsideOptimizer();
  renderTodayPicks();
  renderWatchlist();

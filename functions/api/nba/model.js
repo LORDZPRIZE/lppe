@@ -54,7 +54,7 @@ function playerBoxScores(summary) {
 
 async function recentNBA(request, now = Date.now()) {
   const dates = [...new Set(Array.from({length:12},(_,day) => nbaDate(now + (1-day) * 86400000)))];
-  return cachedNBA(request,"model-v3/" + nbaDate(now) + "/" + encodeURIComponent(pacificSlate.format(now)),1800,async () => {
+  return cachedNBA(request,"model-v4/" + nbaDate(now) + "/" + encodeURIComponent(pacificSlate.format(now)),1800,async () => {
     const boards = await Promise.allSettled(dates.map(date => getJson(espnNBA + "/scoreboard?dates=" + date)));
     if (boards[1].status !== "fulfilled" || !Array.isArray(boards[1].value.events)) {
       throw new Error("NBA schedule unavailable");
@@ -66,9 +66,13 @@ async function recentNBA(request, now = Date.now()) {
       const starts = Date.parse(game.date);
       return regular(game) && starts > now && pacificSlate.format(starts) === today;
     });
-    const teams = new Set(upcoming.flatMap(game =>
-      (game.competitions?.[0]?.competitors || []).map(entry => entry.team?.abbreviation)));
-    if (!teams.size) return {players:[],partial:false};
+    const gamesById = new Map(upcoming.map(game => [game.id,game]));
+    const schedule = [...gamesById.values()].map(game => ({
+      start:game.date,
+      teams:(game.competitions?.[0]?.competitors || []).map(entry => entry.team?.abbreviation).filter(Boolean)
+    })).filter(game => game.teams.length === 2);
+    const teams = new Set(schedule.flatMap(game => game.teams));
+    if (!teams.size) return {players:[],schedule,partial:days.length < dates.length};
     const finished = new Map();
     for (const board of days) {
       for (const game of board.value.events) {
@@ -100,7 +104,7 @@ async function recentNBA(request, now = Date.now()) {
     }
     return {players:[...players.values()].map(player => ({
       ...player,games:player.games.sort((a,b) => Date.parse(b.date) - Date.parse(a.date)).slice(0,6)
-    })).filter(player => player.games.length >= 4),partial};
+    })).filter(player => player.games.length >= 4),schedule,partial};
   });
 }
 
