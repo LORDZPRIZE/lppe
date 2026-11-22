@@ -19,6 +19,7 @@ button:disabled{opacity:.45;cursor:default}a:focus-visible,button:focus-visible,
 td,th{text-align:left;padding:10px;border-bottom:1px solid #293650;font-size:.875rem}
 details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
 #fdResults tfoot{font-weight:bold}#fdResults summary strong{color:#7debb7}
+.remove-player{display:block;margin-top:4px;padding:4px 8px}
 #fdStatus{min-height:1.5em}.results-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 </style>
 </head>
@@ -38,6 +39,10 @@ details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
   </div>
   <p class="muted">High Ceiling uses imported player ceiling estimates. Include a <strong>Ceiling</strong> column in your salary or projections CSV. Players without a ceiling estimate are skipped in High Ceiling mode.</p>
   <p id="fdStatus" role="status" aria-live="polite"></p>
+  <div class="controls" id="fdRemoval" hidden>
+   <span id="fdRemovalStatus" role="status"></span>
+   <button id="fdUndoRemoval" type="button">Undo removal</button>
+  </div>
   <div id="fdResultsPanel" hidden role="region" aria-labelledby="fdResultsHeading">
    <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdExport" disabled>Download review CSV</button></div>
    <p id="fdBuildStatus" role="status"></p>
