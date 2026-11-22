@@ -311,7 +311,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
   <details class="disclosure">
    <summary>Filters and estimate settings</summary>
    <div class="toolbar quick-filters">
-  <label>Estimate source <select id="estimateSource"><option value="auto">Automatic</option><option value="stats" selected>Stats only (no sportsbook credits)</option></select></label>
+  <label>Estimate source <select id="estimateSource"><option value="auto">Market first, stats where needed</option><option value="stats" selected>Stats only (no sportsbook credits)</option></select></label>
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
   <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
   <label>Books required for entry suggestions <select id="minBooks"><option value="2">2 or more</option><option value="3">3 or more</option><option value="4">4 or more</option></select></label>
@@ -528,7 +528,10 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
   </div>
   <p id="outsideBooksStatus" class="sub" role="status"></p>
   <ul id="outsideRows" class="outside-cards"></ul>
-  <h3>6-pick GREEN entry</h3>
+  <div class="toolbar">
+   <h3>GREEN entry</h3>
+   <label>Entry size <select id="outsideEntrySize"><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option></select></label>
+  </div>
   <ul id="outsideEntries" class="outside-cards"></ul>
  </section>
 </div>
@@ -564,6 +567,7 @@ function showDashboardView() {
   for (let parent = target.parentElement; parent && parent !== view; parent = parent.parentElement) {
    if (parent instanceof HTMLDetailsElement) parent.open = true;
   }
+  if (target instanceof HTMLDetailsElement) target.open = true;
   target.scrollIntoView();
  }
 }
@@ -1582,7 +1586,7 @@ async function loadNBAModel() {
 }
 
 const ledgerKey = "lppe-nba-results-v1";
-const lastFeedKey = "lppe-prizepicks-last-fresh-v1";
+const lastFeedKey = "lppe-prizepicks-last-observation-v2";
 const dayMillis = 86400000;
 const resultWait = 4 * 60 * 60 * 1000;
 const resultsDate = new Intl.DateTimeFormat("en-US",{
@@ -1612,12 +1616,17 @@ function updatePrizePicksHealth(board) {
  const status = document.getElementById("prizePicksFreshness");
  const now = Date.now();
  try {
-  const fresh = !board?.savedBoard && board?.lines.some(prop => !comparisonIssue(prop,now,pacificDay.format(now)));
-  if (fresh) localStorage.setItem(lastFeedKey,String(now));
+  const today = pacificDay.format(now);
+  const lines = board?.savedBoard ? [] : board?.lines ?? [];
+  const newest = Math.max(...lines.filter(prop => !comparisonIssue(prop,now,today))
+   .map(prop => Date.parse(prop.observedAt)));
+  if (Number.isFinite(newest) && newest > Number(localStorage.getItem(lastFeedKey))) {
+   localStorage.setItem(lastFeedKey,String(newest));
+  }
   const last = Number(localStorage.getItem(lastFeedKey));
   if (last > 0) {
    status.hidden = false;
-   status.textContent = "Last scan with fresh comparable PrizePicks lines: " + new Date(last).toLocaleString() + ".";
+   status.textContent = "Latest fresh PrizePicks observation seen on this device: " + new Date(last).toLocaleString() + ".";
   }
  } catch {}
 }
@@ -2250,6 +2259,45 @@ function recentPropResearch(games,side,line) {
  });
 }
 
+function lineSensitivity(games,side,line) {
+ const sample = games.filter(game => Number.isFinite(game.value)).slice(0,5);
+ if (!sample.length) return [];
+ return [line-1,line,line+1].filter(threshold => threshold >= 0).map(threshold => {
+  const hits = sample.filter(game => side === "MORE" ? game.value > threshold : game.value < threshold).length;
+  const pushes = sample.filter(game => game.value === threshold).length;
+  return {line:threshold,hits,pushes,count:sample.length};
+ });
+}
+
+function renderLineSensitivity(games,side,line) {
+ const rows = lineSensitivity(games,side,line);
+ if (!rows.length) return;
+ const details = document.createElement("details");
+ const summary = document.createElement("summary");
+ summary.textContent = "Last " + rows[0].count + " games at nearby lines";
+ const list = document.createElement("ul");
+ for (const row of rows) {
+  const item = document.createElement("li");
+  item.textContent = side + " " + row.line + (row.line === line ? " (selected)" : "") +
+   " · " + row.hits + "/" + row.count + " cleared" + (row.pushes ? " · " + row.pushes + " ties" : "");
+  list.append(item);
+ }
+ details.append(summary,list);
+ return details;
+}
+
+function pickResearchCandidates(priced,modeled,useMarket,key = pickKey) {
+ const sources = useMarket ? [["Market estimate",priced],["Stats model",modeled]] : [["Stats model",modeled]];
+ const candidates = new Map();
+ for (const [source,offers] of sources) {
+  for (const offer of offers) {
+   const id = key(offer);
+   if (!candidates.has(id)) candidates.set(id,{pick:offer,source});
+  }
+ }
+ return [...candidates.values()];
+}
+
 function renderTodayPicks() {
  clearTimeout(todayPicksExpiry);
  const status = document.getElementById("todayPicksStatus");
@@ -2294,19 +2342,21 @@ function renderTodayPicks() {
   rankMarketProps(fresh,latestBoard.sportsbook,now,filters).filter(prop => prop.chance !== null) : [];
  const markets = new Map(priced.map(prop => [pickKey(prop),prop]));
  const models = new Map(modeled.map(prop => [pickKey(prop),prop]));
- const primary = estimateSource.value === "auto" && priced.length ? priced : modeled;
- const primaryName = primary === priced ? "Market estimate" : "Stats model";
+ const useMarket = estimateSource.value === "auto";
+ const candidates = pickResearchCandidates(priced,modeled,useMarket);
  const alternateLines = alternateLineGroups(priced,modeled);
  const player = modelPlayerKey(document.getElementById("picksPlayer").value);
  const marketFilter = document.getElementById("picksMarket").value;
  const minMinutes = Number(document.getElementById("picksMinutes").value);
- const picks = primary.filter(prop => prop.chance > .5 && !availabilityHold(prop) &&
+ const picks = candidates.filter(({pick:prop}) => prop.chance > .5 && !availabilityHold(prop) &&
   modelPlayerKey(prop.player).includes(player) &&
   (!marketFilter || supportedMarkets.get(prop.market.trim().toLowerCase()) === marketFilter) &&
   (!minMinutes || (models.get(pickKey(prop))?.minutes ?? 0) >= minMinutes)).slice(0,todayPicksLimit);
- updateSlateStats(fresh.length,picks.filter(pick => grade(pick.chance) === "GREEN").length);
+ updateSlateStats(fresh.length,picks.filter(({pick}) => grade(pick.chance) === "GREEN").length);
  status.textContent = picks.length ?
-  "Showing " + picks.length + " sides above 50%, ranked by " + primaryName.toLowerCase() + ". Estimates are before payouts." :
+  "Showing " + picks.length + " sides above 50%. " +
+  (useMarket ? "Market estimates appear first, followed by stats-only sides. " : "") +
+  "Estimates are before payouts." :
   "No comparable sides above 50% for these filters yet.";
  const latestLine = Math.max(...fresh.map(prop => Date.parse(prop.observedAt)));
  timing.textContent = "Newest line in this scan: " + new Date(latestLine).toLocaleTimeString([],{
@@ -2316,7 +2366,7 @@ function renderTodayPicks() {
 
  const expiries = fresh.map(prop => Math.min(Date.parse(prop.observedAt)+maxQuoteAge,Date.parse(prop.eventStart)));
  expiries.push(...priced.map(prop => prop.expiresAt));
- for (const pick of picks) {
+ for (const {pick,source:primaryName} of picks) {
   const market = markets.get(pickKey(pick));
   const model = models.get(pickKey(pick));
 
@@ -2456,6 +2506,10 @@ function renderTodayPicks() {
    });
    card.append(add);
   }
+  if (model) {
+   const sensitivity = renderLineSensitivity(model.researchGames,pick.side,pick.line);
+   if (sensitivity) card.append(sensitivity);
+  }
   const alternates = renderAlternateLines(pick,alternateLines);
   if (alternates) card.append(alternates);
   cards.append(card);
@@ -2521,11 +2575,13 @@ function researchOutsidePick(data,pick,now) {
  const result = lineHitEstimate(values,pick.line,pick.side,pick.market);
  if (!result) return null;
  return {...result,count:recent.length,minutes:recent.reduce((sum,game) => sum+game.minutes,0)/recent.length,
-  player:player.player,team,eventStart:games[0].start};
+  player:player.player,team,eventStart:games[0].start,history:values.map(value => ({value}))};
 }
 
 const outsideCompareBooks = document.getElementById("outsideCompareBooks");
 const outsideBooksStatus = document.getElementById("outsideBooksStatus");
+const outsideEntrySize = document.getElementById("outsideEntrySize");
+outsideEntrySize.addEventListener("change",renderOutsideOptimizer);
 let outsideQuotes;
 let outsideQuotesChecked = 0;
 
@@ -2640,13 +2696,15 @@ function renderOutsideOptimizer() {
   remove.textContent = "Remove";
   remove.setAttribute("aria-label","Remove " + pick.player + " " + pick.market + " from " + pick.source);
   remove.addEventListener("click",() => saveOutsidePicks(outsidePicks.filter((_,i) => i !== index)));
+  const sensitivity = research && renderLineSensitivity(research.history,pick.side,pick.line);
+  if (sensitivity) title.append(sensitivity);
   row.append(title,result,remove);
   rows.append(row);
  }
  const picks = [...candidates.values()];
  document.getElementById("outsideStatus").textContent = outsidePicks.length +
   " saved · " + picks.length + " GREEN matches" + (fresh.length ? "." : " · Waiting for fresh PrizePicks lines.");
- const entrySize = 6;
+ const entrySize = Number(outsideEntrySize.value);
  const [best] = suggestEntries(picks,entrySize,1);
  const summary = document.createElement("li");
  if (best) {
@@ -2661,8 +2719,10 @@ function renderOutsideOptimizer() {
   }
   summary.append(legs);
  } else {
-  const available = [5,4,3,2,1].find(size => suggestEntries(picks,size,1).length) ?? 0;
-  summary.textContent = available + " of 6 eligible slots filled. Each pick needs a different player and game.";
+  const smallerSizes = Array.from({length:entrySize-1},(_,index) => entrySize-index-1);
+  const available = smallerSizes.find(size => suggestEntries(picks,size,1).length) ?? 0;
+  summary.textContent = available + " of " + entrySize +
+   " eligible slots filled. Each pick needs a different player and game.";
  }
  entries.append(summary);
  expiries.push(...picks.map(prop => prop.expiresAt));
