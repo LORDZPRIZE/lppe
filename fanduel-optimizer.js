@@ -202,7 +202,7 @@ function requiredLockSlots(locked, profile) {
   return required;
 }
 
-export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false} = {}) {
+export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false,onLineup} = {}) {
   const profile = rosterProfile(sport);
   const roster = profile.roster;
   const salaryCap = profile.salaryCap;
@@ -260,21 +260,35 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   // Rounding costs down keeps the bound safe even for nonstandard salary increments.
   const budgetUnit = 100;
   const budgetSteps = Math.floor(salaryCap / budgetUnit);
-  const budgetBounds = [new Float64Array(budgetSteps + 1)];
-  for (let index = slots.length - 1; index >= 0; index--) {
-    const next = budgetBounds[0];
-    const bounds = new Float64Array(budgetSteps + 1).fill(-Infinity);
-    let cheapest = Infinity;
-    for (const player of slots[index].pool) {
-      const cost = Math.floor(player.salary / budgetUnit);
-      if (cost >= cheapest) continue; // A higher-ranked option is already cheaper.
-      cheapest = cost;
-      for (let budget = cost; budget <= budgetSteps; budget++) {
-        bounds[budget] = Math.max(bounds[budget], player.points + next[budget-cost]);
+  const maximumOverlap = roster.length-difference;
+  function scoreBounds(previous, canUse) {
+    // Count shared players against the most recent lineup. Repeated players in
+    // this relaxed calculation are allowed, so it remains an upper bound.
+    const sharedLimit = previous ? maximumOverlap : 0;
+    const budgetBounds = [Array.from({length:sharedLimit+1},() => new Float64Array(budgetSteps+1))];
+    for (let index = slots.length-1; index >= 0; index--) {
+      const next = budgetBounds[0];
+      const bounds = Array.from({length:sharedLimit+1},() => new Float64Array(budgetSteps+1).fill(-Infinity));
+      const cheapest = [Infinity,Infinity];
+      for (const player of slots[index].pool) {
+        if (!canUse(player)) continue;
+        const shared = Number(Boolean(previous?.ids.has(player.id)));
+        const cost = Math.floor(player.salary / budgetUnit);
+        if (cost >= cheapest[shared]) continue;
+        cheapest[shared] = cost;
+        for (let allowed = shared; allowed <= sharedLimit; allowed++) {
+          const floor = next[allowed-shared];
+          const ceiling = bounds[allowed];
+          for (let budget = cost; budget <= budgetSteps; budget++) {
+            ceiling[budget] = Math.max(ceiling[budget],player.points + floor[budget-cost]);
+          }
+        }
       }
+      budgetBounds.unshift(bounds);
     }
-    budgetBounds.unshift(bounds);
+    return budgetBounds;
   }
+  const baseBounds = scoreBounds(null,() => true);
   const lineups = [];
   let limited = false;
   let restriction;
@@ -284,7 +298,6 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     const teams = new Map();
     const hitters = new Map();
     const overlaps = lineups.map(() => 0);
-    const maximumOverlap = roster.length-difference;
     if (number && locked.length > maximumOverlap) {
       restriction = "Your locked players leave room for at most " + (roster.length-locked.length) +
         " different players between lineups. Lower the minimum difference or unlock players.";
@@ -305,6 +318,9 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       restriction = "No eligible quarterback has enough available WR/TE teammates for this stack.";
       break;
     }
+    const usePortfolioBound = eligible.some(player => !canUse(player));
+    const previous = usePortfolioBound ? lineups.at(-1) : undefined;
+    const budgetBounds = previous ? scoreBounds(previous,canUse) : baseBounds;
     const nodeLimit = exactFirst && number === 0 ? Infinity : searchLimit;
     let nodes = 0;
     let best = null;
@@ -313,7 +329,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       if (salary + salaryFloor[index] > salaryCap || locksRemaining > slots.length-index ||
           (best && points+pointsCeiling[index] <= best.points) ||
           overlaps.some(overlap => overlap > maximumOverlap)) return;
-      const budgetBound = budgetBounds[index][Math.floor((salaryCap-salary)/budgetUnit)];
+      const allowedOverlap = previous ? maximumOverlap-overlaps.at(-1) : 0;
+      const budgetBound = budgetBounds[index][allowedOverlap][Math.floor((salaryCap-salary)/budgetUnit)];
       if (budgetBound === -Infinity || (best && points + budgetBound + 1e-9 < best.points)) return;
       if (nodeLimit === Infinity && best && index < slots.length) {
         let remaining = slots.length-index;
@@ -376,6 +393,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     if (!best) break;
     lineups.push(best);
     for (const id of best.ids) usage.set(id,(usage.get(id) || 0)+1);
+    onLineup?.(best,limited);
   }
   return {lineups,limited,restriction};
 }
