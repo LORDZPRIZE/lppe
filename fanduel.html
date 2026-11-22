@@ -6,7 +6,7 @@
 <title>FanDuel Classic Optimizer | LPPE</title>
 <style>
 :root{color-scheme:dark;font-family:Arial,sans-serif;background:#0b1020;color:#f4f7ff}
-*{box-sizing:border-box}body{margin:0}main,header{padding:22px max(5vw,16px)}
+[hidden]{display:none!important}*{box-sizing:border-box}body{margin:0}main,header{padding:22px max(5vw,16px)}
 header{background:#10182b;border-bottom:1px solid #293650}main{max-width:1200px;margin:auto}
 h1{font-size:clamp(24px,5vw,34px);margin:.55em 0}h2{font-size:19px}
 a{color:#9fc5ff}p{line-height:1.5}.muted{color:#aebbd2;font-size:.875rem}
@@ -47,12 +47,18 @@ details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
  </section>
  <section id="fdPool" hidden aria-labelledby="fdPoolHeading">
   <h2 id="fdPoolHeading">Player pool</h2>
+  <p class="muted" id="fdSlateCheck" role="status"></p>
+  <details id="fdGames" hidden><summary>Games in this slate</summary><ul id="fdGameList"></ul></details>
   <div class="controls">
    <label>Find a player or team <input id="fdSearch" type="search"></label>
-   <label>Lineups <input id="fdCount" type="number" min="1" max="20" value="5" required></label>
-   <label>Minimum different players per lineup <input id="fdDifference" type="number" min="1" max="9" value="2" required></label>
+   <label>Mode <select id="fdMode"><option value="gpp">GPP tournament</option><option value="cash">Cash</option></select></label>
+   <label data-gpp>Lineups <input id="fdCount" type="number" min="1" max="20" value="5" required></label>
+   <label data-gpp>Minimum different players per lineup <input id="fdDifference" type="number" min="1" max="9" value="2" required></label>
+   <label data-gpp>Max exposure (%) <input id="fdExposure" type="number" min="1" max="100" value="100" required></label>
+   <label id="fdFootballStack" hidden>Football stack <select id="fdStack"><option value="0">Off</option><option value="1">QB + 1 WR/TE</option><option value="2">QB + 2 WR/TE</option></select></label>
    <button id="fdBuild" class="primary" type="button">Build lineups</button>
   </div>
+  <p class="muted" id="fdExposureHint">Exposure is capped against the requested lineup count. Locks are exempt.</p>
   <p class="muted" id="fdTeamRules"></p>
   <div class="tablewrap"><table><thead><tr><th>Player</th><th>Position</th><th>Team</th><th>Salary</th><th>FPTS</th><th>Source</th><th>Injury status</th><th>Selection</th></tr></thead>
    <tbody id="fdPlayers"></tbody></table></div>
