@@ -73,7 +73,7 @@ export const teamCode = (raw,sport = "NBA") => {
   const team = raw?.trim().toUpperCase() || "";
   return sport === "NBA" ? ({BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team) : team;
 };
-const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+export const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const nameVariant = name => matchName(name.replace(/[\s,]+(?:jr\.?|sr\.?|ii|iii|iv|v)$/i,""));
 function recordNameVariant(groups,name,team) {
   if (!name || !team) return;
@@ -81,7 +81,7 @@ function recordNameVariant(groups,name,team) {
   if (!groups.has(key)) groups.set(key,new Set());
   groups.get(key).add(matchName(name) + ":" + team);
 }
-export const unavailable = status => /^(O|OUT|IR|INACTIVE|SUSPENDED|SUSP|DOUBTFUL|D)$/i.test(status || "");
+export const unavailable = status => /^(O|OUT|IR|INACTIVE|SUSPENDED|SUSP|DOUBTFUL|D|INJURED RESERVE|NOT WITH TEAM|G LEAGUE|G-LEAGUE)$/i.test(status || "");
 
 const isCheatsheet = rows => rows.length > 0 &&
   ["ppgprojection","slate","gamedate","opp"].every(key => key in rows[0]);
@@ -192,6 +192,12 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
         throw new Error("Conflicting rows share a FanDuel player ID. Use a single slate CSV.");
       }
       existing.positions = [...new Set([...existing.positions, ...positions])];
+      if (unavailable(status)) {
+        existing.status = status;
+        existing.selection = "exclude";
+      } else if (!existing.status) {
+        existing.status = status;
+      }
       continue;
     }
     const game = (row.game || row.gameid || row.matchup || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
@@ -329,6 +335,23 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     }
     return budgetBounds;
   }
+  // A second relaxation keeps players distinct and drops position-by-position
+  // assignments. It is strongest when flexible slots share the same expensive players.
+  const distinctBounds = possible.slice(0,-1).map((ids,index) => {
+    const remaining = slots.length-index;
+    const scores = Array.from({length:remaining+1},(_,count) =>
+      new Float64Array(budgetSteps+1).fill(count ? -Infinity : 0));
+    for (const player of projectionOrder) {
+      if (!ids.has(player.id)) continue;
+      const cost = Math.floor(player.salary/budgetUnit);
+      for (let count = remaining; count > 0; count--) {
+        for (let budget = cost; budget <= budgetSteps; budget++) {
+          scores[count][budget] = Math.max(scores[count][budget],player.points + scores[count-1][budget-cost]);
+        }
+      }
+    }
+    return scores[remaining];
+  });
   const baseBounds = scoreBounds(null,() => true);
   const lineups = [];
   let limited = false;
@@ -359,8 +382,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       restriction = "No eligible quarterback has enough available WR/TE teammates for this stack.";
       break;
     }
-    const usePortfolioBound = eligible.some(player => !canUse(player));
-    const previous = usePortfolioBound ? lineups.at(-1) : undefined;
+    const previous = lineups.at(-1);
     const budgetBounds = previous ? scoreBounds(previous,canUse) : baseBounds;
     const nodeLimit = exactFirst && number === 0 ? Infinity : searchLimit;
     let nodes = 0;
@@ -371,7 +393,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
           (best && points+pointsCeiling[index] <= best.points) ||
           overlaps.some(overlap => overlap > maximumOverlap)) return;
       const allowedOverlap = previous ? maximumOverlap-overlaps.at(-1) : 0;
-      const budgetBound = budgetBounds[index][allowedOverlap][Math.floor((salaryCap-salary)/budgetUnit)];
+      const budget = Math.floor((salaryCap-salary)/budgetUnit);
+      const budgetBound = Math.min(budgetBounds[index][allowedOverlap][budget],distinctBounds[index]?.[budget] ?? 0);
       if (budgetBound === -Infinity || (best && points + budgetBound + 1e-9 < best.points)) return;
       if (nodeLimit === Infinity && best && index < slots.length) {
         let remaining = slots.length-index;

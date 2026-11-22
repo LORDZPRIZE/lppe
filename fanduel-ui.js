@@ -772,7 +772,11 @@ async function loadPublicPool(listOnly = false) {
     players = data.players;
     playerPage = 0;
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
-    const baseline = data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
+    const coverage = data.projectionCoverage;
+    const baseline = coverage ?
+      " Daily Fantasy Fuel projections matched "+coverage.matched+" of "+coverage.eligible+
+      " available players (updated "+new Date(coverage.updatedAt).toLocaleTimeString()+"). Other players use FanDuel FPPG when available." :
+      data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
     byId("fdStatus").textContent = data.label+" · "+data.date+" · "+players.length+" players across "+data.gameCount+
       " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+baseline;
     byId("fdPool").hidden = false;

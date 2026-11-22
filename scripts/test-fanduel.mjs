@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLineups, importPlayers, inspectSalaryCSV } from "../fanduel-optimizer.js";
+import { buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
+import { addNBAProjections, attachNBAGames } from "../functions/api/nba/fanduel.js";
 import { rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
@@ -88,4 +89,82 @@ test("keeps tournament metrics stable when slate and candidate order changes", (
   assert.equal(first.opponents,second.opponents);
   assert.equal(first.scenarios,second.scenarios);
   assert.deepEqual(first.lineups[0].tournament,sameRoster.tournament);
+});
+
+test("keeps a player out when any duplicate salary row reports an unavailable status", () => {
+  const csv = [
+    "ID,Name,Position,Salary,Team,Projection,Injury Indicator",
+    "1,Player One,PG,7200,DEN,20,",
+    "1,Player One,SG,7200,DEN,20,Out"
+  ].join("\n");
+  const {players} = importPlayers(csv);
+  assert.deepEqual(players[0].positions,["PG","SG"]);
+  assert.equal(players[0].selection,"exclude");
+});
+
+test("adds fresh NBA projections only for unambiguous eligible players on the salary slate", () => {
+  const date = "2026-11-22";
+  const now = Date.parse(date+"T20:00:00Z");
+  const lockAt = now+3600000;
+  const player = {
+    id:"1",name:"Nikola Jokić",team:"DEN",salary:11900,positions:["C"],points:55,selection:"available"
+  };
+  const opponent = {...player,id:"2",name:"Player Two",team:"CHI",salary:6000,selection:"exclude"};
+  const fallback = {...player,id:"3",name:"Player Three",salary:4000};
+  const games = [{
+    competitions:[{competitors:[{team:{abbreviation:"DEN"}},{team:{abbreviation:"CHI"}}]}],
+    date:new Date(lockAt).toISOString(),status:{type:{state:"pre"}}
+  }];
+  const raw = {date,lockAt,gameCount:1,players:[player,opponent,fallback]};
+  assert.equal(attachNBAGames(raw,games,lockAt),raw);
+  const pool = attachNBAGames(raw,games,now);
+  assert(pool.players.every(player => player.game === "CHI/DEN"));
+
+  const row = {date,name:"Nikola Jokic",team:"DEN",opponent:"CHI",salary:"11900",positions:"C",points:"61"};
+  const projection = {rows:[row,{...row,name:"Player Two",team:"CHI",opponent:"DEN",salary:"6000"},
+    {...row,name:"Player Three",salary:"4100"}],updatedAt:new Date(now).toISOString()};
+  const enriched = addNBAProjections(pool,projection,now);
+  assert.deepEqual(enriched.players.map(player => player.points),[61,55,55]);
+  assert.equal(enriched.players[0].id,"1");
+  assert.equal(enriched.players[0].source,"Daily Fantasy Fuel");
+  assert.deepEqual(enriched.projectionCoverage,{matched:1,eligible:2,updatedAt:projection.updatedAt});
+  assert.equal(addNBAProjections(pool,projection,now+7200001),pool);
+  assert.equal(addNBAProjections(pool,{...projection,rows:[row,row]},now),pool);
+  assert.equal(addNBAProjections(pool,{...projection,rows:[{...row,date:"2026-11-23"}]},now),pool);
+  assert.equal(addNBAProjections(pool,{...projection,rows:[{...row,positions:"SG"}]},now),pool);
+});
+
+test("bounded search returns the exhaustive NBA optimum with flexible slots and uneven salaries", () => {
+  const positions = ["PG","SG","SF","PF","C","PG/SG","SF/C","PG","PF","SG","C","SF"];
+  const pool = positions.map((position,index) => ({
+    id:String(index),name:"Player "+index,team:["DEN","LAL","CHI","ORL"][index%4],
+    positions:position.split("/"),salary:4500+(index*337)%3900,points:10+(index*17)%39,
+    selection:index === 6 ? "lock" : "available"
+  }));
+  const {roster,salaryCap,maxTeam} = profiles.NBA;
+  const teams = new Map();
+  const used = new Set();
+  let optimum = -Infinity;
+  function enumerate(index,salary,points) {
+    if (salary > salaryCap) return;
+    if (index === roster.length) {
+      if (used.has("6") && [...teams.values()].filter(Boolean).length >= 3) optimum = Math.max(optimum,points);
+      return;
+    }
+    for (const player of pool) {
+      const teamCount = teams.get(player.team) || 0;
+      if (used.has(player.id) || teamCount >= maxTeam ||
+          !player.positions.some(position => roster[index][1].includes(position))) continue;
+      used.add(player.id);
+      teams.set(player.team,teamCount+1);
+      enumerate(index+1,salary+player.salary,points+player.points);
+      used.delete(player.id);
+      teams.set(player.team,teamCount);
+    }
+  }
+  enumerate(0,0,0);
+  assert(Number.isFinite(optimum));
+  const result = buildLineups(pool,1,1,Infinity,"NBA",{exactFirst:true});
+  assert.equal(result.lineups[0].points,optimum);
+  assert.equal(result.limited,false);
 });
