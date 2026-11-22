@@ -134,7 +134,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   return {players:[...players.values()],skipped};
 }
 
-export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA") {
+export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0} = {}) {
   const profile = rosterProfile(sport);
   const roster = profile.roster;
   const salaryCap = profile.salaryCap;
@@ -147,6 +147,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   if (locked.some(player => !Number.isFinite(player.points))) throw new Error("A locked player is missing a projection.");
   if (locked.length > roster.length) throw new Error("Lock at most " + roster.length + " players.");
   if (new Set(eligible.map(player => player.team)).size < 3) return {lineups:[],limited:false};
+  const usage = new Map();
+  const exposureLimit = Math.floor(count*exposure/100);
   const lockedIds = new Set(locked.map(player => player.id));
   const slots = roster.map(([label,positions],index) => ({
     label,index,pool:eligible.filter(player => player.positions.some(position => positions.includes(position)))
@@ -182,6 +184,9 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       if (locksRemaining && locked.some(player => !ids.has(player.id) && !possible[index].has(player.id))) return;
       if (index === slots.length) {
         if (teams.size < 3) return;
+        if (stack && (sport === "NFL" || sport === "CFB") && !selected.some(({player:qb,slot}) =>
+          roster[slot][0] === "QB" && selected.filter(({player}) => player.id !== qb.id &&
+            player.team === qb.team && player.positions.some(position => position === "WR" || position === "TE")).length >= stack)) return;
         if (sport === "CFB" && selected.every(({player}) => player.game) &&
             new Set(selected.map(({player}) => player.game)).size < 2) return;
         best = {picks:[...selected].sort((a,b)=>a.slot-b.slot),ids:new Set(ids),salary,points};
@@ -190,6 +195,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       const slot = slots[index];
       for (let rank = 0; rank < slot.pool.length && nodes < searchLimit; rank++) {
         const player = slot.pool[rank];
+        if (!lockedIds.has(player.id) && (usage.get(player.id) || 0) >= exposureLimit) continue;
         if (ids.has(player.id) || (teams.get(player.team) || 0) >= profile.maxTeam) continue;
         const isHitter = profile.maxHitters && slot.label !== "P";
         if (isHitter && (hitters.get(player.team) || 0) >= profile.maxHitters) continue;
@@ -216,6 +222,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
     if (nodes >= searchLimit) limited = true;
     if (!best) break;
     lineups.push(best);
+    for (const id of best.ids) usage.set(id,(usage.get(id) || 0)+1);
   }
   return {lineups,limited};
 }
