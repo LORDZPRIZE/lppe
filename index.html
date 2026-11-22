@@ -295,6 +295,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
    </div>
    <details class="disclosure">
     <summary>Filters</summary>
+    <label>Evidence <select id="picksEvidence"><option value="all">Any estimate</option><option value="agreement">Market and stats agree</option><option value="market">Market estimate available</option><option value="stats">Stats estimate available</option></select></label>
     <label>Recent minutes <select id="picksMinutes"><option value="0">Any</option><option value="20">20+ per game</option><option value="25">25+ per game</option><option value="30">30+ per game</option><option value="35">35+ per game</option></select></label>
    </details>
    </div>
@@ -2259,6 +2260,20 @@ function recentPropResearch(games,side,line) {
  });
 }
 
+function recentMinutesChange(games) {
+ const sample = games.slice(0,6);
+ if (sample.length < 4 || sample.some(game => !Number.isFinite(game.minutes))) return null;
+ const recent = sample.slice(0,2);
+ const previous = sample.slice(2);
+ const average = window => window.reduce((sum,game) => sum+game.minutes,0)/window.length;
+ return {recent:average(recent),previous:average(previous),previousCount:previous.length};
+}
+
+function formatMinutesChange(change) {
+ return "Minutes per game · last 2: " + change.recent.toFixed(1) +
+  " · previous " + change.previousCount + ": " + change.previous.toFixed(1);
+}
+
 function lineSensitivity(games,side,line) {
  const sample = games.filter(game => Number.isFinite(game.value)).slice(0,5);
  if (!sample.length) return [];
@@ -2296,6 +2311,13 @@ function pickResearchCandidates(priced,modeled,useMarket,key = pickKey) {
   }
  }
  return [...candidates.values()];
+}
+
+function matchesPickEvidence(evidence,market,model) {
+ if (evidence === "agreement") return market?.chance > .5 && model?.chance > .5;
+ if (evidence === "market") return Boolean(market);
+ if (evidence === "stats") return Boolean(model);
+ return true;
 }
 
 function renderTodayPicks() {
@@ -2348,10 +2370,14 @@ function renderTodayPicks() {
  const player = modelPlayerKey(document.getElementById("picksPlayer").value);
  const marketFilter = document.getElementById("picksMarket").value;
  const minMinutes = Number(document.getElementById("picksMinutes").value);
- const picks = candidates.filter(({pick:prop}) => prop.chance > .5 && !availabilityHold(prop) &&
-  modelPlayerKey(prop.player).includes(player) &&
-  (!marketFilter || supportedMarkets.get(prop.market.trim().toLowerCase()) === marketFilter) &&
-  (!minMinutes || (models.get(pickKey(prop))?.minutes ?? 0) >= minMinutes)).slice(0,todayPicksLimit);
+ const evidence = document.getElementById("picksEvidence").value;
+ const picks = candidates.filter(({pick}) => {
+  if (pick.chance <= .5 || availabilityHold(pick) || !modelPlayerKey(pick.player).includes(player) ||
+      (marketFilter && supportedMarkets.get(pick.market.trim().toLowerCase()) !== marketFilter)) return false;
+  const key = pickKey(pick);
+  const model = models.get(key);
+  return (!minMinutes || (model?.minutes ?? 0) >= minMinutes) && matchesPickEvidence(evidence,markets.get(key),model);
+ }).slice(0,todayPicksLimit);
  updateSlateStats(fresh.length,picks.filter(({pick}) => grade(pick.chance) === "GREEN").length);
  status.textContent = picks.length ?
   "Showing " + picks.length + " sides above 50%. " +
@@ -2440,6 +2466,12 @@ function renderTodayPicks() {
     games.append(game);
    }
    details.append(recent,games);
+   const minutesChange = recentMinutesChange(model.researchGames);
+   if (minutesChange) {
+    const note = document.createElement("p");
+    note.textContent = formatMinutesChange(minutesChange);
+    details.append(note);
+   }
    for (const window of recentPropResearch(model.researchGames,pick.side,pick.line)) {
     if (!window.count) continue;
     const note = document.createElement("p");
@@ -2575,7 +2607,8 @@ function researchOutsidePick(data,pick,now) {
  const result = lineHitEstimate(values,pick.line,pick.side,pick.market);
  if (!result) return null;
  return {...result,count:recent.length,minutes:recent.reduce((sum,game) => sum+game.minutes,0)/recent.length,
-  player:player.player,team,eventStart:games[0].start,history:values.map(value => ({value}))};
+  player:player.player,team,eventStart:games[0].start,
+  history:recent.map((game,index) => ({value:values[index],minutes:game.minutes}))};
 }
 
 const outsideCompareBooks = document.getElementById("outsideCompareBooks");
@@ -2665,6 +2698,12 @@ function renderOutsideOptimizer() {
    const injury = availabilityReport(research);
    if (availabilityHold(research)) stats.textContent += " · ESPN " + injury.status;
    title.append(stats);
+   const minutesChange = recentMinutesChange(research.history);
+   if (minutesChange) {
+    const minutes = document.createElement("small");
+    minutes.textContent = formatMinutesChange(minutesChange);
+    title.append(minutes);
+   }
    expiries.push(Date.parse(research.eventStart));
   } else if (latestModel && pick.date === today) {
    const stats = document.createElement("small");
@@ -2792,7 +2831,7 @@ document.getElementById("liveBoardPlayer").addEventListener("input",() => {
  if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds,{searchOnly:true});
 });
 document.getElementById("picksPlayer").addEventListener("input",renderTodayPicks);
-for (const id of ["picksMarket","picksMinutes"]) {
+for (const id of ["picksMarket","picksMinutes","picksEvidence"]) {
  document.getElementById(id).addEventListener("change",renderTodayPicks);
 }
 findEntries.addEventListener("click",() => latestBoard ? useLatestBoard() : scanAndRankProps());
