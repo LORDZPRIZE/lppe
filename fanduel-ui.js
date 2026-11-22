@@ -22,6 +22,42 @@ let lineups = [];
 let optimizer;
 let autoRequest;
 let slateLockAt = null;
+let lastRemoval;
+
+function clearRemoval() {
+  lastRemoval = undefined;
+  byId("fdRemoval").hidden = true;
+  byId("fdRemovalStatus").textContent = "";
+}
+
+function removePlayer(id) {
+  const player = players.find(candidate => candidate.id === id);
+  if (!player || player.selection === "exclude") return;
+  lastRemoval = {player,previousSelection:player.selection,previousObjective:objective.value};
+  player.selection = "exclude";
+  objective.value = "projection";
+  byId("fdRemoval").hidden = false;
+  byId("fdRemovalStatus").textContent = player.name+" removed. Rebuilding for projected points.";
+  rebuildAfterRemoval();
+}
+
+function rebuildAfterRemoval() {
+  clearLineups();
+  renderPlayers();
+  buildCurrentLineups();
+}
+
+byId("fdUndoRemoval").addEventListener("click",() => {
+  if (!lastRemoval) return;
+  const {player,previousSelection,previousObjective} = lastRemoval;
+  player.selection = previousSelection;
+  if (objective.value === "projection" && [...objective.options].some(option =>
+    option.value === previousObjective && !option.disabled)) {
+    objective.value = previousObjective;
+  }
+  clearRemoval();
+  rebuildAfterRemoval();
+});
 
 function clearLineups() {
   optimizer?.terminate();
@@ -87,6 +123,7 @@ function renderPlayers() {
     selection.value = player.selection;
     selection.addEventListener("change",() => {
       player.selection = selection.value;
+      if (lastRemoval?.player === player && player.selection !== "exclude") clearRemoval();
       clearLineups();
       renderSlateCheck();
     });
@@ -129,6 +166,7 @@ importForm.addEventListener("submit",async event => {
   slateLockAt = null;
   salaries.disabled = projections.disabled = true;
   importForm.querySelector("button").disabled = true;
+  clearRemoval();
   clearLineups();
   byId("fdPool").hidden = true;
   try {
@@ -197,6 +235,16 @@ function renderLineups(result,requested,highCeiling) {
       for (const value of [profiles[sport.value].roster[slot][0],player.name,player.team,dollars.format(player.salary),player.points.toFixed(2)]) {
         row.insertCell().textContent = value;
       }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove-player";
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label","Remove "+player.name+" and rebuild for projected points");
+      remove.addEventListener("click",() => {
+        removePlayer(player.id);
+        byId("fdUndoRemoval").focus();
+      });
+      row.cells[1].append(remove);
     }
     const totals = table.createTFoot().insertRow();
     const totalLabel = document.createElement("th");
@@ -236,14 +284,19 @@ function renderLineups(result,requested,highCeiling) {
   exportButton.disabled = !lineups.length;
 }
 
-build.addEventListener("click",() => {
+function buildCurrentLineups() {
   if (slateLockAt && slateLockAt <= Date.now()) {
     clearLineups();
     byId("fdStatus").textContent = "The automatically loaded slate has reached its first game start. Load another available pool or import a different contest.";
     return;
   }
   const gpp = mode.value === "gpp";
-  if (checkSlate(players,profiles[sport.value],sport.value).warnings.length) return;
+  const {warnings} = checkSlate(players,profiles[sport.value],sport.value);
+  if (warnings.length) {
+    byId("fdResultsPanel").hidden = false;
+    byId("fdBuildStatus").textContent = warnings.join(" ");
+    return;
+  }
   if (gpp && (!count.reportValidity() || !difference.reportValidity() || !exposure.reportValidity())) return;
   clearLineups();
   byId("fdResultsPanel").hidden = false;
@@ -276,7 +329,9 @@ build.addEventListener("click",() => {
   const pool = gpp ? players : players.map(player => ({...player,maxExposure:100}));
   optimizer.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
     options:{exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
-});
+}
+build.addEventListener("click",buildCurrentLineups);
+
 async function loadPublicPool() {
   autoRequest?.abort();
   const request = new AbortController();
@@ -291,6 +346,7 @@ async function loadPublicPool() {
     if (!response.ok) throw new Error(data.error || "No public FanDuel player pool is available.");
     if (!Array.isArray(data.players) || !(data.lockAt > Date.now())) throw new Error("The public pool has expired.");
     clearLineups();
+    clearRemoval();
     slateLockAt = data.lockAt;
     players = data.players;
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
@@ -329,6 +385,7 @@ autoLoad.addEventListener("click",() => {
 sport.addEventListener("change",() => {
   autoRequest?.abort();
   autoRequest = undefined;
+  clearRemoval();
   players = [];
   slateLockAt = null;
   importForm.reset();
