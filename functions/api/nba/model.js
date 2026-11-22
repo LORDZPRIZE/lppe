@@ -52,27 +52,34 @@ function playerBoxScores(summary) {
   return results;
 }
 
-async function recentNBA(request, now = Date.now()) {
+function slateGames(events,today,part) {
+  const games = [...new Map(events.filter(game =>
+    [2,3].includes(game.season?.type) && Number.isFinite(Date.parse(game.date)) &&
+    pacificSlate.format(Date.parse(game.date)) === today).map(game => [game.id,game])).values()];
+  games.sort((a,b) => Date.parse(a.date)-Date.parse(b.date) || a.id.localeCompare(b.id));
+  return part === null ? games : games.filter((_,index) => index % 2 === part);
+}
+
+async function recentNBA(request, now, part) {
   const dates = [...new Set(Array.from({length:12},(_,day) => nbaDate(now + (1-day) * 86400000)))];
-  return cachedNBA(request,"model-v4/" + nbaDate(now) + "/" + encodeURIComponent(pacificSlate.format(now)),1800,async () => {
-    const boards = await Promise.allSettled(dates.map(date => getJson(espnNBA + "/scoreboard?dates=" + date)));
+  const today = pacificSlate.format(now);
+  const cachePath = "model-v5/" + nbaDate(now) + "/" + encodeURIComponent(today) + "/" + (part ?? "all");
+  return cachedNBA(request,cachePath,900,async () => {
+    const boards = await Promise.allSettled(dates.map(date => cachedNBA(request,"schedule-v2/" + date,
+      date < dates[2] ? 3600 : 300,() => getJson(espnNBA + "/scoreboard?dates=" + date))));
     if (boards[1].status !== "fulfilled" || !Array.isArray(boards[1].value.events)) {
       throw new Error("NBA schedule unavailable");
     }
     const days = boards.filter(board => board.status === "fulfilled" && Array.isArray(board.value.events));
     const regular = game => [2,3].includes(game.season?.type);
-    const today = pacificSlate.format(now);
-    const upcoming = days.flatMap(board => board.value.events).filter(game => {
-      const starts = Date.parse(game.date);
-      return regular(game) && starts > now && pacificSlate.format(starts) === today;
-    });
-    const gamesById = new Map(upcoming.map(game => [game.id,game]));
-    const schedule = [...gamesById.values()].map(game => ({
-      start:game.date,
-      teams:(game.competitions?.[0]?.competitors || []).map(entry => entry.team?.abbreviation).filter(Boolean)
-    })).filter(game => game.teams.length === 2);
+    const schedule = slateGames(days.flatMap(board => board.value.events),today,part)
+      .filter(game => Date.parse(game.date) > now && game.status?.type?.state === "pre")
+      .map(game => ({
+        start:game.date,
+        teams:(game.competitions?.[0]?.competitors || []).map(entry => entry.team?.abbreviation).filter(Boolean)
+      })).filter(game => game.teams.length === 2);
     const teams = new Set(schedule.flatMap(game => game.teams));
-    if (!teams.size) return {players:[],schedule,partial:days.length < dates.length};
+    if (!teams.size) return {players:[],schedule,part,partial:days.length < dates.length};
     const finished = new Map();
     for (const board of days) {
       for (const game of board.value.events) {
@@ -89,7 +96,8 @@ async function recentNBA(request, now = Date.now()) {
     for (let offset = 0; offset < games.length; offset += 6) {
       await Promise.all(games.slice(offset,offset+6).map(async game => {
         try {
-          const rows = playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id)));
+          const rows = await cachedNBA(request,"box-v1/" + game.id,86400,async () =>
+            playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id))));
           for (const {id,player,team,minutes,values} of rows) {
             if (!teams.has(team)) continue;
             const key = id + ":" + team;
@@ -104,7 +112,7 @@ async function recentNBA(request, now = Date.now()) {
     }
     return {players:[...players.values()].map(player => ({
       ...player,games:player.games.sort((a,b) => Date.parse(b.date) - Date.parse(a.date)).slice(0,6)
-    })).filter(player => player.games.length >= 4),schedule,partial};
+    })).filter(player => player.games.length >= 4),schedule,part,partial};
   });
 }
 
@@ -145,12 +153,17 @@ export async function onRequestGet({request}) {
       return Response.json({error:"NBA availability is temporarily unavailable"},{status:502});
     }
   }
-  const date = new URL(request.url).searchParams.get("results");
+  const params = new URL(request.url).searchParams;
+  const date = params.get("results");
+  const part = params.get("part");
   const now = Date.now();
+  if (part !== null && !["0","1"].includes(part)) {
+    return Response.json({error:"NBA slate part must be 0 or 1"},{status:400});
+  }
   if (date !== null && (!/^\d{8}$/.test(date) || date < nbaDate(now - 15*86400000) || date > nbaDate(now))) {
     return Response.json({error:"Results are available for the past 15 days"},{status:400});
   }
-  try { return json(date ? await completedNBA(request,date) : await recentNBA(request,now)); }
+  try { return json(date ? await completedNBA(request,date) : await recentNBA(request,now,part === null ? null : Number(part))); }
   catch {
     return Response.json({error:"NBA results are temporarily unavailable"},{
       status:502,headers:{"Cache-Control":"no-store"}

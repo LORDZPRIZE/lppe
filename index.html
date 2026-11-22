@@ -1502,10 +1502,24 @@ async function loadNBAModel() {
  const controller = new AbortController();
  const timer = setTimeout(() => controller.abort(),40000);
  try {
-  const response = await fetch("/api/nba/model",{signal:controller.signal});
-  if (!response.ok) throw new Error("Model unavailable");
-  const data = await response.json();
-  if (!Array.isArray(data.players)) throw new Error("Unexpected response");
+  const requests = await Promise.allSettled([0,1].map(async part => {
+   const response = await fetch("/api/nba/model?part=" + part,{signal:controller.signal});
+   if (!response.ok) throw new Error("Model unavailable");
+   const data = await response.json();
+   if (!Array.isArray(data.players)) throw new Error("Unexpected response");
+   return data;
+  }));
+  const parts = requests.filter(part => part.status === "fulfilled").map(part => part.value);
+  if (!parts.length) throw new Error("NBA model unavailable");
+  const schedule = new Map();
+  // A cached older server may return the full slate to both requests.
+  const hasPartitions = parts.every(part => Array.isArray(part.schedule) && part.part !== undefined);
+  const usable = hasPartitions ? parts : parts.slice(0,1);
+  for (const part of usable) {
+   for (const game of part.schedule || []) schedule.set(JSON.stringify([game.start,game.teams]),game);
+  }
+  const data = {players:usable.flatMap(part => part.players),schedule:[...schedule.values()],
+   partial:parts.length !== requests.length || usable.some(part => part.partial)};
   setAPIStatus(data.players.length ? "Automatic NBA projections loaded." :
    "No automatic NBA projections available for the current slate.", data.players.length ? "var(--green)" : "var(--yellow)");
   return data;
