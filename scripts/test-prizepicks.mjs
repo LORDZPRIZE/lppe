@@ -220,3 +220,28 @@ test("duplicate offers and accent variants do not crowd out distinct GREEN entri
   assert.deepEqual(Array.from(ranked[0].indices),[0,41]);
   assert.equal(ranked[0].chance,0.8*0.7);
 });
+
+test("automatic research fills missing market coverage without overriding an available price", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const source = html.slice(html.indexOf("function pickResearchCandidates"),html.indexOf("function renderTodayPicks"));
+  const candidates = vm.runInNewContext(source+"\npickResearchCandidates");
+  const market = {id:"priced",chance:0.48};
+  const stats = [{id:"priced",chance:0.7},{id:"unpriced",chance:0.63}];
+  const [priced,fallback] = candidates([market],stats,true,offer => offer.id);
+  assert.equal(priced.pick,market);
+  assert.equal(priced.source,"Market estimate");
+  assert.equal(fallback.pick,stats[1]);
+  assert.equal(fallback.source,"Stats model");
+  assert.equal(candidates([market],stats,false,offer => offer.id)[0].pick,stats[0]);
+});
+
+test("nearby lines count ties separately and use up to five valid games", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const source = html.slice(html.indexOf("function lineSensitivity"),html.indexOf("function renderLineSensitivity"));
+  const sensitivity = vm.runInNewContext(source+"\nlineSensitivity");
+  const games = [NaN,9,10,11,12,13,30].map(value => ({value}));
+  const more = sensitivity(games,"MORE",10);
+  assert.deepEqual(Array.from(more,row => [row.line,row.hits,row.pushes,row.count]),
+    [[9,4,1,5],[10,3,1,5],[11,2,1,5]]);
+  assert.deepEqual(Array.from(sensitivity(games,"LESS",0.5),row => row.line),[0.5,1.5]);
+});
