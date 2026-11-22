@@ -719,6 +719,7 @@ async function loadPublicPool() {
 }
 function applySport() {
   const profile = profiles[sport.value];
+  byId("fdNflCsvSource").hidden = sport.value !== "NFL";
   byId("fdRules").textContent = dollars.format(profile.salaryCap)+" cap · "+profile.roster.map(([slot])=>slot).join(", ");
   byId("fdTeamRules").textContent = "Lock or exclude players before building. Use at least three teams and at most "+
     profile.maxTeam+" players per team"+(profile.maxHitters ? ", including at most "+profile.maxHitters+" hitters" : "")+

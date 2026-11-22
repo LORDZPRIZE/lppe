@@ -74,6 +74,13 @@ export const teamCode = (raw,sport = "NBA") => {
   return sport === "NBA" ? ({BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team) : team;
 };
 const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const nameVariant = name => matchName(name.replace(/[\s,]+(?:jr\.?|sr\.?|ii|iii|iv|v)$/i,""));
+function recordNameVariant(groups,name,team) {
+  if (!name || !team) return;
+  const key = nameVariant(name) + ":" + team;
+  if (!groups.has(key)) groups.set(key,new Set());
+  groups.get(key).add(matchName(name) + ":" + team);
+}
 export const unavailable = status => /^(O|OUT|IR|INACTIVE|SUSPENDED|SUSP|DOUBTFUL|D)$/i.test(status || "");
 
 const isCheatsheet = rows => rows.length > 0 &&
@@ -109,6 +116,9 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
   const ceilingByName = new Map();
   const ownershipById = new Map();
   const ownershipByName = new Map();
+  const projectionVariants = new Map();
+  const salaryVariants = new Map();
+  const salaryRows = slates.length > 1 ? rows.filter(row => cheatsheetKey(row) === selectedSlate) : rows;
   const readOwnership = row => {
     const raw = row.ownershippct || row.projectedownership || row.ownershipprojection || row.ownership || "";
     const percent = csvNumber(raw.trim().replace(/%$/, ""));
@@ -125,8 +135,10 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       if (selectedSlate && row.slate && row.gamedate && cheatsheetKey(row) !== selectedSlate) continue;
       const projected = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
       if (!Number.isFinite(projected)) continue;
-      const name = matchName(playerName(row));
+      const displayName = playerName(row);
+      const name = matchName(displayName);
       const team = teamCode(row.team || row.teamabbr,sport);
+      recordNameVariant(projectionVariants,displayName,team);
       addProjection(byId,row.id || row.playerid,projected);
       if (name && team) addProjection(byName,name + ":" + team,projected);
       const ownership = readOwnership(row);
@@ -141,12 +153,14 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       }
     }
     if (!byId.size && !byName.size) throw new Error("Projection CSV needs a numeric Projection column and an ID or player name plus team.");
+    for (const row of salaryRows) {
+      recordNameVariant(salaryVariants,playerName(row),teamCode(row.team || row.teamabbr,sport));
+    }
   }
 
   const players = new Map();
   let skipped = 0;
-  for (const row of rows) {
-    if (slates.length > 1 && cheatsheetKey(row) !== selectedSlate) continue;
+  for (const row of salaryRows) {
     const name = playerName(row);
     const slots = positionCodes(row.rosterposition || "",sport,allowed);
     const positions = slots.length ? slots : positionCodes(row.position || "",sport,allowed);
@@ -157,9 +171,15 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       skipped++;
       continue;
     }
-    const matched = byId.get(id) ?? byName.get(matchName(name) + ":" + team);
-    const ceiling = ceilingById.get(id) ?? ceilingByName.get(matchName(name) + ":" + team) ?? readCeiling(row);
-    const ownership = ownershipById.get(id) ?? ownershipByName.get(matchName(name) + ":" + team) ?? readOwnership(row);
+    const nameKey = matchName(name) + ":" + team;
+    const variantKey = nameVariant(name) + ":" + team;
+    const variants = projectionVariants.get(variantKey);
+    // Match suffix differences only where both files identify one name on this team.
+    const alternate = salaryVariants.get(variantKey)?.size === 1 && variants?.size === 1 ?
+      variants.values().next().value : undefined;
+    const matched = byId.get(id) ?? byName.get(nameKey) ?? byName.get(alternate);
+    const ceiling = ceilingById.get(id) ?? ceilingByName.get(nameKey) ?? ceilingByName.get(alternate) ?? readCeiling(row);
+    const ownership = ownershipById.get(id) ?? ownershipByName.get(nameKey) ?? ownershipByName.get(alternate) ?? readOwnership(row);
     const provided = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fpts);
     const average = csvNumber(row.fppg);
     const points = matched ?? (Number.isFinite(provided) ? provided : average);
