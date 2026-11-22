@@ -330,7 +330,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
 <details class="disclosure tools"><summary>NBA model projections</summary>
  <section class="section" id="nbaModel" aria-labelledby="nbaModelHeading" hidden>
   <h2 id="nbaModelHeading">NBA Model Estimates</h2>
-  <p class="sub">Based on 4 to 6 recent ESPN box scores per player. Estimates use recent playing time and production, with no live injury or lineup adjustments. Model estimates are excluded from entry suggestions.</p>
+  <p class="sub">Uses 4 to 6 recent ESPN box scores. Half-point estimates combine observed hit counts with the player’s average and scoring spread. Automatic entry suggestions require sportsbook estimates.</p>
   <p id="nbaModelStatus" class="sub" role="status"></p>
   <div class="tablewrap" id="nbaModelTable" hidden>
    <table><thead><tr><th>PLAYER</th><th>TEAM</th><th>MARKET</th><th>PROJECTED</th><th>MINUTES</th><th>GAMES</th><th>LINE</th><th>SIDE</th><th>MODEL ESTIMATE</th></tr></thead>
@@ -1419,12 +1419,27 @@ function recentModelGames(player,now) {
   .sort((a,b) => Date.parse(b.date)-Date.parse(a.date));
 }
 
-function lineHitEstimate(values,line,side) {
+const modelSpreadFloor = {
+ points:4,rebounds:1.5,assists:1.5,"three-pointers":1,
+ "points + rebounds + assists":5,"points + rebounds":4,
+ "points + assists":4,"rebounds + assists":2.5
+};
+
+function lineHitEstimate(values,line,side,market) {
  const more = values.filter(value => value > line).length;
  const less = values.filter(value => value < line).length;
  if (more + less < 4) return null;
  const hits = side === "MORE" ? more : less;
- return {hits,ties:values.length-more-less,chance:(hits+2)/(more+less+4)};
+ const ties = values.length-more-less;
+ const empirical = (hits+2)/(more+less+4);
+ const floor = modelSpreadFloor[market];
+ if (line % 1 !== 0.5 || !floor) return {hits,ties,chance:empirical};
+ const mean = values.reduce((sum,value) => sum+value,0)/values.length;
+ const variance = values.reduce((sum,value) => sum+(value-mean)**2,0)/(values.length-1);
+ const spread = Math.max(floor,Math.sqrt(variance));
+ const distribution = calculate(line,mean,spread,side);
+ // Shrink the distribution estimate toward 50% before blending it with the observed hit rate.
+ return {hits,ties,chance:0.7*empirical + 0.3*(0.8*distribution + 0.1),method:"Hit rate + spread"};
 }
 
 function estimateNBAProps(data,prizePicks,now,filters) {
@@ -1463,7 +1478,7 @@ function estimateNBAProps(data,prizePicks,now,filters) {
    if (filters.tier === "no-goblins" ? tier === "goblin" : filters.tier !== "all" && tier !== filters.tier) continue;
    if (tier === "demon" && item.side !== "more") continue;
    const side = item.side.toUpperCase();
-   const estimate = lineHitEstimate(model.values,prop.line,side);
+   const estimate = lineHitEstimate(model.values,prop.line,side,model.market);
    if (estimate) sides.push({...model,id:prop.id,period:prop.period,line:prop.line,eventStart:prop.eventStart,
     observedAt:prop.observedAt,openingLine:prop.openingLine,opponent:prop.opponent,tier:item.tier,side,...estimate});
   }
@@ -1622,8 +1637,11 @@ function recordNBAEstimates(ledger,props,source,now,marketByPick,modelByPick) {
   const market = supportedMarkets.get(prop.market.trim().toLowerCase());
   if (!team || !market || !Number.isFinite(start) || start <= now || !(observed <= now) ||
       now-observed > maxQuoteAge || !Number.isFinite(prop.chance)) continue;
-  const key = JSON.stringify([source,start,modelPlayerKey(prop.player),modelTeamKey(team),market,prop.line,prop.side,prop.tier]);
-  const entry = ledger.entries[key] ??= {source,player:prop.player,team,market,line:prop.line,
+  const method = source === "Sportsbook" ? "Median consensus" : prop.method;
+  const identity = [source,start,modelPlayerKey(prop.player),modelTeamKey(team),market,prop.line,prop.side,prop.tier];
+  if (method) identity.push(method);
+  const key = JSON.stringify(identity);
+  const entry = ledger.entries[key] ??= {source,method,player:prop.player,team,market,line:prop.line,
    tier:prop.tier,side:prop.side,chance:prop.chance,start,observed,saved:now};
   if (prop.chance >= .6 && !entry.green && !availabilityHold(prop)) {
    const exactPick = pickKey(prop);
@@ -1662,6 +1680,10 @@ function forecastScore(rows) {
  return {wins:totals.wins,count,average:totals.chance/count,hitRate:totals.wins/count,error:totals.error/count};
 }
 
+function estimateSourceLabel(row) {
+ return row.method ? row.source + " · " + row.method : row.source;
+}
+
 function renderResultsLedger(ledger,warning = "") {
  const body = document.getElementById("nbaResultsRows");
  const status = document.getElementById("nbaResultsStatus");
@@ -1686,7 +1708,7 @@ function renderResultsLedger(ledger,warning = "") {
   const tier = row.tier ? " · " + row.tier : "";
   const result = Number.isFinite(row.value) ? " (" + row.value + ")" : "";
   item.textContent = row.player + " · " + row.side + " " + row.line + " " + row.market + tier +
-   " · " + (row.chance*100).toFixed(1) + "% · " + row.source +
+   " · " + (row.chance*100).toFixed(1) + "% · " + estimateSourceLabel(row) +
    " · Recorded " + new Date(row.saved).toLocaleString() + " · " + outcome + result +
    (row.nearTipoff ? " · Same-line consensus near tipoff " + (row.nearTipoff.chance*100).toFixed(1) + "%" : "");
   if (row.analysis) {
@@ -1723,14 +1745,14 @@ function renderResultsLedger(ledger,warning = "") {
   log.append(item);
  }
  body.replaceChildren();
- for (const source of ["Sportsbook","Stats model"]) {
-  const sourceRows = rows.filter(row => row.source === source && row.outcome);
+ for (const source of new Set(rows.map(estimateSourceLabel))) {
+  const sourceRows = rows.filter(row => estimateSourceLabel(row) === source && row.outcome);
   const bands = [
    ["Recorded GREEN",null,null],["All estimates",0,1.01],["Below 55%",0,.55],["55% to under 60%",.55,.6],
    ["60% to under 65%",.6,.65],["65% to under 70%",.65,.7],["70% and above",.7,1.01]
   ];
   for (const [label,low,high] of bands) {
-   const graded = low === null ? greenRows.filter(row => row.source === source && row.outcome) :
+   const graded = low === null ? greenRows.filter(row => estimateSourceLabel(row) === source && row.outcome) :
     sourceRows.filter(row => row.chance >= low && row.chance < high);
    if (!graded.length) continue;
    const score = forecastScore(graded);
@@ -1780,7 +1802,7 @@ function makeGreenBenchmarkCSV(entries,market) {
   "Opponent","Opening line","Sportsbook probability at capture","Sportsbook count","Stats model probability at capture",
   "Last 5 hits","Last 5 sample","Last 5 pushes","Last 5 average minutes",
   "Last 10 hits","Last 10 sample","Last 10 pushes","Last 10 average minutes",
-  "Matchup hits","Matchup sample","Matchup pushes"]];
+  "Matchup hits","Matchup sample","Matchup pushes","Estimate method"]];
  for (const row of Object.values(entries)) {
   if (!row.green || (market && row.market !== market)) continue;
   const analysis = row.green.analysis;
@@ -1795,7 +1817,7 @@ function makeGreenBenchmarkCSV(entries,market) {
    analysis?.availability,analysis?.availabilityUpdatedAt,analysis?.opponent,analysis?.openingLine,
    analysis?.marketChance,analysis?.books,analysis?.modelChance,...recent(5),...recent(10),
    analysis?.matchup?.count ? analysis.matchup.hits : "",analysis?.matchup?.count,
-   analysis?.matchup?.count ? analysis.matchup.pushes : ""]);
+   analysis?.matchup?.count ? analysis.matchup.pushes : "",row.method]);
  }
  return rows.map(row => row.map(value => {
   const cell = String(value ?? "");
@@ -2454,7 +2476,7 @@ function researchOutsidePick(data,pick,now) {
  const recent = recentModelGames(player,now).filter(game => now-Date.parse(game.date) <= 11*dayMillis);
  const values = recent.map(game => nbaStatValue(game.values,pick.market));
  if (!values.every(Number.isFinite)) return null;
- const result = lineHitEstimate(values,pick.line,pick.side);
+ const result = lineHitEstimate(values,pick.line,pick.side,pick.market);
  if (!result) return null;
  return {...result,count:recent.length,minutes:recent.reduce((sum,game) => sum+game.minutes,0)/recent.length,
   player:player.player,team,eventStart:games[0].start};

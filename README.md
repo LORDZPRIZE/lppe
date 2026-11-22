@@ -56,3 +56,7 @@ Run `node scripts/benchmark-nba.mjs path/to/manifest.json` with Node.js 22.7 or 
 ```
 
 Paths are relative to the manifest. Use slates with the current NBA Classic roster format and archive the salary pool, injury statuses, baseline estimates, and forecasts before lock for each contest. Both capture timestamps and lock time need a time zone. The actuals CSV needs `ID,Actual FPTS`, including explicit zeros for eligible players who did not play. Missing actuals for either top lineup stop the run. Use multiple unseen slates and review coverage when interpreting the accuracy and lineup results.
+
+## NBA prop probability benchmark
+
+Run `node scripts/benchmark-nba-props.mjs RESULTS_DIRECTORY HOLDOUT_YYYYMMDD`. Save complete final response bodies from `/api/nba/model?results=YYYYMMDD` as `YYYYMMDD.json` in the directory. Include at least a week of games before the holdout. The benchmark runs the dashboard's original hit-rate estimate and its revised estimate against the same outcomes. It creates half-point test lines around each player's recent median using games available before tipoff. Several test lines share the same game result. Use archived PrizePicks lines and exact payouts to evaluate actual entry performance.
