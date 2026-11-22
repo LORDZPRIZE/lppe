@@ -84,7 +84,7 @@ export function selectProviderSlate(data,now,sport = "NBA") {
       slate.started === false && slate.salary_cap === profile.salaryCap &&
       slate.games >= 2 && slate.players >= profile.roster.length && /^[a-z0-9_-]+$/i.test(String(slate.id)) &&
       starts > now && easternDay(starts) <= easternDay(now+86400000) &&
-      !/single|showdown|quarter|half|tiers|mvp|express/i.test(slate.label || "");
+      !/single|showdown|quarter|half|tiers|mvp|express|super\s*flex|snake draft|\b(?:test|dnp|dummy|qtr)\b/i.test(slate.label || "");
   }).sort((a,b) => easternDay(Date.parse(a.starts_at)).localeCompare(easternDay(Date.parse(b.starts_at))) ||
     Number(/main/i.test(b.label))-Number(/main/i.test(a.label)) ||
     b.games-a.games || Date.parse(a.starts_at)-Date.parse(b.starts_at))[0];
@@ -110,15 +110,21 @@ export function normalizeProviderPlayers(data,slate,sport = "NBA") {
 }
 
 async function providerPool(env,sport) {
-  const headers = {Authorization:"Bearer "+env.FANDUEL_API_KEY,Accept:"application/json",
-    "X-User-Request":"Load an upcoming FanDuel " + profiles[sport].name + " Classic slate and its salaries for LPPE"};
+  const key = env.FANDUEL_API_KEY.trim();
+  if (!/^fd_[A-Za-z0-9_-]+$/.test(key)) throw new Error("The FanDuel salary API secret must contain only the full fd_ key.");
+  const headers = {Authorization:"Bearer "+key,Accept:"application/json"};
   async function read(path) {
-    const response = await fetch(salaryProvider+path,{headers,signal:AbortSignal.timeout(8000)});
+    let response;
+    try {
+      response = await fetch(salaryProvider+path,{headers,signal:AbortSignal.timeout(12000)});
+    } catch {
+      throw new Error("The FanDuel salary provider could not be reached from LPPE.");
+    }
     if (response.status === 429) throw new Error("The FanDuel salary provider has reached its usage limit.");
-    if (response.status === 401) throw new Error("The FanDuel salary API key was rejected.");
+    if (response.status === 401 || response.status === 403) throw new Error("The FanDuel salary API key was rejected.");
     if (!response.ok) throw new Error("The FanDuel salary API is unavailable.");
-    const body = await response.json();
-    if (!Array.isArray(body.data)) throw new Error("The FanDuel salary API returned an unexpected response.");
+    const body = await response.json().catch(() => null);
+    if (!Array.isArray(body?.data)) throw new Error("The FanDuel salary API returned an unexpected response.");
     return body.data;
   }
   let slate = selectProviderSlate(await read("/dfs/slates?sport="+sport+"&started=false&limit=50"),Date.now(),sport);
