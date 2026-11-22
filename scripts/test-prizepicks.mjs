@@ -203,3 +203,20 @@ test("pregame scheduling checks before tipoff and limits provider reads across s
   assert.equal(board.refreshPolicy,"pregame");
   assert.equal(board.lastRefresh.outcome,"saved");
 });
+
+test("duplicate offers and accent variants do not crowd out distinct GREEN entries", async () => {
+  const html = await readFile(new URL("../index.html",import.meta.url),"utf8");
+  const names = html.slice(html.indexOf("const modelPlayerKey"),html.indexOf("const modelTeamKey"));
+  const markets = html.slice(html.indexOf("const supportedMarkets"),html.indexOf("function indexMarketQuotes"));
+  const engine = html.slice(html.indexOf("function entryLegIdentity"),html.indexOf("const findEntries"));
+  const suggest = vm.runInNewContext(names+markets+engine+"\nsuggestEntries");
+  const offer = (player,gameId,chance) => ({
+    player,gameId,chance,market:"Points",line:24.5,side:"MORE",tier:"standard",expiresAt:Date.now()+300000
+  });
+  const duplicates = Array.from({length:40},() => offer("José Smith","game-1",0.8));
+  const ranked = suggest([...duplicates,offer("Jose Smith","game-2",0.75),
+    offer("Mike Jones","game-2",0.7),offer("Sam Young","game-1",0.65)],2,30);
+  assert.equal(ranked.length,3);
+  assert.deepEqual(Array.from(ranked[0].indices),[0,41]);
+  assert.equal(ranked[0].chance,0.8*0.7);
+});

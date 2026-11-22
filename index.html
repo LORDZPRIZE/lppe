@@ -1026,7 +1026,7 @@ function renderPayoutFields() {
  const count = picks.length;
  const valid = count >= 2 && count <= 6 &&
    new Set(picks.map(p=>p.gameId)).size === count &&
-   new Set(picks.map(p=>p.player.trim().toLowerCase())).size === count;
+   new Set(picks.map(p=>modelPlayerKey(p.player))).size === count;
  compareForm.hidden = !valid;
  entryPayouts.replaceChildren();
  if (!valid) {
@@ -1120,12 +1120,25 @@ compareForm.addEventListener("submit",event=>{
 });
 
 const rankButton = document.getElementById("findTodayProps");
-function suggestEntries(candidates, size, limit = 5) {
- const byGame = new Map();
+function entryLegIdentity(prop) {
+ return JSON.stringify([prop.gameId,marketQuoteKey(prop),prop.side,prop.tier?.trim().toLowerCase()]);
+}
+
+function suggestEntries(candidates,size,limit = 5) {
+ const now = Date.now();
+ const unique = new Map();
  for (const [index,prop] of candidates.entries()) {
-  if (prop.expiresAt <= Date.now() || !prop.gameId || !Number.isFinite(prop.chance) || prop.chance <= 0 || prop.chance > 1) continue;
-  if (!byGame.has(prop.gameId)) byGame.set(prop.gameId,[]);
-  byGame.get(prop.gameId).push({index,prop});
+  if (!(prop.expiresAt > now) || !prop.gameId || !(prop.chance > 0 && prop.chance <= 1)) continue;
+  const key = entryLegIdentity(prop);
+  const duplicate = unique.get(key)?.prop;
+  if (!duplicate || prop.chance > duplicate.chance ||
+      (prop.chance === duplicate.chance && prop.expiresAt > duplicate.expiresAt)) unique.set(key,{index,prop});
+ }
+ const byGame = new Map();
+ for (const candidate of unique.values()) {
+  const {gameId} = candidate.prop;
+  if (!byGame.has(gameId)) byGame.set(gameId,[]);
+  byGame.get(gameId).push(candidate);
  }
  const best = Array.from({length:size+1},()=>[]);
  best[0].push({indices:[],players:[],chance:1});
@@ -1134,7 +1147,7 @@ function suggestEntries(candidates, size, limit = 5) {
    const options = [...best[count]];
    for (const entry of best[count-1]) {
     for (const {index,prop} of game) {
-     const player = prop.player.trim().toLowerCase();
+     const player = modelPlayerKey(prop.player);
      if (entry.players.includes(player)) continue;
      options.push({indices:[...entry.indices,index],players:[...entry.players,player],chance:entry.chance*prop.chance});
     }
@@ -1155,19 +1168,6 @@ const entryBatchSize = 5;
 let suggestionPool = [];
 let shownSuggestions = [];
 let previousSuggestions = [];
-
-function distinctSuggestions(candidates,suggestions) {
- const seen = new Set();
- return suggestions.filter(suggestion => {
-  const key = JSON.stringify(suggestion.indices.map(index => {
-   const {player,market,side,line,tier} = candidates[index];
-   return JSON.stringify([player.trim().toLowerCase(),market.trim().toLowerCase(),side,line,tier]);
-  }).sort());
-  if (seen.has(key)) return false;
-  seen.add(key);
-  return true;
- });
-}
 
 function diversityBatch(remaining,previous,limit) {
  const available = [...remaining];
@@ -1194,7 +1194,7 @@ function unshownSuggestions(now) {
 }
 
 function renderSuggestions() {
- suggestionPool = distinctSuggestions(entryCandidates,suggestEntries(entryCandidates,Number(entrySize.value),30));
+ suggestionPool = suggestEntries(entryCandidates,Number(entrySize.value),30);
  shownSuggestions = [];
  previousSuggestions = [];
  showSuggestionBatch();
