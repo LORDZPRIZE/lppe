@@ -1,4 +1,4 @@
-import { importPlayers, profiles, salaryCap, teamCode } from "../../../fanduel-optimizer.js";
+import { importPlayers, matchName, profiles, salaryCap, teamCode } from "../../../fanduel-optimizer.js";
 
 const source = "https://www.dailyfantasyfuel.com/nba/projections/fanduel/";
 const scoreboard = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=";
@@ -164,15 +164,82 @@ async function providerPool(read,slate,sport) {
   return normalizeProviderPlayers(rows,slate,sport);
 }
 
+export function attachNBAGames(pool,events,now) {
+  const slateTeams = new Set(pool.players.map(player => player.team));
+  const games = new Map();
+  for (const event of events) {
+    const teams = event.competitions?.[0]?.competitors?.map(item => teamCode(item.team?.abbreviation));
+    const start = Date.parse(event.date);
+    if (teams?.length !== 2 || teams[0] === teams[1] ||
+        !teams.every(team => slateTeams.has(team)) ||
+        event.status?.type?.state !== "pre" || !(start > now && start >= pool.lockAt)) continue;
+    const game = teams.sort().join("/");
+    for (const team of teams) games.set(team,games.has(team) ? null : game);
+  }
+  const unique = new Set([...games.values()].filter(Boolean));
+  if (unique.size !== pool.gameCount || [...slateTeams].some(team => !games.get(team))) return pool;
+  return {...pool,players:pool.players.map(player => ({...player,game:games.get(player.team)}))};
+}
+
+export function addNBAProjections(pool,{rows,updatedAt},now) {
+  const age = now-Date.parse(updatedAt);
+  if (!(age >= -120000 && age <= 2*60*60000)) return pool;
+
+  const key = (name,team,salary) => JSON.stringify([matchName(name),teamCode(team),Number(salary)]);
+  const slateTeams = new Set(pool.players.map(player => player.team));
+  const projections = new Map();
+  for (const row of rows) {
+    if (row.date !== pool.date || !row.name || !row.team || !row.opponent ||
+        !slateTeams.has(teamCode(row.opponent))) continue;
+    const points = row.points.trim() ? Number(row.points) : NaN;
+    if (!Number.isFinite(points) || points < 0) continue;
+    const identity = key(row.name,row.team,row.salary);
+    // An ambiguous identity is safer to leave on the salary feed's baseline.
+    projections.set(identity,projections.has(identity) ? null : {points,positions:row.positions.toUpperCase().split("/"),game:[teamCode(row.team),teamCode(row.opponent)].sort().join("/")});
+  }
+
+  const eligible = pool.players.filter(player => player.selection !== "exclude").length;
+  const counts = new Map();
+  for (const player of pool.players) {
+    const identity = key(player.name,player.team,player.salary);
+    counts.set(identity,(counts.get(identity) || 0)+1);
+  }
+  let matched = 0;
+  const players = pool.players.map(player => {
+    if (player.selection === "exclude") return player;
+    const identity = key(player.name,player.team,player.salary);
+    const projection = projections.get(identity);
+    if (counts.get(identity) !== 1 || !projection ||
+        (player.game?.includes("/") && player.game !== projection.game) ||
+        !player.positions.some(position => projection.positions.includes(position))) return player;
+    matched++;
+    return {...player,points:projection.points,source:"Daily Fantasy Fuel"};
+  });
+  return matched ? {...pool,players,projectionCoverage:{matched,eligible,updatedAt}} : pool;
+}
+
+async function currentNBAProjections() {
+  try {
+    const response = await fetch(source,{signal:AbortSignal.timeout(3500)});
+    return response.ok ? await readPublicSlate(response) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function nbaSchedule(date,timeout = 8000) {
+  const schedule = await fetch(scoreboard+date.replaceAll("-",""),{signal:AbortSignal.timeout(timeout)});
+  if (!schedule.ok) throw new Error("NBA schedule unavailable");
+  return (await schedule.json()).events || [];
+}
+
 async function publicPool() {
   const publicPage = await fetch(source,{signal:AbortSignal.timeout(12000)});
   if (!publicPage.ok) throw new Error("Public source unavailable");
   const slate = await readPublicSlate(publicPage);
   const date = slate.rows[0]?.date;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return {error:"No current public FanDuel slate is available."};
-  const schedule = await fetch(scoreboard+date.replaceAll("-",""),{signal:AbortSignal.timeout(8000)});
-  if (!schedule.ok) throw new Error("NBA schedule unavailable");
-  return normalizePublicSlate(slate,(await schedule.json()).events || [],Date.now());
+  return normalizePublicSlate(slate,await nbaSchedule(date),Date.now());
 }
 
 export async function onRequestGet({request,env}) {
@@ -188,7 +255,7 @@ export async function onRequestGet({request,env}) {
   },503);
   try {
     const cache = caches.default;
-    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v5/"+sport+"/"+suffix,request.url));
+    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v6/"+sport+"/"+suffix,request.url));
     let slate;
     let read;
     if (configured) {
@@ -212,8 +279,16 @@ export async function onRequestGet({request,env}) {
       const data = await cached.json();
       if (data.lockAt > Date.now()) return reply(data);
     }
-    const data = configured ? await providerPool(read,slate,sport) : await publicPool();
+    const isLiveNBA = configured && sport === "NBA";
+    const projectionsRequest = isLiveNBA ? currentNBAProjections() : null;
+    const scheduleRequest = isLiveNBA ?
+      nbaSchedule(easternDay(Date.parse(slate.starts_at)),3500).catch(() => []) : null;
+    let data = configured ? await providerPool(read,slate,sport) : await publicPool();
     if (data.error) return reply(data,404);
+    const projections = await projectionsRequest;
+    if (scheduleRequest) data = attachNBAGames(data,await scheduleRequest,Date.now());
+    if (projections) data = addNBAProjections(data,projections,Date.now());
+    if (data.lockAt <= Date.now()) return reply({error:"The salary slate has already locked."},404);
     const ttl = Math.max(1,Math.min(600,Math.floor((data.lockAt-Date.now())/1000)));
     try { await cache.put(key,Response.json(data,{headers:{"Cache-Control":"public, max-age="+ttl}})); } catch {}
     return reply(data);
