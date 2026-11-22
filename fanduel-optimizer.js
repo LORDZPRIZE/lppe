@@ -229,11 +229,22 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
       passCatchers.get(player.team).push(player);
     }
   }
+  const projectionOrder = [...eligible].sort((a,b) => b.points-a.points || a.salary-b.salary || a.id.localeCompare(b.id));
+  const eligibleSlots = new Map(projectionOrder.map(player => [player.id,0]));
   const slots = roster.map(([label,positions],index) => ({
-    label,index,pool:eligible.filter(player => (!(reservedSlots & (1 << index)) || lockedIds.has(player.id)) &&
-      player.positions.some(position => positions.includes(position)))
-      .sort((a,b) => b.points-a.points || a.salary-b.salary || a.id.localeCompare(b.id))
+    label,index,pool:projectionOrder.filter(player => {
+      if ((reservedSlots & (1 << index)) && !lockedIds.has(player.id)) return false;
+      if (!player.positions.some(position => positions.includes(position))) return false;
+      eligibleSlots.set(player.id,eligibleSlots.get(player.id) | (1 << index));
+      return true;
+    })
   })).sort((a,b) => a.pool.length-b.pool.length || a.index-b.index);
+  const playerOrder = new Map(projectionOrder.map((player,index) => [player.id,index]));
+  // Keep the primary QB and pitcher slots distinct because their roster roles affect constraints.
+  const swappable = slots.map((slot,index) => ["QB","P"].includes(slot.label) ? [] :
+    slots.slice(0,index).map((earlier,depth) => ({earlier,depth}))
+      .filter(({earlier}) => !["QB","P"].includes(earlier.label) &&
+        earlier.pool.some(player => eligibleSlots.get(player.id) & (1 << slot.index))));
   if (slots.some(slot => !slot.pool.length)) return {lineups:[],limited:false};
   const salaryFloor = new Array(slots.length+1).fill(0);
   const pointsCeiling = new Array(slots.length+1).fill(0);
@@ -267,7 +278,6 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   const lineups = [];
   let limited = false;
   let restriction;
-  const projectionOrder = exactFirst ? [...eligible].sort((a,b) => b.points-a.points) : [];
   for (let number = 0; number < count; number++) {
     const selected = [];
     const ids = new Set();
@@ -337,11 +347,16 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
         if (ids.has(player.id) || (teams.get(player.team) || 0) >= profile.maxTeam) continue;
         const isHitter = profile.maxHitters && slot.label !== "P";
         if (isHitter && (hitters.get(player.team) || 0) >= profile.maxHitters) continue;
-        if (slots[index-1]?.label === slot.label && rank <= selected[index-1].rank) continue;
         if (locksRemaining === slots.length-index && !lockedIds.has(player.id)) continue;
         if (salary+player.salary+salaryFloor[index+1] > salaryCap) continue;
         if (best && points+player.points+pointsCeiling[index+1] <= best.points) break;
-        selected.push({player,slot:slot.index,rank});
+        const playerMask = eligibleSlots.get(player.id);
+        // Swapping two eligible players preserves the lineup. Visit only the ordering
+        // that places the higher-ranked player in the earlier searched slot.
+        if (swappable[index].some(({earlier,depth}) => (playerMask & (1 << earlier.index)) &&
+          (eligibleSlots.get(selected[depth].player.id) & (1 << slot.index)) &&
+          playerOrder.get(player.id) < playerOrder.get(selected[depth].player.id))) continue;
+        selected.push({player,slot:slot.index});
         ids.add(player.id);
         teams.set(player.team,(teams.get(player.team) || 0)+1);
         if (isHitter) hitters.set(player.team,(hitters.get(player.team) || 0)+1);
