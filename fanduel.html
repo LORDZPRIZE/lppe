@@ -5,39 +5,110 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FanDuel Classic Optimizer | LPPE</title>
 <style>
-:root{color-scheme:dark;font-family:Arial,sans-serif;background:#0b1020;color:#f4f7ff}
-[hidden]{display:none!important}*{box-sizing:border-box}body{margin:0}main,header{padding:22px max(5vw,16px)}
-header{background:#10182b;border-bottom:1px solid #293650}main{max-width:1200px;margin:auto}
-h1{font-size:clamp(24px,5vw,34px);margin:.55em 0}h2{font-size:19px}
-a{color:#9fc5ff}p{line-height:1.5}.muted{color:#aebbd2;font-size:.875rem}
-section{background:#141c30;border:1px solid #293650;border-radius:12px;padding:18px;margin-bottom:18px}
-.controls{display:flex;flex-wrap:wrap;gap:14px;align-items:end}label{display:grid;gap:6px;font-size:.875rem}
-input,select,button{font:inherit;color:inherit;background:#1b2740;border:1px solid #40516d;border-radius:8px;padding:9px;max-width:100%}
-input[type=number]{width:7.5em}button{cursor:pointer}button.primary{color:#07150f;background:#20c982;font-weight:bold}
-button:disabled{opacity:.45;cursor:default}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #9fc5ff;outline-offset:3px}
-.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:640px}
-td,th{text-align:left;padding:10px;border-bottom:1px solid #293650;font-size:.875rem}
-details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
-#fdResults tfoot{font-weight:bold}#fdResults summary strong{color:#7debb7}
-.remove-player{display:block;margin-top:4px;padding:4px 8px}
-#fdStatus{min-height:1.5em}.results-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #0b1211;
+  color: #f2f6ef;
+  --surface: #131e1b;
+  --field: #0d1714;
+  --border: #30453d;
+  --muted: #aabdb2;
+  --accent: #d3f98a;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+header {
+  background: radial-gradient(ellipse at 90% 10%, #405840, transparent 65%), #142421;
+  border-bottom: 1px solid var(--border);
+}
+.header-inner, main { max-width: 1120px; margin: auto; padding: 24px clamp(14px, 4vw, 40px); }
+.header-inner { padding-bottom: clamp(26px, 5vw, 56px); }
+.back-link { display: inline-flex; min-height: 44px; align-items: center; }
+h1 { font-size: clamp(2rem, 6vw, 4.5rem); line-height: 1.01; letter-spacing: -.055em; margin: .28em 0 .25em; }
+h2 { font-size: clamp(1.25rem, 3vw, 1.65rem); letter-spacing: -.025em; margin: 0 0 14px; }
+p { line-height: 1.55; }
+a { color: var(--accent); text-underline-offset: .22em; }
+.muted { color: var(--muted); font-size: .875rem; }
+#fdRules { margin-bottom: 0; }
+section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  padding: clamp(14px, 3vw, 28px);
+  margin-bottom: 18px;
+}
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+label { display: grid; gap: 7px; font-size: .875rem; font-weight: 600; min-width: 0; }
+.slate-controls label { flex: 1 1 150px; }
+input, select, button {
+  font: inherit;
+  font-size: 1rem;
+  color: inherit;
+  background: var(--field);
+  border: 1px solid #476055;
+  border-radius: 10px;
+  padding: 9px 12px;
+  min-height: 44px;
+  max-width: 100%;
+}
+input[type=number] { width: 7.5em; }
+button, summary { cursor: pointer; }
+button { font-weight: 650; }
+button.primary { color: #16230e; background: var(--accent); border-color: transparent; }
+button:hover:not(:disabled) { filter: brightness(1.12); }
+button:disabled { opacity: .55; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.tablewrap { overflow: auto; border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+#fdPool table { min-width: 750px; }
+th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); font-size: .875rem; }
+thead, tfoot { background: #1d3028; }
+tbody tr:nth-child(even) { background: #15241e; }
+details { padding-block: 4px; }
+summary { padding-block: 11px; font-weight: 650; line-height: 1.5; }
+summary::marker { color: var(--accent); }
+summary + div { margin-top: 6px; }
+#fdManualImport, #fdResultsPanel { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px; }
+#fdResults { display: grid; gap: 10px; }
+#fdResults details { background: var(--field); border: 1px solid var(--border); border-radius: 14px; padding: 2px 12px 10px; min-width: 0; }
+#fdResults summary strong { color: var(--accent); }
+#fdResults td:nth-child(2) { font-weight: 650; overflow-wrap: anywhere; }
+#fdResults td:last-child { color: var(--accent); font-weight: 650; }
+#fdResults li { margin-block: 8px; color: var(--muted); }
+.remove-player { display: block; margin-top: 3px; padding: 6px 8px; font-size: .875rem; font-weight: 500; }
+#fdStatus:empty { display: none; }
+#fdStatus, #fdRemoval { background: #1d3028; padding: 10px 12px; border-radius: 10px; }
+.results-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.results-toolbar h2 { margin: 0; }
+@media (max-width: 580px) {
+  .slate-controls label { flex-basis: 120px; }
+  .slate-controls button, #fdImport > *, #fdBuild { width: 100%; }
+  #fdResults details { padding-inline: 7px; }
+  #fdResults th, #fdResults td { padding-inline: 4px; font-size: .75rem; }
+  #fdResults table { min-width: 255px; }
+  #fdResults td:nth-child(n+3) { white-space: nowrap; }
+  .results-toolbar button { font-size: .875rem; }
+}
 </style>
 </head>
 <body>
 <header>
- <a href="/">← LPPE PrizePicks dashboard</a>
- <h1>FanDuel Classic Optimizer</h1>
+ <div class="header-inner">
+ <a class="back-link" href="/">← LPPE PrizePicks dashboard</a>
+ <h1>FanDuel Lineup Optimizer</h1>
  <p class="muted" id="fdRules">$60,000 cap · PG, SG, SF, PF, C, G/F, F/C and two UTIL slots</p>
+ </div>
 </header>
 <main>
  <section aria-labelledby="fdImportHeading">
   <h2 id="fdImportHeading">FanDuel slate</h2>
-  <div class="controls">
+  <div class="controls slate-controls">
    <label>Sport <select id="fdSport"><option value="NBA">NBA</option><option value="NFL">NFL</option><option value="MLB">MLB</option><option value="CFB">College football</option></select></label>
    <label>Optimize for <select id="fdObjective"><option value="projection">Projected points</option><option value="ceiling">High Ceiling</option><option value="tournament" hidden disabled>NFL Tournament Simulation</option></select></label>
    <button type="button" id="fdAutoLoad" class="primary">Load slate and build</button>
   </div>
-  <p class="muted">High Ceiling uses imported player ceiling estimates. Include a <strong>Ceiling</strong> column in your salary or projections CSV. Players without a ceiling estimate are skipped in High Ceiling mode.</p>
   <p id="fdStatus" role="status" aria-live="polite"></p>
   <div class="controls" id="fdRemoval" hidden>
    <span id="fdRemovalStatus" role="status"></span>
@@ -48,8 +119,7 @@ details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
    <p id="fdBuildStatus" role="status"></p>
    <div id="fdResults"></div>
   </div>
-  <p class="muted">Automatic loading uses the configured FanDuel salary provider. For NBA, LPPE can also check the public <a href="https://www.dailyfantasyfuel.com/nba/projections/fanduel/">Daily Fantasy Fuel</a> preview. Compare the slate, salaries and availability with your exact FanDuel contest.</p>
-  <details id="fdManualImport"><summary>Import your own slate</summary>
+  <details id="fdManualImport"><summary>Upload a FanDuel CSV</summary>
   <form id="fdImport" class="controls">
    <label>FanDuel salary CSV <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>
    <label>Projections CSV (optional) <input id="fdProjections" type="file" accept=".csv,text/csv"></label>
@@ -57,13 +127,17 @@ details{padding:10px 0}summary{cursor:pointer}summary+div{margin-top:8px}
   </form>
   <p class="muted">Selecting a salary CSV loads the slate and builds in the selected mode. Selecting a projections CSV afterward rebuilds with the updated projections. A projections CSV can also include <strong>Ownership %</strong> for projected field usage. Enter 12.5 or 12.5% for 12.5%. For custom projections, include <strong>Projection</strong> and either <strong>ID</strong> or <strong>Name</strong> and <strong>Team</strong>. Without a custom projection, LPPE uses the salary file’s projection or historical FanDuel FPPG when available.</p>
   </details>
+  <details><summary>Slate sources and optimization modes</summary>
+   <p class="muted">Automatic loading uses the configured FanDuel salary provider. For NBA, LPPE can also check <a href="https://www.dailyfantasyfuel.com/nba/projections/fanduel/">Daily Fantasy Fuel</a>. Compare the games, salaries and player availability with your FanDuel contest.</p>
+   <p class="muted">High Ceiling uses the <strong>Ceiling</strong> column in your salary or projections CSV. Players need a ceiling estimate to qualify for this mode.</p>
+  </details>
  </section>
  <section id="fdPool" hidden aria-labelledby="fdPoolHeading">
   <h2 id="fdPoolHeading">Player pool</h2>
   <p class="muted" id="fdSlateCheck" role="status"></p>
   <details id="fdGames" hidden><summary>Games in this slate</summary><ul id="fdGameList"></ul></details>
   <div class="controls">
-   <label>Find a player or team <input id="fdSearch" type="search"></label>
+   <label>Find a player or team <input id="fdSearch" type="search" placeholder="Player or team"></label>
    <label>Mode <select id="fdMode"><option value="gpp">GPP tournament</option><option value="cash">Cash</option></select></label>
    <label data-gpp>Lineups <input id="fdCount" type="number" min="1" max="20" value="5" required></label>
    <label data-gpp>Minimum different players per lineup <input id="fdDifference" type="number" min="1" max="9" value="2" required></label>
