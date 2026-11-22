@@ -220,7 +220,13 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <label>Selection <select id="fdSelectionFilter"><option value="">All players</option><option value="available">Available</option><option value="lock">Locked</option><option value="exclude">Excluded</option></select></label>
    <label>Sort players <select id="fdPlayerSort"><option value="projection">Projected points</option><option value="value">Points per $1,000</option><option value="ceiling">Ceiling points</option><option value="salary">Lowest salary</option></select></label>
   </div>
-  <p class="muted" id="fdVisiblePlayers" role="status"></p>
+  <div class="controls">
+   <p class="muted" id="fdVisiblePlayers" role="status"></p>
+   <div class="controls" id="fdPlayerPages" hidden>
+    <button type="button" id="fdPreviousPlayers">Previous players</button>
+    <button type="button" id="fdNextPlayers">Next players</button>
+   </div>
+  </div>
   <div class="tablewrap"><table><thead><tr><th>Player</th><th class="player-detail">Position</th><th class="player-detail">Team</th><th>Salary</th><th>FPTS</th><th class="player-detail">Source</th><th class="player-detail">Injury status</th><th>Selection</th></tr></thead>
    <tbody id="fdPlayers"></tbody></table></div>
  </section>

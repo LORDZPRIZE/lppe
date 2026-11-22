@@ -13,6 +13,10 @@ const search = byId("fdSearch");
 const positionFilter = byId("fdPositionFilter");
 const selectionFilter = byId("fdSelectionFilter");
 const playerSort = byId("fdPlayerSort");
+const previousPlayers = byId("fdPreviousPlayers");
+const nextPlayers = byId("fdNextPlayers");
+const playersPerPage = 50;
+let playerPage = 0;
 const sortPlayers = {
   projection:(a,b) => (b.points ?? -Infinity) - (a.points ?? -Infinity),
   value:(a,b) => ((b.points ?? -Infinity) / b.salary) - ((a.points ?? -Infinity) / a.salary),
@@ -98,6 +102,7 @@ byId("fdResumeSlate").addEventListener("click",() => {
   clearLineups();
   resetImport();
   search.value = selectionFilter.value = "";
+  playerPage = 0;
   sport.value = saved.sport;
   applySport();
   for (const control of slateSettings) {
@@ -172,11 +177,45 @@ function checkSlate(pool, profile, selectedSport) {
   const games = [...new Set(pool.map(player => player.game).filter(Boolean))].sort();
   const warnings = [];
   if (eligible.length < profile.roster.length) warnings.push("Too few eligible players to fill the roster.");
-  if (new Set(eligible.map(player => player.team)).size < 3) warnings.push("Fewer than three teams have eligible players.");
-  const missing = new Set(profile.roster.filter(([,positions]) =>
-    !eligible.some(player => player.positions.some(position => positions.includes(position)))).map(([slot]) => slot));
+  const teams = new Map();
+  for (const player of eligible) teams.set(player.team,(teams.get(player.team) || 0)+1);
+  if (teams.size < 3) warnings.push("Fewer than three teams have eligible players.");
+  const teamCapacity = [...teams.values()].reduce((sum,size) => sum + Math.min(size,profile.maxTeam),0);
+  if (eligible.length >= profile.roster.length && teamCapacity < profile.roster.length) {
+    warnings.push("Team limits leave too few eligible players to fill the roster.");
+  }
+  const pools = profile.roster.map(([,positions]) =>
+    eligible.filter(player => player.positions.some(position => positions.includes(position))));
+  const missing = new Set(profile.roster.filter((_,index) => !pools[index].length).map(([slot]) => slot));
   if (missing.size) warnings.push("No eligible players for " + [...missing].join(", ") + ".");
-  if (selectedSport === "CFB" && games.length === 1 && eligible.every(player => player.game)) {
+  if (!missing.size && eligible.length >= profile.roster.length) {
+    // Reassign players across eligible slots to account for repeated positions and FLEX.
+    const assigned = new Map();
+    function assign(index,visited) {
+      for (const player of pools[index]) {
+        if (visited.has(player.id)) continue;
+        visited.add(player.id);
+        if (!assigned.has(player.id) || assign(assigned.get(player.id),visited)) {
+          assigned.set(player.id,index);
+          return true;
+        }
+      }
+      return false;
+    }
+    const unfilled = profile.roster.filter((_,index) => !assign(index,new Set())).map(([label]) => label);
+    if (unfilled.length) {
+      warnings.push("Too few distinct players to fill every slot. Unfilled slots: "+unfilled.join(", ")+".");
+    }
+    const cheapestSlots = pools.reduce((sum,slotPool) => sum + slotPool.reduce((lowest,player) =>
+      Math.min(lowest,player.salary),Infinity),0);
+    const cheapestDistinct = eligible.map(player => player.salary).sort((a,b) => a-b)
+      .slice(0,profile.roster.length).reduce((sum,salary) => sum+salary,0);
+    if (Math.max(cheapestSlots,cheapestDistinct) > profile.salaryCap) {
+      warnings.push("This pool cannot fill a roster under the "+dollars.format(profile.salaryCap)+" salary cap.");
+    }
+  }
+  if (selectedSport === "CFB" && eligible.length && eligible.every(player => player.game) &&
+      new Set(eligible.map(player => player.game)).size === 1) {
     warnings.push("The college football roster requires at least two games.");
   }
   return {eligible:eligible.length,games,warnings};
@@ -201,6 +240,10 @@ function renderSlateCheck() {
 function renderPlayers() {
   renderSlateCheck();
   byId("fdSaveControls").hidden = !importedSlateName;
+  renderPlayerRows();
+}
+
+function renderPlayerRows() {
   const body = byId("fdPlayers");
   body.replaceChildren();
   const query = search.value.trim().toLowerCase();
@@ -209,9 +252,17 @@ function renderPlayers() {
     (!positionFilter.value || player.positions.includes(positionFilter.value)) &&
     (!selectionFilter.value || player.selection === selectionFilter.value));
   visible.sort((a,b) => sortPlayers[playerSort.value](a,b) || a.name.localeCompare(b.name));
-  byId("fdVisiblePlayers").textContent = visible.length ?
-    visible.length+" of "+players.length+" players shown" : "No players match these filters.";
-  for (const player of visible) {
+  const lastPage = Math.max(0,Math.ceil(visible.length/playersPerPage)-1);
+  playerPage = Math.min(playerPage,lastPage);
+  const first = playerPage*playersPerPage;
+  const page = visible.slice(first,first+playersPerPage);
+  previousPlayers.disabled = playerPage === 0;
+  nextPlayers.disabled = playerPage === lastPage;
+  byId("fdPlayerPages").hidden = lastPage === 0;
+  byId("fdVisiblePlayers").textContent = page.length ?
+    "Showing "+(first+1)+"–"+(first+page.length)+" of "+visible.length+" matching players" :
+    "No players match these filters.";
+  for (const player of page) {
     const row = body.insertRow();
     const nameCell = row.insertCell();
     nameCell.textContent = player.name;
@@ -354,6 +405,7 @@ importForm.addEventListener("submit",async event => {
       }
     } else {
       search.value = positionFilter.value = selectionFilter.value = "";
+      playerPage = 0;
     }
     loadedSalaryFile = salaryFile;
     loadedSlateKey = chosen?.key;
@@ -375,7 +427,7 @@ importForm.addEventListener("submit",async event => {
       " Review exports use local IDs for players without FanDuel IDs.";
     byId("fdPool").hidden = false;
     renderPlayers();
-    build.click();
+    buildCurrentLineups();
   } catch (error) {
     byId("fdStatus").textContent = (error.message || "Could not read the player pool.") +
       (players.length ? " Your previous slate is still loaded." : "");
@@ -697,13 +749,14 @@ async function loadPublicPool() {
     loadedSalaryFile = loadedSlateKey = undefined;
     importedSlateName = undefined;
     players = data.players;
+    playerPage = 0;
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
     const baseline = data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
     byId("fdStatus").textContent = data.label+" · "+data.date+" · "+players.length+" players across "+data.gameCount+
       " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+baseline;
     byId("fdPool").hidden = false;
     renderPlayers();
-    build.click();
+    buildCurrentLineups();
   } catch (error) {
     if (autoRequest !== request) return;
     byId("fdStatus").textContent = request.signal.aborted ? "Automatic slate loading timed out. You can import a FanDuel CSV." :
@@ -742,6 +795,7 @@ sport.addEventListener("change",() => {
   slateLockAt = null;
   importedSlateName = undefined;
   search.value = selectionFilter.value = "";
+  playerPage = 0;
   resetImport();
   clearLineups();
   byId("fdPool").hidden = true;
@@ -772,10 +826,24 @@ applyMode();
 showSavedSlate();
 loadPublicPool();
 
-search.addEventListener("input",renderPlayers);
-for (const filter of [positionFilter,selectionFilter,playerSort]) {
-  filter.addEventListener("change",renderPlayers);
+function resetPlayerPage() {
+  playerPage = 0;
+  renderPlayerRows();
 }
+search.addEventListener("input",resetPlayerPage);
+for (const filter of [positionFilter,selectionFilter,playerSort]) {
+  filter.addEventListener("change",resetPlayerPage);
+}
+previousPlayers.addEventListener("click",() => {
+  playerPage--;
+  renderPlayerRows();
+  if (previousPlayers.disabled) nextPlayers.focus();
+});
+nextPlayers.addEventListener("click",() => {
+  playerPage++;
+  renderPlayerRows();
+  if (nextPlayers.disabled) previousPlayers.focus();
+});
 count.addEventListener("change",applyMode);
 difference.addEventListener("change",applyMode);
 exposure.addEventListener("change",applyMode);
