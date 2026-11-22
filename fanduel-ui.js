@@ -1,6 +1,7 @@
 import { importPlayers, profiles, reviewCSV } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
+const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
 const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const importForm = byId("fdImport");
 const autoLoad = byId("fdAutoLoad");
@@ -158,9 +159,13 @@ importForm.addEventListener("submit",async event => {
 
 function renderLineups(result,requested,highCeiling) {
   const status = byId("fdBuildStatus");
-  lineups = [...result.lineups].sort((a,b) => highCeiling ? b.ceiling - a.ceiling : b.points - a.points);
+  lineups = result.simulation ? result.lineups : [...result.lineups].sort((a,b) => highCeiling ? b.ceiling - a.ceiling : b.points - a.points);
   status.textContent = lineups.length ? "Built "+lineups.length+" of "+requested+" requested lineups. Ranked by "+(highCeiling ? "total ceiling estimates." : "total projected points.") :
     "No valid lineup found. Check projections, locks, exclusions, and roster eligibility.";
+  if (result.simulation) {
+    status.textContent = "Built "+lineups.length+" of "+requested+" lineups. Ranked by modeled top-10% finish share across "+
+      result.simulation.scenarios+" scenarios and "+result.simulation.opponents+" modeled opponents. Estimates use slate projections and synthetic opponents.";
+  }
   if (result.limited) status.textContent += " The search reached its limit. A better lineup or additional alternatives may exist.";
   const output = byId("fdResults");
   for (const [index,lineup] of lineups.entries()) {
@@ -172,6 +177,10 @@ function renderLineups(result,requested,highCeiling) {
     projected.textContent = total+" total projected FPTS";
     summary.append("Lineup "+(index+1)+" · ",projected," · "+dollars.format(lineup.salary));
     if (highCeiling) summary.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
+    if (lineup.tournament) {
+      const {top,win,duplicates} = lineup.tournament;
+      summary.append(" · "+percent.format(top)+" modeled top-10% · "+percent.format(win)+" modeled win · "+duplicates+" field duplicates");
+    }
     const wrapper = document.createElement("div");
     wrapper.className = "tablewrap";
     const table = document.createElement("table");
@@ -247,6 +256,7 @@ build.addEventListener("click",() => {
     build.disabled = false;
   };
   const highCeiling = objective.value === "ceiling";
+  const tournament = gpp && sport.value === "NFL" && objective.value === "tournament";
   if (highCeiling && !players.some(player => player.selection !== "exclude" && Number.isFinite(player.ceiling))) {
     byId("fdBuildStatus").textContent = "High Ceiling needs a numeric Ceiling column matched to players in this slate.";
     return finish();
@@ -264,7 +274,7 @@ build.addEventListener("click",() => {
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
   const pool = gpp ? players : players.map(player => ({...player,maxExposure:100}));
-  optimizer.postMessage({players:pool,highCeiling,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
+  optimizer.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
     options:{exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
 });
 async function loadPublicPool() {
@@ -330,6 +340,9 @@ sport.addEventListener("change",() => {
 });
 function applyMode() {
   const cash = mode.value === "cash";
+  const tournament = objective.querySelector('option[value="tournament"]');
+  tournament.disabled = tournament.hidden = cash || sport.value !== "NFL";
+  if (tournament.disabled && objective.value === "tournament") objective.value = "projection";
   for (const label of document.querySelectorAll("[data-gpp]")) label.hidden = cash;
   byId("fdFootballStack").hidden = cash || !["NFL","CFB"].includes(sport.value);
   byId("fdExposureHint").hidden = cash;
