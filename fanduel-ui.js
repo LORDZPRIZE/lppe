@@ -10,6 +10,9 @@ const projections = byId("fdProjections");
 const search = byId("fdSearch");
 const count = byId("fdCount");
 const difference = byId("fdDifference");
+const exposure = byId("fdExposure");
+const stack = byId("fdStack");
+const mode = byId("fdMode");
 const build = byId("fdBuild");
 const exportButton = byId("fdExport");
 let players = [];
@@ -28,7 +31,39 @@ function clearLineups() {
   byId("fdResultsPanel").hidden = true;
 }
 
+function checkSlate(pool, profile, selectedSport) {
+  const eligible = pool.filter(player => player.selection !== "exclude" && Number.isFinite(player.points));
+  const games = [...new Set(pool.map(player => player.game).filter(Boolean))].sort();
+  const warnings = [];
+  if (eligible.length < profile.roster.length) warnings.push("Too few eligible players to fill the roster.");
+  if (new Set(eligible.map(player => player.team)).size < 3) warnings.push("Fewer than three teams have eligible players.");
+  const missing = new Set(profile.roster.filter(([,positions]) =>
+    !eligible.some(player => player.positions.some(position => positions.includes(position)))).map(([slot]) => slot));
+  if (missing.size) warnings.push("No eligible players for " + [...missing].join(", ") + ".");
+  if (selectedSport === "CFB" && games.length === 1 && eligible.every(player => player.game)) {
+    warnings.push("The college football roster requires at least two games.");
+  }
+  return {eligible:eligible.length,games,warnings};
+}
+
+function renderSlateCheck() {
+  const profile = profiles[sport.value];
+  const {eligible,games,warnings} = checkSlate(players,profile,sport.value);
+  byId("fdSlateCheck").textContent = players.length + " players · " + eligible + " eligible · " +
+    (games.length ? games.length + " listed games" : "game details unavailable") + " · " +
+    dollars.format(profile.salaryCap) + " cap · " + profile.roster.length + " roster slots. " +
+    (warnings.join(" ") || "Confirm these games match your FanDuel contest.");
+  byId("fdGames").hidden = !games.length;
+  byId("fdGameList").replaceChildren(...games.map(game => {
+    const item = document.createElement("li");
+    item.textContent = game;
+    return item;
+  }));
+  if (!optimizer) build.disabled = Boolean(warnings.length);
+}
+
 function renderPlayers() {
+  renderSlateCheck();
   const body = byId("fdPlayers");
   body.replaceChildren();
   const query = search.value.trim().toLowerCase();
@@ -51,6 +86,7 @@ function renderPlayers() {
     selection.addEventListener("change",() => {
       player.selection = selection.value;
       clearLineups();
+      renderSlateCheck();
     });
     row.insertCell().append(selection);
   }
@@ -132,12 +168,14 @@ build.addEventListener("click",() => {
     byId("fdStatus").textContent = "The automatically loaded slate has reached its first game start. Load another available pool or import a different contest.";
     return;
   }
-  if (!count.reportValidity() || !difference.reportValidity()) return;
+  const gpp = mode.value === "gpp";
+  if (checkSlate(players,profiles[sport.value],sport.value).warnings.length) return;
+  if (gpp && (!count.reportValidity() || !difference.reportValidity() || !exposure.reportValidity())) return;
   clearLineups();
   byId("fdResultsPanel").hidden = false;
   byId("fdBuildStatus").textContent = "Building lineups…";
   build.disabled = true;
-  const requested = count.valueAsNumber;
+  const requested = gpp ? count.valueAsNumber : 1;
   const finish = () => {
     optimizer?.terminate();
     optimizer = undefined;
@@ -155,7 +193,8 @@ build.addEventListener("click",() => {
     finish();
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
-  optimizer.postMessage({players,count:requested,difference:difference.valueAsNumber,sport:sport.value});
+  optimizer.postMessage({players,count:requested,difference:gpp ? difference.valueAsNumber : 1,sport:sport.value,
+    options:{exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)}});
 });
 async function loadPublicPool() {
   autoRequest?.abort();
@@ -212,14 +251,28 @@ sport.addEventListener("change",() => {
   clearLineups();
   byId("fdPool").hidden = true;
   applySport();
+  applyMode();
   loadPublicPool();
 });
+function applyMode() {
+  const cash = mode.value === "cash";
+  for (const label of document.querySelectorAll("[data-gpp]")) label.hidden = cash;
+  byId("fdFootballStack").hidden = cash || !["NFL","CFB"].includes(sport.value);
+  byId("fdExposureHint").hidden = cash;
+  build.textContent = cash ? "Build cash lineup" : "Build GPP lineups";
+  clearLineups();
+  if (players.length) renderSlateCheck();
+}
+mode.addEventListener("change",applyMode);
 applySport();
+applyMode();
 loadPublicPool();
 
 search.addEventListener("input",renderPlayers);
-count.addEventListener("change",clearLineups);
-difference.addEventListener("change",clearLineups);
+count.addEventListener("change",applyMode);
+difference.addEventListener("change",applyMode);
+exposure.addEventListener("change",applyMode);
+stack.addEventListener("change",applyMode);
 exportButton.addEventListener("click",() => {
   const url = URL.createObjectURL(new Blob([reviewCSV(lineups,sport.value)],{type:"text/csv;charset=utf-8"}));
   const download = document.createElement("a");
