@@ -76,9 +76,33 @@ export const teamCode = (raw,sport = "NBA") => {
 const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 export const unavailable = status => /^(O|OUT|IR|INACTIVE|SUSPENDED|SUSP|DOUBTFUL|D)$/i.test(status || "");
 
-export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
+const isCheatsheet = rows => rows.length > 0 &&
+  ["ppgprojection","slate","gamedate","opp"].every(key => key in rows[0]);
+const cheatsheetKey = row => JSON.stringify([row.slate,row.gamedate]);
+
+export function inspectSalaryCSV(source) {
+  const rows = parseCSV(source);
+  const preview = isCheatsheet(rows);
+  const slates = new Map();
+  if (preview) {
+    for (const row of rows) {
+      const key = cheatsheetKey(row);
+      const slate = slates.get(key) ?? {key,name:row.slate,date:row.gamedate,entries:0};
+      slate.entries++;
+      slates.set(key,slate);
+    }
+  }
+  return {rows,preview,slates:[...slates.values()]};
+}
+
+export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {inspection,slateKey} = {}) {
   const profile = rosterProfile(sport);
   const allowed = new Set(profile.roster.flatMap(([,positions]) => positions));
+  const {rows,preview,slates} = inspection ?? inspectSalaryCSV(salaryCSV);
+  const selectedSlate = slateKey ?? (slates.length === 1 ? slates[0].key : undefined);
+  if (slates.length > 1 && !slates.some(slate => slate.key === selectedSlate)) {
+    throw new Error("This cheatsheet contains multiple slates or dates. Choose a slate before building.");
+  }
   const byId = new Map();
   const byName = new Map();
   const ceilingById = new Map();
@@ -98,6 +122,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
   }
   if (projectionCSV.trim()) {
     for (const row of parseCSV(projectionCSV)) {
+      if (selectedSlate && row.slate && row.gamedate && cheatsheetKey(row) !== selectedSlate) continue;
       const projected = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
       if (!Number.isFinite(projected)) continue;
       const name = matchName(playerName(row));
@@ -120,12 +145,8 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA") {
 
   const players = new Map();
   let skipped = 0;
-  const rows = parseCSV(salaryCSV);
-  const preview = rows.length > 0 && ["ppgprojection","slate","gamedate","opp"].every(key => key in rows[0]);
-  if (preview && new Set(rows.map(row => JSON.stringify([row.slate,row.gamedate]))).size > 1) {
-    throw new Error("This cheatsheet contains multiple slates or dates. Import one contest slate at a time.");
-  }
   for (const row of rows) {
+    if (slates.length > 1 && cheatsheetKey(row) !== selectedSlate) continue;
     const name = playerName(row);
     const slots = positionCodes(row.rosterposition || "",sport,allowed);
     const positions = slots.length ? slots : positionCodes(row.position || "",sport,allowed);

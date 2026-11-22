@@ -181,6 +181,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <details id="fdManualImport"><summary>Upload a FanDuel CSV or Daily Fantasy Fuel cheatsheet</summary>
   <form id="fdImport" class="controls">
    <label>Salary CSV or cheatsheet <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>
+   <label id="fdSlateChoice" hidden>Contest slate <select id="fdImportedSlate"></select></label>
    <label>Projections CSV (optional) <input id="fdProjections" type="file" accept=".csv,text/csv"></label>
    <button type="submit" class="primary">Reload CSV and build</button>
    <button type="button" id="fdSalaryOnly" hidden>Use salary file alone</button>
