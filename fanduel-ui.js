@@ -241,17 +241,29 @@ function renderLineups(result,requested,highCeiling) {
   const output = byId("fdResults");
   for (const [index,lineup] of lineups.entries()) {
     const details = document.createElement("details");
+    details.className = "lineup-card";
     details.open = index === 0;
     const summary = document.createElement("summary");
     const total = lineup.points.toFixed(2);
     const projected = document.createElement("strong");
-    projected.textContent = total+" total projected FPTS";
-    summary.append("Lineup "+(index+1)+" · ",projected," · "+dollars.format(lineup.salary));
-    if (highCeiling) summary.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
+    projected.textContent = total;
+    const label = document.createElement("span");
+    label.className = "lineup-name";
+    label.textContent = "Lineup "+(index+1);
+    const value = document.createElement("span");
+    value.className = "lineup-value";
+    const units = document.createElement("small");
+    units.textContent = "Projected FPTS";
+    value.append(projected,units);
+    const meta = document.createElement("span");
+    meta.className = "lineup-meta";
+    meta.textContent = dollars.format(lineup.salary)+" salary";
+    if (highCeiling) meta.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
     if (lineup.tournament) {
       const {top,win,duplicates} = lineup.tournament;
-      summary.append(" · "+percent.format(top)+" modeled top-10% · "+percent.format(win)+" modeled win · "+duplicates+" field duplicates");
+      meta.append(" · "+percent.format(top)+" modeled top-10% · "+percent.format(win)+" modeled win · "+duplicates+" field duplicates");
     }
+    summary.append(label,value,meta);
     const wrapper = document.createElement("div");
     wrapper.className = "tablewrap";
     const table = document.createElement("table");
@@ -332,7 +344,7 @@ function renderLineups(result,requested,highCeiling) {
     if (comparisons) overlap.textContent = "Lineup overlap: " + (sharedTotal/comparisons).toFixed(1) +
       " shared players on average · highest " + mostShared + ".";
     portfolio.append(summary,overlap,list);
-    output.prepend(portfolio);
+    output.append(portfolio);
   }
   exportButton.disabled = !lineups.length;
 }
