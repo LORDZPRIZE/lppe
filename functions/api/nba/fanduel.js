@@ -1,7 +1,10 @@
 import { importPlayers, matchName, profiles, salaryCap, teamCode, unavailable } from "../../../fanduel-optimizer.js";
 
 const source = "https://www.dailyfantasyfuel.com/nba/projections/fanduel/";
-const scoreboard = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=";
+const scoreboards = {
+  NBA:"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=",
+  NFL:"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates="
+};
 const injuryFeed = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries";
 const eastern = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"});
 const salaryProvider = "https://fanduelapi.com/api/v1";
@@ -165,21 +168,32 @@ async function providerPool(read,slate,sport) {
   return normalizeProviderPlayers(rows,slate,sport);
 }
 
-export function attachNBAGames(pool,events,now) {
+export function attachSlateGames(pool,events,now,sport = "NBA") {
   const slateTeams = new Set(pool.players.map(player => player.team));
   const games = new Map();
+  const seen = new Set();
   for (const event of events) {
-    const teams = event.competitions?.[0]?.competitors?.map(item => teamCode(item.team?.abbreviation));
+    const teams = event.competitions?.[0]?.competitors?.map(item => teamCode(item.team?.abbreviation,sport));
     const start = Date.parse(event.date);
     if (teams?.length !== 2 || teams[0] === teams[1] ||
         !teams.every(team => slateTeams.has(team)) ||
         event.status?.type?.state !== "pre" || !(start > now && start >= pool.lockAt)) continue;
     const game = teams.sort().join("/");
-    for (const team of teams) games.set(team,games.has(team) ? null : game);
+    const identity = game+":"+start;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const schedule = {game,gameDate:easternDay(start),start};
+    for (const team of teams) games.set(team,games.has(team) ? null : schedule);
   }
   const unique = new Set([...games.values()].filter(Boolean));
-  if (unique.size !== pool.gameCount || [...slateTeams].some(team => !games.get(team))) return pool;
-  return {...pool,players:pool.players.map(player => ({...player,game:games.get(player.team)}))};
+  const firstStart = Math.min(...[...unique].map(game => game.start));
+  if (unique.size !== pool.gameCount || firstStart !== pool.lockAt ||
+      [...slateTeams].some(team => !games.get(team))) return pool;
+  const players = pool.players.map(player => {
+    const {game,gameDate} = games.get(player.team);
+    return {...player,game,gameDate};
+  });
+  return {...pool,players};
 }
 
 export function addNBAProjections(pool,{rows,updatedAt},now) {
@@ -278,10 +292,11 @@ async function currentNBAProjections() {
   }
 }
 
-async function nbaSchedule(date,timeout = 8000) {
-  const schedule = await fetch(scoreboard+date.replaceAll("-",""),{signal:AbortSignal.timeout(timeout)});
-  if (!schedule.ok) throw new Error("NBA schedule unavailable");
-  return (await schedule.json()).events || [];
+async function readSchedule(sport,date,timeout = 3500) {
+  const schedule = await fetch(scoreboards[sport]+date.replaceAll("-",""),{signal:AbortSignal.timeout(timeout)});
+  if (!schedule.ok) throw new Error(sport+" schedule unavailable");
+  const {events} = await schedule.json();
+  return Array.isArray(events) ? events : [];
 }
 
 async function publicPool() {
@@ -290,7 +305,7 @@ async function publicPool() {
   const slate = await readPublicSlate(publicPage);
   const date = slate.rows[0]?.date;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return {error:"No current public FanDuel slate is available."};
-  return normalizePublicSlate(slate,await nbaSchedule(date),Date.now());
+  return normalizePublicSlate(slate,await readSchedule("NBA",date,8000),Date.now());
 }
 
 async function cachedPool(cache,key) {
@@ -321,7 +336,7 @@ export async function onRequestGet({request,env}) {
   },503);
   try {
     const cache = caches.default;
-    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v8/"+sport+"/"+suffix,request.url));
+    const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v9/"+sport+"/"+suffix,request.url));
     let slate;
     let read;
     if (configured) {
@@ -345,8 +360,9 @@ export async function onRequestGet({request,env}) {
     const isLiveNBA = configured && sport === "NBA";
     const projectionsRequest = isLiveNBA ? currentNBAProjections() : null;
     const injuriesRequest = isLiveNBA ? currentNBAInjuries() : null;
-    const scheduleRequest = isLiveNBA ?
-      nbaSchedule(easternDay(Date.parse(slate.starts_at)),3500).catch(() => []) : null;
+    const scheduledSport = configured && Object.hasOwn(scoreboards,sport);
+    const scheduleRequest = scheduledSport ?
+      readSchedule(sport,easternDay(Date.parse(slate.starts_at))).catch(() => []) : null;
     const salaryKey = isLiveNBA ? cacheKey("nba-salaries/"+slate.id) : null;
     let data = salaryKey ? await cachedPool(cache,salaryKey) : null;
     if (!data) {
@@ -355,7 +371,17 @@ export async function onRequestGet({request,env}) {
       if (salaryKey) await storePool(cache,salaryKey,data,600);
     }
     const projections = await projectionsRequest;
-    if (scheduleRequest) data = attachNBAGames(data,await scheduleRequest,Date.now());
+    if (scheduleRequest) {
+      const events = await scheduleRequest;
+      const scheduled = attachSlateGames(data,events,Date.now(),sport);
+      if (sport === "NFL" && scheduled === data) {
+        const nextDays = await Promise.all([1,2,3].map(day =>
+          readSchedule(sport,easternDay(data.lockAt+day*86400000)).catch(() => [])));
+        data = attachSlateGames(data,events.concat(...nextDays),Date.now(),sport);
+      } else {
+        data = scheduled;
+      }
+    }
     const injuries = await injuriesRequest;
     if (injuries) data = applyNBAInjuryReport(data,injuries,Date.now());
     if (projections) data = addNBAProjections(data,projections,Date.now());

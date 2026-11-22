@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
-import { addNBAProjections, applyNBAInjuryReport, attachNBAGames, onRequestGet } from "../functions/api/nba/fanduel.js";
+import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, onRequestGet } from "../functions/api/nba/fanduel.js";
 import { rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
@@ -116,8 +116,8 @@ test("adds fresh NBA projections only for unambiguous eligible players on the sa
     date:new Date(lockAt).toISOString(),status:{type:{state:"pre"}}
   }];
   const raw = {date,lockAt,gameCount:1,players:[player,opponent,fallback]};
-  assert.equal(attachNBAGames(raw,games,lockAt),raw);
-  const pool = attachNBAGames(raw,games,now);
+  assert.equal(attachSlateGames(raw,games,lockAt),raw);
+  const pool = attachSlateGames(raw,games,now);
   assert(pool.players.every(player => player.game === "CHI/DEN"));
 
   const row = {date,name:"Nikola Jokic",team:"DEN",opponent:"CHI",salary:"11900",positions:"C",points:"61"};
@@ -258,4 +258,28 @@ test("refreshing NBA projections reuses the longer-lived salary cache", async co
   assert.equal((await reply()).status,200);
   assert.equal(providerCalls.length,2);
   assert.equal(publicCalls.length,6);
+});
+
+test("matches NFL schedule aliases and supports projections on a multi-day slate", () => {
+  const lockAt = Date.parse("2026-11-22T21:05:00Z");
+  const players = ["JAC","NYG","LAC","NYJ"].map((team,index) => ({
+    id:"A-"+index,name:"Player "+index,team,points:12
+  }));
+  const pool = {date:"2026-11-22",lockAt,gameCount:2,players};
+  const event = (teams,date) => ({
+    competitions:[{competitors:teams.map(abbreviation => ({team:{abbreviation}}))}],
+    date,status:{type:{state:"pre"}}
+  });
+  const first = event(["JAX","NYG"],"2026-11-22T21:05:00Z");
+  const second = event(["LAC","NYJ"],"2026-11-24T01:20:00Z");
+  assert.equal(attachSlateGames(pool,[first],lockAt-1,"NFL"),pool);
+  const result = attachSlateGames(pool,[first,first,second],lockAt-1,"NFL");
+  assert.deepEqual(result.players.map(player => [player.game,player.gameDate]),[
+    ["JAC/NYG","2026-11-22"],["JAC/NYG","2026-11-22"],
+    ["LAC/NYJ","2026-11-23"],["LAC/NYJ","2026-11-23"]
+  ]);
+  const projections = "ID,Projection,Game Date\nA-2,19,2026-11-23\nA-3,25,2026-11-26";
+  const overlay = applyPlayerProjections(result.players,projections,"NFL",{date:pool.date});
+  assert.equal(overlay.matched,1);
+  assert.deepEqual(overlay.players.map(player => player.points),[12,12,19,12]);
 });
