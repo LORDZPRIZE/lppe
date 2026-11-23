@@ -151,6 +151,27 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
     const capped = new Set([...lead.ids].filter(id => limits.get(id) === 1));
     if (capped.size) collectCandidates(pool.filter(player => !capped.has(player.id)),minimum);
   }
+  // Generate alternative roster cores for multi-entry GPP portfolios. The original
+  // projection-first search can return near-identical candidates, leaving exposure
+  // constraints impossible to satisfy even when other valid rosters exist.
+  // These are pre-lock projection-based candidates, not hindsight substitutions.
+  if (count > 2 && candidates.size) {
+    const baseline = [...candidates.values()];
+    const frequency = new Map();
+    for (const lineup of baseline) {
+      for (const id of lineup.ids) frequency.set(id,(frequency.get(id) || 0)+1);
+    }
+    const alternatives = [...frequency.entries()]
+      .filter(([id]) => !players.some(player => player.id === id && player.selection === "lock"))
+      .sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]))
+      .slice(0,Math.min(8,count*2));
+    for (const [excludedId] of alternatives) {
+      const variedPool = pool.filter(player => player.id !== excludedId);
+      const result = buildLineups(variedPool,Math.min(6,count),1,searchLimit,"NFL",{stack});
+      limited ||= result.limited;
+      for (const lineup of result.lineups) candidates.set(rosterKey(lineup),lineup);
+    }
+  }
   if (!candidates.size) return {lineups:[],limited,restriction};
 
   const ranked = simulateNFLTournament(players,[...candidates.values()]);
