@@ -1,0 +1,31 @@
+name: NBA shared forecast history
+
+on:
+  schedule:
+    - cron: "19 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      JOB_TOKEN: ${{ secrets.NBA_FORECAST_JOB_TOKEN }}
+      HISTORY_URL: ${{ vars.NBA_FORECAST_HISTORY_URL }}
+    steps:
+      - name: Capture forecasts and grade final games
+        run: |
+          if [[ -z "$JOB_TOKEN" || -z "$HISTORY_URL" ]]; then
+            echo "Configure NBA_FORECAST_JOB_TOKEN and NBA_FORECAST_HISTORY_URL to enable scheduled capture."
+            exit 1
+          fi
+          failed=0
+          for operation in 'action=capture&part=0' 'action=capture&part=1' 'action=grade' "action=grade&date=$(TZ=America/New_York date +%Y%m%d)"; do
+            curl --silent --show-error --fail-with-body --max-time 45 \
+              --header "Authorization: Bearer $JOB_TOKEN" --request POST \
+              "${HISTORY_URL}?${operation}" || failed=1
+            printf '\n'
+          done
+          exit "$failed"
