@@ -1,10 +1,15 @@
 import { buildLineups } from "./fanduel-optimizer.js";
 
-import { rankNFLTournament } from "./fanduel-nfl-tournament.js";
+import { buildNFLTournament } from "./fanduel-nfl-tournament.js";
 
 self.addEventListener("message",({data}) => {
   try {
     const {players,count,difference,sport,options,highCeiling} = data;
+    const searchLimit = data.deep ? 1000000 : 160000;
+    if (data.tournament && sport === "NFL") {
+      self.postMessage(buildNFLTournament(players,count,difference,searchLimit,options));
+      return;
+    }
     const pool = highCeiling ? players.map(player => ({
       ...player,
       points:Number.isFinite(player.points) ? player.ceiling : NaN
@@ -16,7 +21,7 @@ self.addEventListener("message",({data}) => {
       return {...lineup,picks,ceiling:lineup.points,
         points:picks.reduce((sum,{player}) => sum + player.points,0)};
     }
-    const result = buildLineups(pool,count,difference,data.deep ? 1000000 : 160000,sport,{
+    const result = buildLineups(pool,count,difference,searchLimit,sport,{
       ...options,
       onLineup(lineup,limited) {
         self.postMessage({progress:displayLineup(lineup),limited});
@@ -24,11 +29,6 @@ self.addEventListener("message",({data}) => {
     });
     result.exactFirst = Boolean(options?.exactFirst && result.lineups.length);
     if (highCeiling) result.lineups = result.lineups.map(displayLineup);
-    if (data.tournament && sport === "NFL" && result.lineups.length) {
-      const simulated = rankNFLTournament(players,result.lineups);
-      result.lineups = simulated.lineups;
-      result.simulation = {opponents:simulated.opponents,scenarios:simulated.scenarios};
-    }
     self.postMessage(result);
   } catch (error) {
     self.postMessage({error:error.message || "Could not build lineups."});

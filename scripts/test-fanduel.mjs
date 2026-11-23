@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
 import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, onRequestGet } from "../functions/api/nba/fanduel.js";
-import { rankNFLTournament } from "../fanduel-nfl-tournament.js";
+import { buildNFLTournament, rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
   const salary = [
@@ -74,6 +74,24 @@ test("finds the best stack while tracking progress and applying portfolio limits
   }
   for (const player of players) {
     assert(result.lineups.filter(lineup => lineup.ids.has(player.id)).length <= 3);
+  }
+});
+
+test("selects distinct simulated double stacks within portfolio limits", () => {
+  const pool = sampleNFLPool();
+  pool[0].selection = "lock";
+  const result = buildNFLTournament(pool,4,2,160000,{stack:2});
+  assert.equal(result.lineups.length,4);
+  for (const [index,lineup] of result.lineups.entries()) {
+    const qb = lineup.picks.find(({slot}) => slot === 0).player;
+    assert(lineup.ids.has(pool[0].id));
+    assert(lineup.picks.filter(({player}) =>
+      player.team === qb.team && player.positions.some(position => position === "WR" || position === "TE")).length >= 2);
+    assert(Number.isFinite(lineup.tournament.ceiling));
+    for (const prior of result.lineups.slice(0,index)) {
+      assert(prior.tournament.win >= lineup.tournament.win);
+      assert([...lineup.ids].filter(id => prior.ids.has(id)).length <= 7);
+    }
   }
 });
 

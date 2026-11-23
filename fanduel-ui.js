@@ -585,8 +585,8 @@ function renderLineups(result,requested,highCeiling) {
     if (uncertain.length) meta.append(" · Status to check: "+uncertain.map(({player}) => player.name).join(", "));
     if (highCeiling) meta.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
     if (lineup.tournament) {
-      const {top,win,duplicates} = lineup.tournament;
-      meta.append(" · "+percent.format(top)+" modeled top-10% · "+percent.format(win)+" modeled win · "+duplicates+" field duplicates");
+      const {top,win,ceiling,duplicates} = lineup.tournament;
+      meta.append(" · "+percent.format(win)+" modeled win · "+percent.format(top)+" modeled top-10% · "+ceiling.toFixed(1)+" simulated 90th percentile · "+duplicates+" field duplicates");
     }
     summary.append(label,value,meta);
     const wrapper = document.createElement("div");
@@ -702,6 +702,7 @@ function buildCurrentLineups() {
   };
   const highCeiling = objective.value === "ceiling";
   const tournament = gpp && sport.value === "NFL" && objective.value === "tournament";
+  if (tournament) byId("fdBuildStatus").textContent = "Building stack candidates and simulating tournament outcomes…";
   if (highCeiling && !players.some(player => player.selection !== "exclude" && Number.isFinite(player.ceiling))) {
     byId("fdBuildStatus").textContent = "High Ceiling needs a numeric Ceiling column matched to players in this slate.";
     return finish();

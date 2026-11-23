@@ -1,7 +1,7 @@
 import {buildLineups, unavailable} from "./fanduel-optimizer.js";
 
 const fieldSize = 100;
-const scenarioCount = 256;
+const scenarioCount = 1024;
 const rosterKey = lineup => JSON.stringify([...lineup.ids].sort());
 
 function makeRandom(seed) {
@@ -25,14 +25,14 @@ export function rankNFLTournament(players,lineups) {
       points:player.points+normal(fieldRandom)*Math.max(2,Math.abs(player.points)*0.32)
     }));
     // Mix stacked and unstacked builds. Each build represents one opponent entry.
-    const {lineups:[opponent]} = buildLineups(rankedPool,1,1,5000,"NFL",{stack:index%3 ? 1 : 0});
+    const {lineups:[opponent]} = buildLineups(rankedPool,1,1,5000,"NFL",{stack:index%3});
     if (opponent) field.push(opponent);
   }
   if (field.length < 25) throw new Error("Too few opponent lineups could be modeled from this slate.");
 
   const fieldKeys = field.map(rosterKey);
   const entries = lineups.map(lineup => ({
-    lineup,win:0,top:0,duplicates:fieldKeys.filter(key => key === rosterKey(lineup)).length
+    lineup,win:0,top:0,scores:[],duplicates:fieldKeys.filter(key => key === rosterKey(lineup)).length
   }));
   const places = Math.floor((field.length+1)/10);
   for (let index = 0; index < scenarioCount; index++) {
@@ -56,6 +56,7 @@ export function rankNFLTournament(players,lineups) {
     const opponentScores = field.map(scoreLineup);
     for (const entry of entries) {
       const score = scoreLineup(entry.lineup);
+      entry.scores.push(score);
       let above = 0;
       let tied = 1;
       for (const opponentScore of opponentScores) {
@@ -69,9 +70,52 @@ export function rankNFLTournament(players,lineups) {
   return {
     opponents:field.length,
     scenarios:scenarioCount,
-    lineups:entries.sort((a,b) => b.top-a.top || b.win-a.win || a.duplicates-b.duplicates || b.lineup.points-a.lineup.points)
-      .map(({lineup,win,top,duplicates}) => ({
-        ...lineup,tournament:{win:win/scenarioCount,top:top/scenarioCount,duplicates}
-      }))
+    lineups:entries.map(({lineup,win,top,scores,duplicates}) => ({
+      ...lineup,tournament:{
+        win:win/scenarioCount,top:top/scenarioCount,duplicates,
+        ceiling:scores.sort((a,b) => a-b)[Math.ceil(scenarioCount*0.90)-1]/100
+      }
+    })).sort((a,b) => b.tournament.win-a.tournament.win || b.tournament.top-a.tournament.top ||
+      b.tournament.ceiling-a.tournament.ceiling || a.tournament.duplicates-b.tournament.duplicates ||
+      b.points-a.points)
+  };
+}
+
+export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0} = {}) {
+  const candidates = new Map();
+  const limits = new Map(players.map(player => [
+    player.id, player.selection === "lock" ? count :
+      Math.floor(count*Math.min(exposure,player.maxExposure ?? 100)/100)
+  ]));
+  const pool = players.filter(player => limits.get(player.id) > 0)
+    .map(player => ({...player,maxExposure:100}));
+  const candidateCount = Math.min(20,Math.max(6,count*2));
+  let limited = false;
+  let restriction;
+  // Keep the requested stack as a minimum. Sample double stacks separately so
+  // the projection search cannot crowd them out before simulation.
+  for (let minimum = stack; minimum <= 2; minimum++) {
+    const result = buildLineups(pool,candidateCount,1,searchLimit,"NFL",{stack:minimum});
+    limited ||= result.limited;
+    restriction ||= result.restriction;
+    for (const lineup of result.lineups) candidates.set(rosterKey(lineup),lineup);
+  }
+  if (!candidates.size) return {lineups:[],limited,restriction};
+
+  const ranked = rankNFLTournament(players,[...candidates.values()]);
+  const usage = new Map();
+  const lineups = [];
+  for (const lineup of ranked.lineups) {
+    if ([...lineup.ids].some(id => (usage.get(id) || 0) >= limits.get(id))) continue;
+    if (lineups.some(prior => [...lineup.ids].filter(id => !prior.ids.has(id)).length < difference)) continue;
+    lineups.push(lineup);
+    for (const id of lineup.ids) usage.set(id,(usage.get(id) || 0)+1);
+    if (lineups.length === count) break;
+  }
+  return {
+    lineups,limited,
+    restriction:lineups.length < count ?
+      "The simulated candidate pool could not fill the portfolio within your exposure and lineup difference settings." : undefined,
+    simulation:{opponents:ranked.opponents,scenarios:ranked.scenarios}
   };
 }
