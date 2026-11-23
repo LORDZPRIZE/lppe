@@ -135,13 +135,21 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
   const candidateCount = Math.min(20,Math.max(6,count*2));
   let limited = false;
   let restriction;
-  // Keep the requested stack as a minimum. Sample double stacks separately so
-  // the projection search cannot crowd them out before simulation.
-  for (let minimum = stack; minimum <= 2; minimum++) {
-    const result = buildLineups(pool,candidateCount,1,searchLimit,"NFL",{stack:minimum});
+  function collectCandidates(candidatePool,minimum) {
+    const result = buildLineups(candidatePool,candidateCount,1,searchLimit,"NFL",{stack:minimum});
     limited ||= result.limited;
     restriction ||= result.restriction;
     for (const lineup of result.lineups) candidates.set(rosterKey(lineup),lineup);
+    return result.lineups[0];
+  }
+
+  // Sample double stacks separately so the projection search cannot crowd them out.
+  for (let minimum = stack; minimum <= 2; minimum++) {
+    const lead = collectCandidates(pool,minimum);
+    if (count !== 2 || !lead) continue;
+    // An exposure cap can make every top projected roster incompatible with the lead.
+    const capped = new Set([...lead.ids].filter(id => limits.get(id) === 1));
+    if (capped.size) collectCandidates(pool.filter(player => !capped.has(player.id)),minimum);
   }
   if (!candidates.size) return {lineups:[],limited,restriction};
 
