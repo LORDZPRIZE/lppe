@@ -441,9 +441,20 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
     <label>Entry ID <input name="entryId" required maxlength="100"></label>
     <label>Stake <input name="stake" type="number" min="0.01" step="0.01" required></label>
     <label>Total returned <input name="returned" type="number" min="0" step="0.01" required></label>
+    <label>Picks decided <input name="decided" type="number" min="1" max="6" step="1"></label>
+    <label>Picks hit <input name="hits" type="number" min="0" max="6" step="1"></label>
+    <label>Same-game exposure
+     <select name="exposure">
+      <option value="">Unknown</option>
+      <option value="single">At most one pick per game</option>
+      <option value="multiple">Two or more picks from one game</option>
+     </select>
+    </label>
+    <p class="sub">Pick counts are optional. Exclude pushes and voids from picks decided.</p>
     <button type="submit" class="secondary">Save settled entry</button>
    </form>
    <p id="nbaEntryROI" class="sub" role="status"></p>
+   <ul id="nbaEntryBreakdown"></ul>
   </details>
   <div class="tablewrap">
    <table><thead><tr><th>SOURCE</th><th>ESTIMATE RANGE</th><th>WINS</th><th>LOSSES</th><th>TIES</th><th>DECIDED SAMPLE</th><th>AVERAGE ESTIMATE</th><th>OBSERVED HIT RATE</th><th>CALIBRATION GAP</th><th>FORECAST ERROR</th></tr></thead>
@@ -1931,12 +1942,38 @@ function formatEntryROI(entries) {
  if (!totals.stake) return "No settled entries logged in this browser.";
  const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"});
  return entries.size + " settled entries · " + dollars.format(totals.stake) + " staked · " +
-  dollars.format(totals.returned) + " returned · " + ((totals.returned/totals.stake-1)*100).toFixed(1) + "% ROI";
+  dollars.format(totals.returned) + " returned · " + dollars.format(totals.returned-totals.stake) + " net · " + ((totals.returned/totals.stake-1)*100).toFixed(1) + "% ROI";
+}
+
+function entryBreakdown(entries) {
+ const records = Array.from(entries.values());
+ const graded = records.filter(entry => Number.isInteger(entry.decided));
+ const hits = graded.reduce((sum,entry) => sum+entry.hits,0);
+ const decided = graded.reduce((sum,entry) => sum+entry.decided,0);
+ const lines = [];
+ if (decided) lines.push("Picks hit: "+hits+"/"+decided+" ("+(100*hits/decided).toFixed(1)+"%) across "+graded.length+" logged entries with pick counts.");
+ for (const [exposure,label] of [
+  ["single","At most one pick per game"],
+  ["multiple","Two or more picks from one game"],
+  ["","Unknown same-game exposure"]
+ ]) {
+  const group = new Map(Array.from(entries).filter(([,entry]) => (entry.exposure || "") === exposure));
+  if (group.size) lines.push(label+": "+formatEntryROI(group));
+ }
+ return lines;
 }
 
 function renderEntryROI() {
+ const breakdown = document.getElementById("nbaEntryBreakdown");
+ breakdown.replaceChildren();
  try {
-  entryROIStatus.textContent = formatEntryROI(readEntryReturns());
+  const entries = readEntryReturns();
+  entryROIStatus.textContent = formatEntryROI(entries);
+  for (const line of entryBreakdown(entries)) {
+   const item = document.createElement("li");
+   item.textContent = line;
+   breakdown.append(item);
+  }
  } catch {
   entryROIStatus.textContent = "Entry history is unavailable in this browser.";
  }
@@ -1953,7 +1990,18 @@ entryROIForm.addEventListener("submit",event => {
  }
  try {
   const entries = readEntryReturns();
-  entries.set(id,{stake,returned});
+  const {decided,hits,exposure} = entryROIForm.elements;
+  const entry = {stake,returned,exposure:exposure.value};
+  if (decided.value || hits.value) {
+   const total = decided.valueAsNumber;
+   const won = hits.valueAsNumber;
+   if (!Number.isInteger(total) || total < 1 || total > 6 || !Number.isInteger(won) || won < 0 || won > total) {
+    entryROIStatus.textContent = "Enter both pick counts. Picks hit must be between zero and picks decided.";
+    return;
+   }
+   Object.assign(entry,{decided:total,hits:won});
+  }
+  entries.set(id,entry);
   localStorage.setItem(entryROIKey,JSON.stringify(Array.from(entries)));
   entryROIForm.reset();
   renderEntryROI();
