@@ -53,9 +53,61 @@ let loadedSlateKey;
 let inspectedFile;
 let inspectedSalary;
 let importedSlateName;
+const snapshotKey = "lppe-fanduel-nfl-snapshots-v1";
+const snapshotSelect = byId("fdSnapshotSelect");
+const snapshotDownload = byId("fdSnapshotDownload");
+const snapshotStatus = byId("fdSnapshotStatus");
 const savedSlateKey = "lppe-fanduel-import-v1";
 const savedSlateLifetime = 48 * 60 * 60 * 1000;
 const slateSettings = [mode,objective,count,difference,exposure,stack,depth];
+
+function readSnapshots() {
+  try {
+    return JSON.parse(localStorage.getItem(snapshotKey)) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function showSnapshots() {
+  const snapshots = readSnapshots();
+  snapshotSelect.replaceChildren(...snapshots.map(snapshot => new Option(
+    snapshot.name+" · "+new Date(snapshot.capturedAt).toLocaleString(),snapshot.slateId)));
+  byId("fdSnapshots").hidden = sport.value !== "NFL" && !snapshots.length;
+  snapshotSelect.disabled = snapshotDownload.disabled = !snapshots.length;
+}
+
+function captureSnapshot(pool,settings) {
+  if (sport.value !== "NFL") return;
+  const capturedAt = Date.now();
+  if (!loadedLiveSlate || !(capturedAt < slateLockAt)) {
+    snapshotStatus.textContent = "Automatic snapshots require a live NFL slate with a known lock time.";
+    return;
+  }
+  const snapshot = {
+    slateId:loadedLiveSlate.id,name:loadedLiveSlate.name,sport:"NFL",
+    capturedAt,lockAt:slateLockAt,settings,players:pool
+  };
+  try {
+    const others = readSnapshots().filter(entry => entry.slateId !== snapshot.slateId);
+    localStorage.setItem(snapshotKey,JSON.stringify([snapshot,...others].slice(0,12)));
+    showSnapshots();
+    snapshotStatus.textContent = "Pre-lock snapshot saved on this device.";
+  } catch {
+    snapshotStatus.textContent = "This browser could not save the pre-lock snapshot.";
+  }
+}
+
+snapshotDownload.addEventListener("click",() => {
+  const snapshot = readSnapshots().find(entry => entry.slateId === snapshotSelect.value);
+  if (!snapshot) return;
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot,null,2)],{type:"application/json"}));
+  link.href = url;
+  link.download = "LPPE-NFL-"+snapshot.slateId.replace(/[^a-z0-9_-]/gi,"-")+"-pre-lock.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url),1000);
+});
 
 function readSavedSlate() {
   try {
@@ -741,8 +793,10 @@ function buildCurrentLineups() {
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
   const pool = gpp ? candidates : candidates.map(player => ({...player,maxExposure:100}));
-  activeWorker.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,
-    sport:sport.value,deep:gpp && depth.value === "deep",options});
+  const settings = {highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,
+    sport:sport.value,deep:gpp && depth.value === "deep",options};
+  captureSnapshot(pool,settings);
+  activeWorker.postMessage({players:pool,...settings});
 }
 refine.addEventListener("click",() => {
   depth.value = "deep";
@@ -913,6 +967,8 @@ async function loadPublicPool(listOnly = false) {
   }
 }
 function applySport() {
+  showSnapshots();
+  snapshotStatus.textContent = "";
   const profile = profiles[sport.value];
   byId("fdNflCsvSource").hidden = sport.value !== "NFL";
   byId("fdRules").textContent = dollars.format(profile.salaryCap)+" cap · "+profile.roster.map(([slot])=>slot).join(", ");
