@@ -2,6 +2,7 @@ import {readFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
 import {buildLineups, importPlayers, parseCSV} from "../fanduel-optimizer.js";
 
+import {buildNFLTournament} from "../fanduel-nfl-tournament.js";
 import {createContestSimulator} from "./nfl-contest-sim.mjs";
 
 const mean = values => values.reduce((sum,value) => sum+value,0)/values.length;
@@ -45,6 +46,11 @@ function benchmarkSlate(slate,root,count) {
     candidates.push(...lineups);
     return summarize(strategy,lineups,limited);
   });
+  const tournament = buildNFLTournament(players,count,2,160000);
+  strategies.push(tournament.lineups.length === count ?
+    summarize("NFL Tournament Simulation",tournament.lineups,tournament.limited) :
+    {strategy:"NFL Tournament Simulation",built:tournament.lineups.length,limited:tournament.limited,
+      skipped:"Could not build the requested number of lineups."});
   if (simulate && candidates.length) {
     const unique = new Map(candidates.map(lineup => [JSON.stringify([...lineup.ids].sort()),lineup]));
     const ranked = [...unique.values()].sort((a,b) => {
@@ -69,6 +75,9 @@ function benchmarkSlate(slate,root,count) {
     if (Number.isFinite(slate.cashScore)) result.cashCutoffHits = scores.filter(score => round(score) >= round(slate.cashScore)).length;
     if (Number.isFinite(slate.topOnePercentScore)) {
       result.topOnePercentCutoffHits = scores.filter(score => round(score) >= round(slate.topOnePercentScore)).length;
+    }
+    if (Number.isFinite(slate.firstPlaceScore)) {
+      result.firstPlaceScoreHits = scores.filter(score => round(score) >= round(slate.firstPlaceScore)).length;
     }
     if (simulate) result.contestSimulation = lineups.map(simulate);
     return result;
