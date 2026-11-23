@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#10131d">
+<title>Projection History | LPPE</title>
+<style>
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10131d; color: #f4f6ff; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(100%, 54rem); margin: auto; padding: 1.25rem; }
+a { color: #a9caff; }
+h1 { font-size: clamp(1.9rem, 7vw, 3rem); margin: 1.2rem 0 .4rem; }
+h2 { margin-bottom: .6rem; }
+p, dd { margin: .35rem 0; }
+.muted, dt { color: #bfc7da; }
+.controls, dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: .75rem; }
+select { display: block; width: 100%; min-height: 44px; margin-top: .35rem; padding: .5rem; font: inherit; }
+.card { padding: .85rem 1rem; background: #1b2231; border: 1px solid #3b465e; border-radius: .75rem; overflow-wrap: anywhere; }
+.metrics dd { font-size: 1.4rem; font-weight: 700; }
+ol { list-style: none; padding: 0; display: grid; gap: .625rem; }
+.result { color: #b8eed8; }
+</style>
+</head>
+<body>
+<main>
+ <a href="./index.html">LPPE dashboard</a>
+ <h1>Projection history</h1>
+ <p class="muted">Review pregame NBA stats-model estimates and compare them with final box scores. History comes from this browser’s LPPE dashboard.</p>
+ <section aria-labelledby="shared-heading">
+  <h2 id="shared-heading">Shared model record</h2>
+  <p class="muted">Compare projected NBA stat totals with final box scores. Each forecast uses the player’s recent game average.</p>
+  <div class="controls">
+   <label>Shared market <select id="shared-market"><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option></select></label>
+   <label>Shared history window <select id="shared-period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select></label>
+  </div>
+  <p id="shared-status" class="muted" role="status"></p>
+  <ol id="shared-history"></ol>
+ </section>
+ <h2>Your entered-line accuracy</h2>
+ <div class="controls">
+  <label>Market <select id="market"><option value="">All markets</option></select></label>
+  <label>Recorded in <select id="period"><option value="0">All history</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
+ </div>
+ <dl class="metrics">
+  <div class="card"><dt>Decided forecasts</dt><dd id="decided">0</dd></div>
+  <div class="card"><dt>Observed hit rate</dt><dd id="hit-rate">—</dd></div>
+  <div class="card"><dt>Average estimate</dt><dd id="estimate">—</dd></div>
+  <div class="card"><dt>Calibration gap</dt><dd id="gap">—</dd></div>
+ </dl>
+ <p class="muted">Accuracy excludes ties and ungraded forecasts. Several forecasts may come from one game.</p>
+ <h2>Recent forecasts</h2>
+ <p id="status" class="muted" role="status"></p>
+ <ol id="history"></ol>
+</main>
+<script>
+"use strict";
+const field = id => document.getElementById(id);
+const day = 86400000;
+const date = new Intl.DateTimeFormat(undefined,{dateStyle:"medium",timeStyle:"short"});
+const percent = new Intl.NumberFormat(undefined,{style:"percent",maximumFractionDigits:1});
+const market = field("market");
+const period = field("period");
+
+function forecastScore(rows) {
+ const decided = rows.filter(row => row.outcome === "win" || row.outcome === "loss");
+ if (!decided.length) return null;
+ const totals = decided.reduce((sum,row) => {
+  const actual = Number(row.outcome === "win");
+  sum.wins += actual;
+  sum.chance += row.chance;
+  sum.error += (row.chance-actual)**2;
+  return sum;
+ },{wins:0,chance:0,error:0});
+ const count = decided.length;
+ return {wins:totals.wins,count,average:totals.chance/count,hitRate:totals.wins/count,error:totals.error/count};
+}
+
+function modelHistory(entries) {
+ return Object.values(entries).filter(row =>
+  row?.source === "Entered line · Stats model" &&
+  typeof row.market === "string" && typeof row.player === "string" &&
+  Number.isFinite(row.saved) && Number.isFinite(row.start) && row.saved < row.start &&
+  Number.isFinite(row.chance) && row.chance >= 0 && row.chance <= 1 &&
+  Number.isFinite(row.line) && ["MORE","LESS"].includes(row.side)
+ ).sort((a,b) => b.saved-a.saved);
+}
+
+let history = [];
+let unavailable = false;
+try {
+ const ledger = JSON.parse(localStorage.getItem("lppe-nba-results-v1") || "{}");
+ history = modelHistory(ledger.entries ?? {});
+} catch {
+ unavailable = true;
+}
+for (const name of [...new Set(history.map(row => row.market))].sort()) {
+ market.add(new Option(name[0].toUpperCase()+name.slice(1),name));
+}
+
+function render() {
+ const now = Date.now();
+ const earliest = Number(period.value) ? now-Number(period.value)*day : 0;
+ const rows = history.filter(row => row.saved >= earliest && (!market.value || row.market === market.value));
+ const score = forecastScore(rows);
+ field("decided").textContent = score?.count ?? "0";
+ field("hit-rate").textContent = score ? percent.format(score.hitRate) : "—";
+ field("estimate").textContent = score ? percent.format(score.average) : "—";
+ field("gap").textContent = score ? ((score.hitRate-score.average)*100).toFixed(1)+" pp" : "—";
+ const list = field("history");
+ list.replaceChildren();
+ field("status").textContent = unavailable ? "Projection history is unavailable in this browser." :
+  rows.length ? "Showing "+Math.min(rows.length,30)+" of "+rows.length+" forecasts." :
+  history.length ? "No forecasts match these filters." :
+  "No model forecasts saved here yet. Research an NBA line on the LPPE dashboard to start your history.";
+ for (const row of rows.slice(0,30)) {
+  const item = document.createElement("li");
+  item.className = "card";
+  const player = document.createElement("strong");
+  player.textContent = row.player;
+  const projection = document.createElement("p");
+  projection.textContent = row.side+" "+row.line+" "+row.market+" · "+percent.format(row.chance)+
+   (Number.isInteger(row.line) ? " if no tie" : "");
+  const result = document.createElement("p");
+  result.className = "result";
+  const outcomes = {win:"Hit",loss:"Miss",tie:"Tie"};
+  result.textContent = (outcomes[row.outcome] || (now-row.start > 14*day ? "Unverified" : "Pending"))+
+   (Number.isFinite(row.value) ? " · Final stat "+row.value : "");
+  const stamp = document.createElement("small");
+  stamp.className = "muted";
+  stamp.textContent = "Recorded "+date.format(row.saved);
+  item.append(player,projection,result,stamp);
+  list.append(item);
+ }
+}
+
+market.addEventListener("change",render);
+period.addEventListener("change",render);
+render();
+
+const sharedMarket = field("shared-market");
+const sharedPeriod = field("shared-period");
+const stat = new Intl.NumberFormat(undefined,{maximumFractionDigits:2});
+let sharedRequest;
+
+async function renderSharedHistory() {
+ sharedRequest?.abort();
+ const controller = new AbortController();
+ sharedRequest = controller;
+ const status = field("shared-status");
+ const list = field("shared-history");
+ status.textContent = "Loading shared forecasts…";
+ list.replaceChildren();
+ const query = new URLSearchParams({market:sharedMarket.value,days:sharedPeriod.value});
+ try {
+  const response = await fetch("./api/nba/forecast-history?"+query,{signal:controller.signal});
+  if (!response.ok) throw new Error("History unavailable");
+  const {summary,forecasts} = await response.json();
+  if (controller.signal.aborted) return;
+  const [totals] = summary;
+  status.textContent = totals ? totals.graded+" graded of "+totals.recorded+" recorded" +
+   (totals.graded ? " · Average absolute error "+stat.format(totals.meanAbsoluteError)+
+    " · Average bias "+stat.format(totals.bias) : "") :
+   "No shared forecasts in this window.";
+  for (const row of forecasts) {
+   const item = document.createElement("li");
+   item.className = "card";
+   const player = document.createElement("strong");
+   player.textContent = row.player+" · "+row.team;
+   const result = document.createElement("p");
+   result.textContent = "Projected "+stat.format(row.projection)+" "+row.market+
+    (row.actual === null ? " · Awaiting final stat" : " · Final "+row.actual);
+   const stamp = document.createElement("small");
+   stamp.className = "muted";
+   stamp.textContent = "Recorded "+date.format(row.capturedAt)+" · "+row.sampleSize+" prior games";
+   item.append(player,result,stamp);
+   list.append(item);
+  }
+ } catch {
+  if (!controller.signal.aborted) status.textContent = "Shared forecast history is currently unavailable.";
+ }
+}
+
+sharedMarket.addEventListener("change",renderSharedHistory);
+sharedPeriod.addEventListener("change",renderSharedHistory);
+renderSharedHistory();
+</script>
+</body>
+</html>
