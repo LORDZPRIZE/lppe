@@ -63,7 +63,7 @@ function slateGames(events,today,part) {
 async function recentNBA(request, now, part) {
   const dates = [...new Set(Array.from({length:12},(_,day) => nbaDate(now + (1-day) * 86400000)))];
   const today = pacificSlate.format(now);
-  const cachePath = "model-v6/" + nbaDate(now) + "/" + encodeURIComponent(today) + "/" + (part ?? "all");
+  const cachePath = "model-v7/" + nbaDate(now) + "/" + encodeURIComponent(today) + "/" + (part ?? "all");
   return cachedNBA(request,cachePath,900,async () => {
     const boards = await Promise.allSettled(dates.map(date => getJson(espnNBA + "/scoreboard?dates=" + date)));
     if (boards[1].status !== "fulfilled" || !Array.isArray(boards[1].value.events)) {
@@ -74,7 +74,7 @@ async function recentNBA(request, now, part) {
     const schedule = slateGames(days.flatMap(board => board.value.events),today,part)
       .filter(game => Date.parse(game.date) > now && game.status?.type?.state === "pre")
       .map(game => ({
-        start:game.date,
+        id:game.id,start:game.date,
         teams:(game.competitions?.[0]?.competitors || []).map(entry => entry.team?.abbreviation).filter(Boolean)
       })).filter(game => game.teams.length === 2);
     const teams = new Set(schedule.flatMap(game => game.teams));
@@ -99,7 +99,7 @@ async function recentNBA(request, now, part) {
           for (const {id,player,team,minutes,values} of rows) {
             if (!teams.has(team)) continue;
             const key = id + ":" + team;
-            if (!players.has(key)) players.set(key,{player,team,games:[]});
+            if (!players.has(key)) players.set(key,{id,player,team,games:[]});
             const opponent = game.competitions?.[0]?.competitors?.find(entry => entry.team?.abbreviation !== team);
             players.get(key).games.push({date:game.date,minutes,values,opponent:opponent?.team?.abbreviation});
           }
@@ -123,7 +123,7 @@ async function completedNBA(request, date) {
   const results = [];
   for (let offset = 0; offset < games.length; offset += 6) {
     const batch = await Promise.allSettled(games.slice(offset,offset+6).map(async game => ({
-      start:game.date,
+      id:game.id,start:game.date,
       players:await cachedNBA(request,"box-v1/" + game.id,86400,async () =>
         playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id))))
     })));
@@ -140,6 +140,8 @@ function normalizeNBAAvailability(data) {
     .filter(row => typeof row.player === "string" && typeof row.team === "string" &&
       typeof row.status === "string" && Number.isFinite(Date.parse(row.updatedAt)));
 }
+
+export { completedNBA, nbaDate, recentNBA };
 
 export async function onRequestGet({request}) {
   if (new URL(request.url).searchParams.has("availability")) {
