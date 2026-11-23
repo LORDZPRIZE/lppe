@@ -89,10 +89,22 @@ test("selects distinct simulated double stacks within portfolio limits", () => {
       player.team === qb.team && player.positions.some(position => position === "WR" || position === "TE")).length >= 2);
     assert(Number.isFinite(lineup.tournament.ceiling));
     for (const prior of result.lineups.slice(0,index)) {
-      assert(prior.tournament.win >= lineup.tournament.win);
+      assert(prior.tournament.addedWinCoverage >= lineup.tournament.addedWinCoverage-1e-9);
       assert([...lineup.ids].filter(id => prior.ids.has(id)).length <= 7);
     }
   }
+});
+
+test("uses projected ownership to shape the modeled NFL field", () => {
+  const pool = sampleNFLPool();
+  const {lineups} = buildLineups(pool,1,1,160000,"NFL");
+  const baseline = rankNFLTournament(pool,lineups);
+  const weighted = rankNFLTournament(pool.map(player => ({
+    ...player,ownership:lineups[0].ids.has(player.id) ? 0.60 : 0
+  })),lineups);
+  assert.equal(baseline.ownershipPlayers,0);
+  assert.equal(weighted.ownershipPlayers,pool.length);
+  assert(weighted.lineups[0].tournament.duplicates > baseline.lineups[0].tournament.duplicates);
 });
 
 test("keeps tournament metrics stable when slate and candidate order changes", () => {

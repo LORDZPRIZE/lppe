@@ -11,18 +11,26 @@ function makeRandom(seed) {
   };
 }
 
-export function rankNFLTournament(players,lineups) {
+function simulateNFLTournament(players,lineups) {
   const fieldRandom = makeRandom(21839);
   const scenarioRandom = makeRandom(72203);
   const normal = random => Math.sqrt(-2*Math.log(random()))*Math.cos(2*Math.PI*random());
   const projected = players.filter(player => Number.isFinite(player.points))
     .sort((a,b) => a.id.localeCompare(b.id,"en"));
   const pool = projected.filter(player => !unavailable(player.status));
+  const ownershipBias = new Map();
+  for (const player of pool) {
+    if (!Number.isFinite(player.ownership)) continue;
+    // Bound the adjustment so projected scoring and roster constraints still matter.
+    const ownership = Math.min(0.95,Math.max(0.01,player.ownership));
+    const oddsRelativeToTenPercent = 9*ownership/(1-ownership);
+    ownershipBias.set(player.id,Math.max(-8,Math.min(8,3*Math.log(oddsRelativeToTenPercent))));
+  }
   const field = [];
   for (let index = 0; index < fieldSize; index++) {
     const rankedPool = pool.map(player => ({
       ...player,selection:"available",maxExposure:100,
-      points:player.points+normal(fieldRandom)*Math.max(2,Math.abs(player.points)*0.32)
+      points:player.points+(ownershipBias.get(player.id) ?? 0)+normal(fieldRandom)*Math.max(2,Math.abs(player.points)*0.32)
     }));
     // Mix stacked and unstacked builds. Each build represents one opponent entry.
     const {lineups:[opponent]} = buildLineups(rankedPool,1,1,5000,"NFL",{stack:index%3});
@@ -31,6 +39,7 @@ export function rankNFLTournament(players,lineups) {
   if (field.length < 25) throw new Error("Too few opponent lineups could be modeled from this slate.");
 
   const fieldKeys = field.map(rosterKey);
+  const firstPlaceShares = new Map(lineups.map(lineup => [lineup.ids,new Float64Array(scenarioCount)]));
   const entries = lineups.map(lineup => ({
     lineup,win:0,top:0,scores:[],duplicates:fieldKeys.filter(key => key === rosterKey(lineup)).length
   }));
@@ -63,12 +72,19 @@ export function rankNFLTournament(players,lineups) {
         if (opponentScore > score) above++;
         if (opponentScore === score) tied++;
       }
-      entry.win += above === 0 ? 1/tied : 0;
+      if (above === 0) {
+        const share = 1/tied;
+        entry.win += share;
+        firstPlaceShares.get(entry.lineup.ids)[index] = share;
+      }
       entry.top += Math.max(0,Math.min(tied,places-above))/tied;
     }
   }
   return {
     opponents:field.length,
+    ownershipPlayers:ownershipBias.size,
+    fieldPlayers:pool.length,
+    firstPlaceShares,
     scenarios:scenarioCount,
     lineups:entries.map(({lineup,win,top,scores,duplicates}) => ({
       ...lineup,tournament:{
@@ -79,6 +95,11 @@ export function rankNFLTournament(players,lineups) {
       b.tournament.ceiling-a.tournament.ceiling || a.tournament.duplicates-b.tournament.duplicates ||
       b.points-a.points)
   };
+}
+
+export function rankNFLTournament(players,lineups) {
+  const {firstPlaceShares,...ranking} = simulateNFLTournament(players,lineups);
+  return ranking;
 }
 
 export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0} = {}) {
@@ -102,20 +123,41 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
   }
   if (!candidates.size) return {lineups:[],limited,restriction};
 
-  const ranked = rankNFLTournament(players,[...candidates.values()]);
+  const ranked = simulateNFLTournament(players,[...candidates.values()]);
   const usage = new Map();
   const lineups = [];
-  for (const lineup of ranked.lineups) {
-    if ([...lineup.ids].some(id => (usage.get(id) || 0) >= limits.get(id))) continue;
-    if (lineups.some(prior => [...lineup.ids].filter(id => !prior.ids.has(id)).length < difference)) continue;
-    lineups.push(lineup);
-    for (const id of lineup.ids) usage.set(id,(usage.get(id) || 0)+1);
-    if (lineups.length === count) break;
+  const covered = new Float64Array(scenarioCount);
+  while (lineups.length < count) {
+    let best;
+    let bestGain = -1;
+    for (const lineup of ranked.lineups) {
+      if ([...lineup.ids].some(id => (usage.get(id) || 0) >= limits.get(id))) continue;
+      if (lineups.some(prior => [...lineup.ids].filter(id => !prior.ids.has(id)).length < difference)) continue;
+      const shares = ranked.firstPlaceShares.get(lineup.ids);
+      let gain = 0;
+      for (let index = 0; index < scenarioCount; index++) {
+        gain += Math.max(0,shares[index]-covered[index]);
+      }
+      if (gain > bestGain+1e-9) {
+        best = lineup;
+        bestGain = gain;
+      }
+    }
+    if (!best) break;
+    lineups.push({...best,tournament:{...best.tournament,addedWinCoverage:bestGain/scenarioCount}});
+    for (const id of best.ids) usage.set(id,(usage.get(id) || 0)+1);
+    const shares = ranked.firstPlaceShares.get(best.ids);
+    for (let index = 0; index < scenarioCount; index++) {
+      covered[index] = Math.max(covered[index],shares[index]);
+    }
   }
   return {
     lineups,limited,
     restriction:lineups.length < count ?
       "The simulated candidate pool could not fill the portfolio within your exposure and lineup difference settings." : undefined,
-    simulation:{opponents:ranked.opponents,scenarios:ranked.scenarios}
+    simulation:{
+      opponents:ranked.opponents,scenarios:ranked.scenarios,
+      ownershipPlayers:ranked.ownershipPlayers,fieldPlayers:ranked.fieldPlayers
+    }
   };
 }

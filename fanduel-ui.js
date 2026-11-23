@@ -494,7 +494,7 @@ function compareLineups(highCeiling,simulation) {
   const table = document.createElement("table");
   const headings = ["Lineup","Projected FPTS","FPTS vs. Lineup 1","Salary left","Players changed"];
   if (highCeiling) headings.push("Ceiling FPTS");
-  if (simulation) headings.push("Modeled top-10%");
+  if (simulation) headings.push("Modeled win share","Added win coverage");
   const header = table.createTHead().insertRow();
   for (const label of headings) {
     const cell = document.createElement("th");
@@ -524,7 +524,7 @@ function compareLineups(highCeiling,simulation) {
     const values = [lineup.points.toFixed(2),signed.format(lineup.points-top.points),
       dollars.format(profiles[sport.value].salaryCap-lineup.salary),changed];
     if (highCeiling) values.push(lineup.ceiling.toFixed(2));
-    if (simulation) values.push(percent.format(lineup.tournament.top));
+    if (simulation) values.push(percent.format(lineup.tournament.win),percent.format(lineup.tournament.addedWinCoverage));
     for (const value of values) row.insertCell().textContent = value;
   }
   const wrapper = document.createElement("div");
@@ -543,8 +543,11 @@ function renderLineups(result,requested,highCeiling) {
   status.textContent = lineups.length ? "Built "+lineups.length+" of "+requested+" requested lineups. Ranked by "+(highCeiling ? "total ceiling estimates." : "total projected points.") :
     "No valid lineup found. Check projections, locks, exclusions, and roster eligibility.";
   if (result.simulation) {
-    status.textContent = "Built "+lineups.length+" of "+requested+" lineups. Ranked by modeled top-10% finish share across "+
-      result.simulation.scenarios+" scenarios and "+result.simulation.opponents+" modeled opponents. Estimates use slate projections and synthetic opponents.";
+    const {scenarios,opponents,ownershipPlayers,fieldPlayers} = result.simulation;
+    status.textContent = "Built "+lineups.length+" of "+requested+" lineups. Selected for added first-place coverage across "+
+      scenarios+" scenarios against "+opponents+" simulated opponents. "+
+      (ownershipPlayers ? "Projected ownership influenced the field for "+ownershipPlayers+" of "+fieldPlayers+" eligible players." :
+        "The field used projections and random variation. Import projected ownership to factor in expected popularity.");
   }
   if (result.restriction) status.textContent += " " + result.restriction;
   if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
