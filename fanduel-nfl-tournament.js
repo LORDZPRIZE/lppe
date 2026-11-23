@@ -102,6 +102,28 @@ export function rankNFLTournament(players,lineups) {
   return ranking;
 }
 
+function selectTournamentPair(ranked,limits,difference) {
+  let pair;
+  let bestCoverage = -1;
+  for (const [index,first] of ranked.lineups.entries()) {
+    const firstShares = ranked.firstPlaceShares.get(first.ids);
+    for (const second of ranked.lineups.slice(index+1)) {
+      const shared = [...second.ids].filter(id => first.ids.has(id));
+      if (second.ids.size-shared.length < difference || shared.some(id => limits.get(id) < 2)) continue;
+      const secondShares = ranked.firstPlaceShares.get(second.ids);
+      let coverage = 0;
+      for (let scenario = 0; scenario < scenarioCount; scenario++) {
+        coverage += Math.max(firstShares[scenario],secondShares[scenario]);
+      }
+      if (coverage > bestCoverage+1e-9) {
+        pair = [first,second];
+        bestCoverage = coverage;
+      }
+    }
+  }
+  return pair;
+}
+
 export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0} = {}) {
   const candidates = new Map();
   const limits = new Map(players.map(player => [
@@ -113,24 +135,34 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
   const candidateCount = Math.min(20,Math.max(6,count*2));
   let limited = false;
   let restriction;
-  // Keep the requested stack as a minimum. Sample double stacks separately so
-  // the projection search cannot crowd them out before simulation.
-  for (let minimum = stack; minimum <= 2; minimum++) {
-    const result = buildLineups(pool,candidateCount,1,searchLimit,"NFL",{stack:minimum});
+  function collectCandidates(candidatePool,minimum) {
+    const result = buildLineups(candidatePool,candidateCount,1,searchLimit,"NFL",{stack:minimum});
     limited ||= result.limited;
     restriction ||= result.restriction;
     for (const lineup of result.lineups) candidates.set(rosterKey(lineup),lineup);
+    return result.lineups[0];
+  }
+
+  // Sample double stacks separately so the projection search cannot crowd them out.
+  for (let minimum = stack; minimum <= 2; minimum++) {
+    const lead = collectCandidates(pool,minimum);
+    if (count !== 2 || !lead) continue;
+    // An exposure cap can make every top projected roster incompatible with the lead.
+    const capped = new Set([...lead.ids].filter(id => limits.get(id) === 1));
+    if (capped.size) collectCandidates(pool.filter(player => !capped.has(player.id)),minimum);
   }
   if (!candidates.size) return {lineups:[],limited,restriction};
 
   const ranked = simulateNFLTournament(players,[...candidates.values()]);
+  const pair = count === 2 ? selectTournamentPair(ranked,limits,difference) : undefined;
+  const selectionPool = pair ?? ranked.lineups;
   const usage = new Map();
   const lineups = [];
   const covered = new Float64Array(scenarioCount);
   while (lineups.length < count) {
     let best;
     let bestGain = -1;
-    for (const lineup of ranked.lineups) {
+    for (const lineup of selectionPool) {
       if ([...lineup.ids].some(id => (usage.get(id) || 0) >= limits.get(id))) continue;
       if (lineups.some(prior => [...lineup.ids].filter(id => !prior.ids.has(id)).length < difference)) continue;
       const shares = ranked.firstPlaceShares.get(lineup.ids);

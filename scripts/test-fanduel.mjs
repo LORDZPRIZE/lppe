@@ -95,6 +95,19 @@ test("selects distinct simulated double stacks within portfolio limits", () => {
   }
 });
 
+test("builds a two-entry tournament portfolio under exposure limits", () => {
+  const pool = sampleNFLPool();
+  const capped = pool.find(player => player.id === "WR0");
+  capped.maxExposure = 50;
+
+  const {lineups} = buildNFLTournament(pool,2,2,160000);
+  assert.equal(lineups.length,2);
+  assert(lineups.filter(lineup => lineup.ids.has(capped.id)).length <= 1);
+  assert([...lineups[0].ids].filter(id => lineups[1].ids.has(id)).length <= 7);
+  assert.equal(lineups[0].tournament.addedWinCoverage,lineups[0].tournament.win);
+  assert(lineups[1].tournament.addedWinCoverage <= lineups[1].tournament.win);
+});
+
 test("uses projected ownership to shape the modeled NFL field", () => {
   const pool = sampleNFLPool();
   const {lineups} = buildLineups(pool,1,1,160000,"NFL");
