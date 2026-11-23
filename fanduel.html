@@ -182,6 +182,15 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <p id="fdBuildStatus" role="status"></p>
    <div id="fdResults"></div>
   </div>
+  <details id="fdSnapshots" hidden>
+   <summary>Pre-lock NFL snapshots</summary>
+   <p class="muted">Building on a live NFL slate saves the player pool and settings on this device. LPPE keeps the latest snapshot per slate for up to 12 slates.</p>
+   <div class="controls">
+    <label>Saved slate <select id="fdSnapshotSelect" disabled></select></label>
+    <button id="fdSnapshotDownload" type="button" disabled>Download snapshot</button>
+   </div>
+   <p id="fdSnapshotStatus" role="status"></p>
+  </details>
   <details id="fdManualImport"><summary>Upload a FanDuel CSV or Daily Fantasy Fuel cheatsheet</summary>
   <form id="fdImport" class="controls">
    <label>Salary CSV or cheatsheet <input id="fdSalaries" type="file" accept=".csv,text/csv" required></label>

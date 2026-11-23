@@ -11,9 +11,15 @@ const read = path => readFileSync(path,"utf8");
 
 function benchmarkSlate(slate,root,count) {
   const readSlateFile = path => read(resolve(root,path));
-  const {players} = importPlayers(
+  const snapshot = slate.snapshot ? JSON.parse(readSlateFile(slate.snapshot)) : null;
+  if (slate.snapshot && (snapshot?.sport !== "NFL" || !Number.isFinite(snapshot.capturedAt) ||
+      !Number.isFinite(snapshot.lockAt) || snapshot.capturedAt >= snapshot.lockAt ||
+      !Array.isArray(snapshot.players) || !snapshot.players.length)) {
+    throw new Error("Use a saved NFL snapshot captured before the slate locked.");
+  }
+  const players = snapshot?.players ?? importPlayers(
     readSlateFile(slate.salary),slate.projections ? readSlateFile(slate.projections) : "","NFL"
-  );
+  ).players;
   const actuals = new Map();
   for (const row of parseCSV(readSlateFile(slate.actuals))) {
     if (!row.id || !row.actualfpts || !Number.isFinite(Number(row.actualfpts)) || actuals.has(row.id)) {
