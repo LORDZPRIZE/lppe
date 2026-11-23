@@ -102,6 +102,28 @@ export function rankNFLTournament(players,lineups) {
   return ranking;
 }
 
+function selectTournamentPair(ranked,limits,difference) {
+  let pair;
+  let bestCoverage = -1;
+  for (const [index,first] of ranked.lineups.entries()) {
+    const firstShares = ranked.firstPlaceShares.get(first.ids);
+    for (const second of ranked.lineups.slice(index+1)) {
+      const shared = [...second.ids].filter(id => first.ids.has(id));
+      if (second.ids.size-shared.length < difference || shared.some(id => limits.get(id) < 2)) continue;
+      const secondShares = ranked.firstPlaceShares.get(second.ids);
+      let coverage = 0;
+      for (let scenario = 0; scenario < scenarioCount; scenario++) {
+        coverage += Math.max(firstShares[scenario],secondShares[scenario]);
+      }
+      if (coverage > bestCoverage+1e-9) {
+        pair = [first,second];
+        bestCoverage = coverage;
+      }
+    }
+  }
+  return pair;
+}
+
 export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0} = {}) {
   const candidates = new Map();
   const limits = new Map(players.map(player => [
@@ -124,13 +146,15 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
   if (!candidates.size) return {lineups:[],limited,restriction};
 
   const ranked = simulateNFLTournament(players,[...candidates.values()]);
+  const pair = count === 2 ? selectTournamentPair(ranked,limits,difference) : undefined;
+  const selectionPool = pair ?? ranked.lineups;
   const usage = new Map();
   const lineups = [];
   const covered = new Float64Array(scenarioCount);
   while (lineups.length < count) {
     let best;
     let bestGain = -1;
-    for (const lineup of ranked.lineups) {
+    for (const lineup of selectionPool) {
       if ([...lineup.ids].some(id => (usage.get(id) || 0) >= limits.get(id))) continue;
       if (lineups.some(prior => [...lineup.ids].filter(id => !prior.ids.has(id)).length < difference)) continue;
       const shares = ranked.firstPlaceShares.get(lineup.ids);
