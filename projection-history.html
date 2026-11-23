@@ -28,7 +28,17 @@ ol { list-style: none; padding: 0; display: grid; gap: .625rem; }
  <a href="./index.html">LPPE dashboard</a>
  <h1>Projection history</h1>
  <p class="muted">Review pregame NBA stats-model estimates and compare them with final box scores. History comes from this browser’s LPPE dashboard.</p>
- <h2>Accuracy</h2>
+ <section aria-labelledby="shared-heading">
+  <h2 id="shared-heading">Shared model record</h2>
+  <p class="muted">Compare projected NBA stat totals with final box scores. Each forecast uses the player’s recent game average.</p>
+  <div class="controls">
+   <label>Shared market <select id="shared-market"><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option></select></label>
+   <label>Shared history window <select id="shared-period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select></label>
+  </div>
+  <p id="shared-status" class="muted" role="status"></p>
+  <ol id="shared-history"></ol>
+ </section>
+ <h2>Your entered-line accuracy</h2>
  <div class="controls">
   <label>Market <select id="market"><option value="">All markets</option></select></label>
   <label>Recorded in <select id="period"><option value="0">All history</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
@@ -128,6 +138,53 @@ function render() {
 market.addEventListener("change",render);
 period.addEventListener("change",render);
 render();
+
+const sharedMarket = field("shared-market");
+const sharedPeriod = field("shared-period");
+const stat = new Intl.NumberFormat(undefined,{maximumFractionDigits:2});
+let sharedRequest;
+
+async function renderSharedHistory() {
+ sharedRequest?.abort();
+ const controller = new AbortController();
+ sharedRequest = controller;
+ const status = field("shared-status");
+ const list = field("shared-history");
+ status.textContent = "Loading shared forecasts…";
+ list.replaceChildren();
+ const query = new URLSearchParams({market:sharedMarket.value,days:sharedPeriod.value});
+ try {
+  const response = await fetch("./api/nba/forecast-history?"+query,{signal:controller.signal});
+  if (!response.ok) throw new Error("History unavailable");
+  const {summary,forecasts} = await response.json();
+  if (controller.signal.aborted) return;
+  const [totals] = summary;
+  status.textContent = totals ? totals.graded+" graded of "+totals.recorded+" recorded" +
+   (totals.graded ? " · Average absolute error "+stat.format(totals.meanAbsoluteError)+
+    " · Average bias "+stat.format(totals.bias) : "") :
+   "No shared forecasts in this window.";
+  for (const row of forecasts) {
+   const item = document.createElement("li");
+   item.className = "card";
+   const player = document.createElement("strong");
+   player.textContent = row.player+" · "+row.team;
+   const result = document.createElement("p");
+   result.textContent = "Projected "+stat.format(row.projection)+" "+row.market+
+    (row.actual === null ? " · Awaiting final stat" : " · Final "+row.actual);
+   const stamp = document.createElement("small");
+   stamp.className = "muted";
+   stamp.textContent = "Recorded "+date.format(row.capturedAt)+" · "+row.sampleSize+" prior games";
+   item.append(player,result,stamp);
+   list.append(item);
+  }
+ } catch {
+  if (!controller.signal.aborted) status.textContent = "Shared forecast history is currently unavailable.";
+ }
+}
+
+sharedMarket.addEventListener("change",renderSharedHistory);
+sharedPeriod.addEventListener("change",renderSharedHistory);
+renderSharedHistory();
 </script>
 </body>
 </html>
