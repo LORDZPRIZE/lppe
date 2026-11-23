@@ -60,3 +60,15 @@ Paths are relative to the manifest. Use slates with the current NBA Classic rost
 ## NBA prop probability benchmark
 
 Run `node scripts/benchmark-nba-props.mjs RESULTS_DIRECTORY HOLDOUT_YYYYMMDD`. Save complete final response bodies from `/api/nba/model?results=YYYYMMDD` as `YYYYMMDD.json` in the directory. Include at least a week of games before the holdout. The benchmark runs the dashboard's original hit-rate estimate and its revised estimate against the same outcomes. It creates half-point test lines around each player's recent median using games available before tipoff. Several test lines share the same game result. Use archived PrizePicks lines and exact payouts to evaluate actual entry performance.
+
+
+## Shared NBA forecast history
+
+The shared record uses pregame averages from four to six available games within the preceding 11 days. Each projection is written once per game, player, market and model version. The history API returns aggregate error by market over the requested window and up to 100 recent rows. Final stats are matched by game, team and player ID. Players without a qualifying final box score remain ungraded.
+
+1. Apply `migrations/0001_nba_forecasts.sql` to a Cloudflare D1 database, then bind it to the LPPE Pages project as `NBA_FORECASTS`.
+2. Set a high-entropy Pages secret named `NBA_FORECAST_JOB_TOKEN` and add the same value as a GitHub Actions secret. Set the repository variable `NBA_FORECAST_HISTORY_URL` to the HTTPS production URL ending in `/api/nba/forecast-history`.
+3. Deploy Pages and dispatch the NBA shared forecast history workflow. It captures both parts of the current Pacific slate and grades available finals for today and yesterday in Eastern time. Scheduled runs retry ungraded rows for those dates. For older provider delays, an authenticated POST with `action=grade&date=YYYYMMDD` can retry dates within the API's 15-day window.
+4. Verify the public GET and the shared section on `projection-history.html`. An empty record is expected before the first successful capture. Previously saved browser forecasts stay in the personal entered-line section.
+
+Configure and verify data usage rights before distributing the shared record as a paid product.
