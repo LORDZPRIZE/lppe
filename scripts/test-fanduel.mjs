@@ -355,6 +355,8 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
   assert.equal(result.baseline.length,3);
   assert.equal(result.lineups.length,3);
   assert.equal(result.simulation.opponents,197);
+  assert.ok(result.highestProjected.ids.has("p0") && !result.highestProjected.ids.has("p1"));
+  assert.ok(result.lineups.every(lineup => lineup.points<=result.highestProjected.points+1e-8));
   const usage=new Map();
   for(const [i,l] of result.lineups.entries()) {
     assert.equal(l.ids.size,9);
