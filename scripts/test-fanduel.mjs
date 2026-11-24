@@ -340,3 +340,29 @@ test("credit-saving refresh switches at the final hour", () => {
   assert.equal(liveRefreshSeconds(now+3900000,now),300);
   assert.equal(liveRefreshSeconds(now+3600000,now),600);
 });
+
+test("NBA simulation honors locks, caps and uniqueness and saves a projection comparison",async () => {
+  const {buildNBATournament,addRotations}=await import("../fanduel-nba-tournament.js");
+  const now=Date.now();
+  const players=Array.from({length:40},(_,i)=>({id:"p"+i,name:"Player "+i,
+    team:["A","B","C","D"][i%4],game:i%4<2?"A/B":"C/D",positions:[["PG","SG","SF","PF","C"][i%5]],
+    salary:4200+i*60,points:22+i*.4,source:"FanDuel FPPG",selection:i===0?"lock":i===1?"exclude":"available",
+    maxExposure:i===2?34:100,rotation:undefined}));
+  const games=[30,28,26,22].map((minutes,i)=>({minutes,starter:true,date:new Date(now-(i+1)*86400000).toISOString()}));
+  const joined=addRotations(players,[{player:"Player 0",team:"A",games}],now);
+  assert.equal(joined[0].rotation.length,4);
+  const result=buildNBATournament(joined,3,2,18000,{fieldSize:200,exposure:80});
+  assert.equal(result.baseline.length,3);
+  assert.equal(result.lineups.length,3);
+  assert.equal(result.simulation.opponents,197);
+  const usage=new Map();
+  for(const [i,l] of result.lineups.entries()) {
+    assert.equal(l.ids.size,9);
+    assert.ok(l.salary<=60000 && l.ids.has("p0") && !l.ids.has("p1"));
+    assert.ok(l.tournament.win>=0 && l.tournament.win<=1);
+    for(const id of l.ids)usage.set(id,(usage.get(id)||0)+1);
+    for(const old of result.lineups.slice(0,i))assert.ok([...l.ids].filter(id=>!old.ids.has(id)).length>=2);
+  }
+  assert.ok((usage.get("p2")||0)<=1);
+  assert.ok([...usage].every(([id,n])=>id==="p0" || n<=2));
+});
