@@ -254,7 +254,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       continue;
     }
     const game = (row.game || row.gameid || row.matchup || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
-    players.set(id,{id,name,positions,salary,team,points,ceiling:readCeiling(row),ownership:readOwnership(row),source,status,game,
+    players.set(id,{id,name,positions,salary,team,points,confirmedStarter:/^(1|true|yes)$/i.test(row.starter) ? true : /^(0|false|no)$/i.test(row.starter) ? false : undefined,ceiling:readCeiling(row),ownership:readOwnership(row),source,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
   if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
@@ -545,6 +545,17 @@ export function reviewCSV(lineups,sport = "NBA") {
 }
 
 export function scoreSavedBuilds(rows,records,cutoff) {
+  const field = rows.filter(row=>row.entryid && row.points && Number.isFinite(Number(row.points))).map(row=>Number(row.points)).sort((a,b)=>b-a);
+  const payouts = new Map();
+  for (const row of rows) {
+    const range = row.prizerank?.replaceAll(",","").match(/^(\d+)(?:st|nd|rd|th)?(?:\s*-\s*(\d+)(?:st|nd|rd|th)?)?$/i);
+    const amount = csvNumber(row.prizepayout);
+    if (range && Number.isFinite(amount)) {
+      const last=Math.min(Number(range[2] || range[1]),rows.length);
+      for(let rank=Number(range[1]);rank<=last;rank++) payouts.set(rank,amount);
+    }
+  }
+  const fee = csvNumber(rows.find(row=>row.contestinfo==="Entry Fee")?.contestvalue);
   const actuals = new Map();
   for (const row of rows) {
     const id = row.player?.match(/\((\d+-\d+)\)$/)?.[1];
@@ -558,8 +569,19 @@ export function scoreSavedBuilds(rows,records,cutoff) {
       const scores = build.lineups.filter(players => players.length &&
         players.every(player => actuals.has(player.id))).map(players =>
           players.reduce((total,player) => total+actuals.get(player.id),0));
-      if (scores.length) results.push({version,slate:build.slate,scored:scores.length,total:build.lineups.length,
-        best:Math.max(...scores),hits:cutoff === null ? null : scores.filter(score => Math.round(score*100) >= Math.round(cutoff*100)).length});
+      if (!scores.length) continue;
+      const rounded = scores.map(value=>Math.round(value*100)/100);
+      const best = Math.max(...rounded);
+      const bestRank = 1+field.filter(value=>value>best).length;
+      let gross = 0;
+      for (const value of rounded) {
+        const rank = 1+field.filter(n=>n>value).length+rounded.filter(n=>n>value).length;
+        const ties = field.filter(n=>n===value).length+rounded.filter(n=>n===value).length;
+        for (let place=rank;place<rank+ties;place++) gross+=(payouts.get(place)||0)/ties;
+      }
+      results.push({version,slate:build.slate,scored:scores.length,total:build.lineups.length,
+        best,bestRank,gapToFirst:Math.max(0,(field[0]??best)-best),
+        net:rounded.length===build.lineups.length && payouts.size && Number.isFinite(fee) ? gross-fee*rounded.length : null,hits:cutoff === null ? null : scores.filter(score => Math.round(score*100) >= Math.round(cutoff*100)).length});
     }
   }
   return results;

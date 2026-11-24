@@ -1,0 +1,158 @@
+import {buildLineups,profiles,unavailable,matchName,teamCode} from "./fanduel-optimizer.js";
+import {selectTournamentPortfolio} from "./fanduel-nfl-tournament.js";
+
+const profile = profiles.NBA;
+const key = ids => [...ids].sort().join("|");
+const identity = (name,team) => teamCode(team)+":"+matchName(name);
+const bounded = (x,low,high) => Math.max(low,Math.min(high,x));
+
+export function addRotations(players,history,now) {
+  const byName = new Map();
+  for (const row of history) {
+    const id = identity(row.player,row.team);
+    byName.set(id,byName.has(id) ? null : row);
+  }
+  return players.map(player => {
+    const games = byName.get(identity(player.name,player.team))?.games?.filter(game =>
+      Date.parse(game.date)<now && now-Date.parse(game.date)<14*86400000 && Number.isFinite(game.minutes) && game.minutes>0).slice(0,6);
+    if (!games || games.length<3) return player;
+    return {...player,rotation:games.map(({minutes,starter}) => ({minutes,starter}))};
+  });
+}
+
+function generator(seed) {
+  return () => ((seed=(Math.imul(1664525,seed)+1013904223)>>>0)+0.5)/4294967296;
+}
+function normal(random) {
+  return Math.sqrt(-2*Math.log(random()))*Math.cos(2*Math.PI*random());
+}
+
+function rolePool(players) {
+  const absent = players.filter(p => unavailable(p.status) && p.rotation?.[0].starter);
+  return players.map(p => {
+    if (!p.rotation?.length) return p;
+    const games = p.rotation;
+    const avg = games.reduce((n,g)=>n+g.minutes,0)/games.length;
+    const recent = games.slice(0,3).reduce((n,g)=>n+g.minutes,0)/3;
+    const starter = p.confirmedStarter ?? games[0].starter;
+    const role = games.filter(g=>typeof starter==="boolean" && g.starter===starter);
+    const roleMean = role.length>=2 ? role.reduce((n,g)=>n+g.minutes,0)/role.length : recent;
+    const opening = absent.some(a=>a.team===p.team && a.positions.some(pos=>p.positions.includes(pos)));
+    const minutes = bounded(.55*recent+.45*roleMean+(opening ? 1.5 : 0),1,44);
+    const spread = Math.sqrt(games.reduce((n,g)=>n+(g.minutes-avg)**2,0)/games.length);
+    // A current external projection can already reflect a rotation change.
+    const points = p.source==="FanDuel FPPG" ? p.points*bounded(minutes/avg,.8,1.2) : p.points;
+    return {...p,points,minutes,starter,minuteSpread:bounded(spread,2,12)};
+  });
+}
+
+function opponentField(players,size,random) {
+  const eligible = players.map((p,i)=>({p,i})).filter(({p})=>p.points>0 && !unavailable(p.status));
+  const slots = profile.roster.map(([,positions])=>{
+    let sum=0;
+    const options=eligible.filter(({p})=>p.positions.some(pos=>positions.includes(pos))).map(({p,i})=>{
+      const weight = Number.isFinite(p.ownership) ? bounded(p.ownership,.002,.98) :
+        bounded((p.points/32)**2*(p.points/Math.max(1,p.salary/1000)/5)**2,.01,8);
+      sum+=weight;
+      return {i,end:sum};
+    });
+    return {options,sum};
+  }).sort((a,b)=>a.options.length-b.options.length);
+  const field=[];
+  for (let attempt=0;attempt<size*60 && field.length<size;attempt++) {
+    const picks=[],teams=new Map();
+    let salary=0;
+    for (const {options,sum} of slots) {
+      if (!options.length) break;
+      let added=false;
+      for (let retry=0;retry<12;retry++) {
+        const target=random()*sum;
+        const i=options.find(o=>o.end>=target).i;
+        const p=players[i];
+        if (picks.includes(i) || (teams.get(p.team)||0)>=4 || salary+p.salary>60000) continue;
+        picks.push(i);salary+=p.salary;teams.set(p.team,(teams.get(p.team)||0)+1);added=true;break;
+      }
+      if (!added) break;
+    }
+    if (picks.length===9 && teams.size>=3) field.push(picks);
+  }
+  if (field.length!==size) throw new Error("Insufficient eligible players to model the requested NBA field.");
+  return field;
+}
+
+export function buildNBATournament(raw,count,difference,limit,options={}) {
+  const entries=Number(options.fieldSize ?? 1000);
+  if (!Number.isInteger(entries)||entries<=count||entries>50000) throw new Error("Choose a field larger than your portfolio, up to 50,000 entries.");
+  const players=rolePool(raw).sort((a,b)=>a.id.localeCompare(b.id));
+  const baseline=buildLineups(raw,count,difference,limit,"NBA",{...options,exactFirst:true});
+  if (!baseline.lineups.length) return baseline;
+  const index=new Map(players.map((p,i)=>[p.id,i]));
+  const candidates=new Map();
+  const add=lineup=>{
+    const picks=lineup.picks.map(pick=>({...pick,player:players[index.get(pick.player.id)]}));
+    candidates.set(key(lineup.ids),{...lineup,picks,points:picks.reduce((s,p)=>s+p.player.points,0)});
+  };
+  baseline.lineups.forEach(add);
+  const random=generator(77419);
+  for(let batch=0;batch<8;batch++) {
+    const pool=players.map(p=>({...p,points:Number.isFinite(p.points) ? p.points*Math.exp(.22*normal(random)) : NaN,maxExposure:100}));
+    buildLineups(pool,Math.min(6,count+1),1,Math.min(limit,40000),"NBA").lineups.forEach(add);
+  }
+  const field=opponentField(players,entries-count,generator(67211));
+  const freq=new Map();
+  for(const lineup of field) {
+    const k=key(lineup.map(i=>players[i].id));
+    freq.set(k,(freq.get(k)||0)+1);
+  }
+  const scenarios=512;
+  const shares=new Map();
+  const items=[...candidates.values()].map(lineup=>{
+    const first=new Float64Array(scenarios);
+    shares.set(lineup.ids,first);
+    return {lineup,indices:[...lineup.ids].map(id=>index.get(id)),first,scores:[],wins:0,top:0};
+  });
+  const outcomes=new Int32Array(players.length), opponents=new Int32Array(field.length);
+  const scenarioRandom=generator(78602);
+  const score=ids=>outcomes[ids[0]]+outcomes[ids[1]]+outcomes[ids[2]]+outcomes[ids[3]]+outcomes[ids[4]]+outcomes[ids[5]]+outcomes[ids[6]]+outcomes[ids[7]]+outcomes[ids[8]];
+  for(let n=0;n<scenarios;n++) {
+    const games=new Map();
+    players.forEach((p,i)=>{
+      const id=p.game||p.team;
+      if(!games.has(id)) games.set(id,{pace:normal(scenarioRandom),script:scenarioRandom()});
+      const {pace,script}=games.get(id);
+      const starter=p.confirmedStarter ?? p.starter ?? (p.minutes>=28 || (!p.minutes && p.points>=28));
+      const minutes=p.minutes || (starter?32:20);
+      const shift=script<.06 ? (starter?4:1) : script>.84 ? (starter?-5:3) : 0;
+      const played=bounded(minutes+shift+(p.minuteSpread||5)*normal(scenarioRandom),0,53);
+      const rate=.24*normal(scenarioRandom)+.09*pace;
+      outcomes[i]=Math.round(Math.max(0,p.points||0)*played/minutes*Math.exp(rate-.033)*10);
+    });
+    for(let i=0;i<field.length;i++) opponents[i]=score(field[i]);
+    opponents.sort();
+    const max=opponents.at(-1);
+    let tied=1;
+    for(let i=opponents.length-2;i>=0 && opponents[i]===max;i--) tied++;
+    const top=opponents[Math.max(0,field.length-Math.max(1,Math.floor(entries*.1)))];
+    for(const item of items) {
+      const value=score(item.indices);
+      item.scores.push(value/10);
+      if(value>=top)item.top++;
+      const share=value>max?1:value===max?1/(1+tied):0;
+      item.first[n]=share; item.wins+=share;
+    }
+  }
+  const ranked=items.map(({lineup,scores,wins,top})=>({...lineup,tournament:{
+    win:wins/scenarios,top:top/scenarios,duplicates:freq.get(key(lineup.ids))||0,
+    ceiling:scores.sort((a,b)=>a-b)[Math.ceil(.9*scenarios)-1]
+  }})).sort((a,b)=>b.tournament.win-a.tournament.win||b.tournament.top-a.tournament.top||b.points-a.points);
+  const limits=new Map(players.map(p=>[p.id,p.selection==="lock"?count:Math.floor(count*Math.min(options.exposure??100,p.maxExposure??100)/100)]));
+  const pool={scenarios,opponents:field.length,fieldPlayers:players.filter(p=>p.points>0&&!unavailable(p.status)).length,
+    ownershipPlayers:players.filter(p=>p.points>0&&!unavailable(p.status)&&Number.isFinite(p.ownership)).length,
+    firstPlaceShares:shares,lineups:ranked};
+  let result=selectTournamentPortfolio(pool,limits,count,difference,baseline.limited);
+  if(result.lineups.length<baseline.lineups.length) {
+    const keys=new Set(baseline.lineups.map(l=>key(l.ids)));
+    result=selectTournamentPortfolio({...pool,lineups:ranked.filter(l=>keys.has(key(l.ids)))},limits,count,difference,baseline.limited);
+  }
+  return {...result,baseline:baseline.lineups};
+}

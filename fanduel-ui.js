@@ -1,4 +1,5 @@
-import { applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { addRotations } from "./fanduel-nba-tournament.js";
+import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -94,7 +95,7 @@ let inspectedSalary;
 let importedSlateName;
 const savedSlateKey = "lppe-fanduel-import-v1";
 const savedSlateLifetime = 48 * 60 * 60 * 1000;
-const slateSettings = [mode,objective,count,difference,exposure,stack,depth];
+const slateSettings = [mode,objective,count,difference,exposure,stack,depth,byId("fdFieldSize")];
 
 function readSavedSlate() {
   try {
@@ -588,6 +589,7 @@ function renderLineups(result,requested,highCeiling) {
       (ownershipPlayers ? "Projected ownership influenced the field for "+ownershipPlayers+" of "+fieldPlayers+" eligible players." :
         "The field used projections and random variation. Import projected ownership to factor in expected popularity.");
   }
+  if (result.simulation && sport.value==="NBA") status.textContent += " Experimental model. Win shares describe simulated outcomes only.";
   if (result.restriction) status.textContent += " " + result.restriction;
   if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
   refine.hidden = !result.limited || depth.value === "deep" || mode.value !== "gpp";
@@ -743,15 +745,16 @@ function buildCurrentLineups() {
     build.disabled = false;
   };
   const highCeiling = objective.value === "ceiling";
-  const tournament = gpp && sport.value === "NFL" && objective.value === "tournament";
-  if (tournament) byId("fdBuildStatus").textContent = "Building stack candidates and simulating tournament outcomes…";
+  const tournament = gpp && ["NBA","NFL"].includes(sport.value) && objective.value === "tournament";
+  if (tournament && sport.value==="NBA" && !byId("fdFieldSize").reportValidity()) return finish();
+  if (tournament) byId("fdBuildStatus").textContent = "Building lineup candidates and simulating tournament outcomes…";
   if (highCeiling && !players.some(player => player.selection !== "exclude" && Number.isFinite(player.ceiling))) {
     byId("fdBuildStatus").textContent = "High Ceiling needs a numeric Ceiling column matched to players in this slate.";
     return finish();
   }
   const activeWorker = new Worker("/fanduel-worker.js",{type:"module"});
   optimizer = activeWorker;
-  const options = {exactFirst:objective.value === "projection",
+  const options = {fieldSize:Number(byId("fdFieldSize").value),exactFirst:objective.value === "projection",
     exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)};
   buildProgress = {lineups:[],limited:false,requested,highCeiling,tournament,exactFirst:options.exactFirst};
   byId("fdCancel").hidden = false;
@@ -773,7 +776,7 @@ function buildCurrentLineups() {
     } else if (data.error) byId("fdBuildStatus").textContent = data.error;
     else {
       renderLineups(data,requested,highCeiling);
-      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory();
+      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline);
     }
   });
   activeWorker.addEventListener("error",() => {
@@ -939,7 +942,7 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
     clearLineups();
     clearRemoval();
     slateLockAt = data.lockAt;
-    loadedLiveSlate = {id:previousId,date:data.date,name:data.label+" · "+data.date,baseline,projectionText};
+    loadedLiveSlate = {id:previousId,updatedAt:data.updatedAt,date:data.date,name:data.label+" · "+data.date,baseline,projectionText};
     loadedSalaryFile = loadedSlateKey = undefined;
     importedSlateName = undefined;
     players = selectedPlayers;
@@ -955,8 +958,13 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
       " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+estimateSummary+
       (injuries ? " ESPN injury updates excluded "+injuries.excluded+" additional players." : "")+
       (removedLocks.length ? " Unlocked after refresh: "+removedLocks.join(", ")+".": "");
-    byId("fdStatus").textContent += " Using this snapshot until lock. Load slate and build checks for newer injuries and projections.";
+    byId("fdStatus").textContent += " Using this snapshot until lock. Load slate and build refreshes salary and projection data.";
     byId("fdPool").hidden = false;
+    if (sport.value==="NBA" && objective.value==="tournament") {
+      const current = loadedLiveSlate;
+      await refreshNBAContext(current,true);
+      if (autoRequest!==request || current!==loadedLiveSlate || request.signal.aborted) return;
+    }
     renderPlayers();
     buildCurrentLineups();
   } catch (error) {
@@ -1024,7 +1032,8 @@ sport.addEventListener("change",() => {
 function applyMode() {
   const cash = mode.value === "cash";
   const tournament = objective.querySelector('option[value="tournament"]');
-  tournament.disabled = tournament.hidden = cash || sport.value !== "NFL";
+  tournament.disabled = tournament.hidden = cash || !["NBA","NFL"].includes(sport.value);
+  byId("fdFieldLabel").hidden = cash || sport.value!=="NBA" || objective.value!=="tournament";
   if (tournament.disabled && objective.value === "tournament") objective.value = "projection";
   for (const label of document.querySelectorAll("[data-gpp]")) label.hidden = cash;
   byId("fdFootballStack").hidden = cash || !["NFL","CFB"].includes(sport.value);
@@ -1034,7 +1043,8 @@ function applyMode() {
   clearLineups();
   if (players.length) renderSlateCheck();
 }
-objective.addEventListener("change",clearLineups);
+objective.addEventListener("change",applyMode);
+byId("fdFieldSize").addEventListener("change",clearLineups);
 mode.addEventListener("change",() => {
   applyMode();
   renderPlayers();
@@ -1106,7 +1116,7 @@ byId("fdContestReview").addEventListener("submit",async event => {
       for (const item of replay) {
         const note = document.createElement("p");
         note.textContent = item.slate+" · "+item.version+" saved build · scored "+item.scored+"/"+item.total+
-          " lineups · best "+item.best.toFixed(1)+(item.hits === null ? "" : " · "+item.hits+" reached the top-100 score");
+          " lineups · best "+item.best.toFixed(1)+(item.hits === null ? "" : " · "+item.hits+" reached the top-100 score")+" · paper best rank "+item.bestRank+" · "+item.gapToFirst.toFixed(1)+" points from first"+(item.net===null ? "" : " · estimated net "+dollars.format(item.net));
         output.append(note);
       }
       if (!replay.length) output.append(" No saved pre-lock lineups fully matched this export by FanDuel player ID.");
@@ -1121,21 +1131,37 @@ automatic.addEventListener("change",() => {
   startAutomaticSession();
 });
 setInterval(startAutomaticSession,60000);
+setInterval(async () => {
+  const slate=loadedLiveSlate;
+  if (!slate || sport.value!=="NBA" || !automatic.checked || document.hidden || autoRequest || optimizer ||
+      objective.value!=="tournament" || Date.now()>=slateLockAt) return;
+  if (await refreshNBAContext(slate,false) && loadedLiveSlate===slate && !autoRequest && !optimizer && Date.now()<slateLockAt) {
+    renderPlayers();
+    buildCurrentLineups();
+  }
+},300000);
 document.addEventListener("visibilitychange",startAutomaticSession);
 
 const historyPrefix = "lppe-fd-build-v1/";
-function saveBuildHistory() {
+function saveBuildHistory(baseline) {
   const now = Date.now();
   if (now >= slateLockAt) return;
   const key = historyPrefix+JSON.stringify([sport.value,loadedLiveSlate.id,slateLockAt]);
+  const serialize = portfolio => portfolio.map(lineup => lineup.picks.map(({player}) => ({
+    id:player.id,name:player.name,team:player.team,points:player.points,source:player.source,salary:player.salary,
+    ceiling:player.ceiling,ownership:player.ownership,minutes:player.minutes,starter:player.starter})));
   const snapshot = {capturedAt:new Date(now).toISOString(),sport:sport.value,slate:loadedLiveSlate.name,
     lockAt:new Date(slateLockAt).toISOString(),requested:Number(count.value),
     settings:Object.fromEntries(slateSettings.map(control => [control.id,control.value])),
-    lineups:lineups.map(lineup => lineup.picks.map(({player}) => ({id:player.id,name:player.name,team:player.team,
-      points:player.points,source:player.source,salary:player.salary,ceiling:player.ceiling,ownership:player.ownership})))};
+    lineups:serialize(lineups)};
   try {
     const existing = JSON.parse(localStorage.getItem(key));
-    localStorage.setItem(key,JSON.stringify({first:existing?.first || snapshot,latest:snapshot}));
+    const record = {...existing,first:existing?.first || snapshot,latest:snapshot};
+    if (baseline?.length) {
+      record.tournament = snapshot;
+      record.projection = {...snapshot,settings:{...snapshot.settings,fdObjective:"projection"},lineups:serialize(baseline)};
+    }
+    localStorage.setItem(key,JSON.stringify(record));
     byId("fdHistoryStatus").textContent = "First and latest pre-lock builds saved on this device for "+loadedLiveSlate.name+".";
   } catch {
     byId("fdHistoryStatus").textContent = "Build history could not be saved on this device.";
@@ -1160,3 +1186,64 @@ byId("fdBuildHistory").addEventListener("click",() => {
     setTimeout(() => URL.revokeObjectURL(url),1000);
   } catch { byId("fdHistoryStatus").textContent = "Saved builds could not be downloaded."; }
 });
+
+async function refreshNBAContext(slate,initial) {
+  if (slate.checking) return false;
+  slate.checking=true;
+  const read = async path => {
+    const response=await fetch("/api/nba/model"+path,{signal:AbortSignal.timeout(7500)});
+    if (!response.ok) throw new Error("Public context unavailable");
+    return response.json();
+  };
+  try {
+    const [health,history,starters]=await Promise.allSettled([
+      read("?availability=1"),initial || !slate.hasRotation ? read("") : Promise.resolve(null),read("?starters=1")
+    ]);
+    if (loadedLiveSlate!==slate || sport.value!=="NBA" || Date.now()>=slateLockAt) return false;
+    let changed=false;
+    if (history.value?.players?.length && history.value.schedule?.some(game =>
+      new Date(game.start).toLocaleDateString("en-CA",{timeZone:"America/New_York"})===slate.date)) {
+      players=addRotations(players,history.value.players,Date.now());
+      slate.hasRotation=players.some(p=>p.rotation);
+      changed=slate.hasRotation;
+    }
+    for (const team of starters.value?.teams || []) {
+      if (Date.parse(team.start)<slateLockAt || new Date(team.start).toLocaleDateString("en-CA",{timeZone:"America/New_York"})!==slate.date) continue;
+      const names=new Set(team.starters.map(matchName));
+      const teammates=players.filter(p=>p.team===teamCode(team.team));
+      if (teammates.filter(p=>names.has(matchName(p.name))).length!==5) continue;
+      for (const p of teammates) {
+        const starting=names.has(matchName(p.name));
+        if (p.confirmedStarter!==starting) { p.confirmedStarter=starting;changed=true; }
+      }
+    }
+    let excluded=0;
+    const reports=health.value?.reports || [];
+    const now=Date.now();
+    const latest=new Map();
+    for (const report of reports) {
+      const when=Date.parse(report.updatedAt);
+      if (!(when<=now && now-when<=72*3600000)) continue;
+      const id=teamCode(report.team)+":"+matchName(report.player);
+      if (!latest.has(id) || when>latest.get(id).when) latest.set(id,{...report,when});
+    }
+    const ids=players.map(p=>p.team+":"+matchName(p.name));
+    for (const [i,p] of players.entries()) {
+      const report=latest.get(ids[i]);
+      if (!report || ids.indexOf(ids[i])!==ids.lastIndexOf(ids[i]) ||
+          report.when<=(p.newsAt??(Date.parse(slate.updatedAt)||0))) continue;
+      const returnDay=String(report.returnDate||"").slice(0,10);
+      if (report.status==="Out" && /^\d{4}-\d{2}-\d{2}$/.test(returnDay) && returnDay>slate.date && !unavailable(p.status)) {
+        p.priorStatus=p.status;
+        p.priorSelection=p.selection==="lock"?"available":p.selection;
+        p.status="Out";p.selection="exclude";p.newsAt=report.when;changed=true;excluded++;
+      } else if (p.newsAt && /^(active|available)$/i.test(report.status)) {
+        p.status=p.priorStatus;p.selection=p.priorSelection;p.newsAt=report.when;changed=true;
+      }
+    }
+    byId("fdNewsStatus").textContent="Public NBA rotation history matched "+players.filter(p=>p.rotation).length+
+      " players · "+players.filter(p=>p.confirmedStarter===true).length+" confirmed starters. "+(health.status==="fulfilled" ? "Availability checked "+new Date().toLocaleTimeString()+"." : "Availability feed unavailable.")+
+      (excluded ? " Newly ruled out: "+excluded+"." : "");
+    return changed;
+  } finally { slate.checking=false; }
+}
