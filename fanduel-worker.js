@@ -1,11 +1,16 @@
 import { buildLineups } from "./fanduel-optimizer.js";
 
+import { buildNBATournament } from "./fanduel-nba-tournament.js";
 import { buildNFLTournament } from "./fanduel-nfl-tournament.js";
 
 self.addEventListener("message",({data}) => {
   try {
     const {players,count,difference,sport,options,highCeiling} = data;
     const searchLimit = data.deep ? 1000000 : 160000;
+    if (data.tournament && sport === "NBA") {
+      self.postMessage(buildNBATournament(players,count,difference,searchLimit,options));
+      return;
+    }
     if (data.tournament && sport === "NFL") {
       self.postMessage(buildNFLTournament(players,count,difference,searchLimit,options));
       return;
