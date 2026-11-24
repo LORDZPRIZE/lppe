@@ -1,4 +1,4 @@
-import { importPlayers, matchName, profiles, salaryCap, teamCode, unavailable } from "../../../fanduel-optimizer.js";
+import { liveRefreshSeconds, importPlayers, matchName, profiles, salaryCap, teamCode, unavailable } from "../../../fanduel-optimizer.js";
 
 const source = "https://www.dailyfantasyfuel.com/nba/projections/fanduel/";
 const scoreboards = {
@@ -142,16 +142,15 @@ async function listProviderSlates(cache,key,read,sport) {
   if (cached) {
     const slates = await cached.json();
     const upcoming = slates.filter(slate => Date.parse(slate.starts_at) > Date.now());
-    if (upcoming.length) return upcoming;
+    if (!slates.length || upcoming.length) return upcoming;
   }
   const fetchSlates = async code => eligibleProviderSlates(
     await read("/dfs/slates?sport="+code+"&started=false&limit=50"),Date.now(),sport
   );
   let slates = await fetchSlates(sport);
   if (!slates.length && sport === "CFB") slates = await fetchSlates("NCAAF");
-  if (slates.length) {
-    try { await cache.put(key,Response.json(slates,{headers:{"Cache-Control":"public, max-age=120"}})); } catch {}
-  }
+  const ttl = slates.length ? 1800 : 600;
+  try { await cache.put(key,Response.json(slates,{headers:{"Cache-Control":"public, max-age="+ttl}})); } catch {}
   return slates;
 }
 
@@ -337,6 +336,10 @@ export async function onRequestGet({request,env}) {
   try {
     const cache = caches.default;
     const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v9/"+sport+"/"+suffix,request.url));
+    if (configured && !list && slateId !== null) {
+      const ready = await cachedPool(cache,cacheKey("provider/"+slateId));
+      if (ready) return reply(ready);
+    }
     let slate;
     let read;
     if (configured) {
@@ -368,7 +371,7 @@ export async function onRequestGet({request,env}) {
     if (!data) {
       data = configured ? await providerPool(read,slate,sport) : await publicPool();
       if (data.error) return reply(data,404);
-      if (salaryKey) await storePool(cache,salaryKey,data,600);
+      if (salaryKey) await storePool(cache,salaryKey,data,liveRefreshSeconds(data.lockAt));
     }
     const projections = await projectionsRequest;
     if (scheduleRequest) {
@@ -386,7 +389,7 @@ export async function onRequestGet({request,env}) {
     if (injuries) data = applyNBAInjuryReport(data,injuries,Date.now());
     if (projections) data = addNBAProjections(data,projections,Date.now());
     if (data.lockAt <= Date.now()) return reply({error:"The salary slate has already locked."},404);
-    await storePool(cache,key,data,isLiveNBA ? 120 : 600);
+    await storePool(cache,key,data,isLiveNBA ? 120 : liveRefreshSeconds(data.lockAt));
     return reply(data);
   } catch (error) {
     const message = configured && /^The FanDuel salary/.test(error.message) ? error.message :
