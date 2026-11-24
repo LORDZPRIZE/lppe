@@ -165,6 +165,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <label>Optimize for <select id="fdObjective"><option value="projection">Projected points</option><option value="ceiling">High Ceiling</option><option value="tournament" hidden disabled>NFL Tournament Simulation</option></select></label>
    <label>Live contest slate <select id="fdLiveSlate" disabled><option value="">Looking for slates…</option></select></label>
    <button type="button" id="fdAutoLoad" class="primary" disabled>Load slate and build</button>
+   <label class="checkbox-label"><input type="checkbox" id="fdAutomatic" checked> Automatically load, build and refresh live slates</label>
    <button type="button" id="fdRefreshSlates">Refresh slates</button>
   </div>
   <p id="fdStatus" role="status" aria-live="polite"></p>
@@ -248,6 +249,8 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
  </section>
  <section aria-labelledby="fdReviewTitle">
   <h2 id="fdReviewTitle">Review a finished contest</h2>
+  <button type="button" id="fdBuildHistory">Download saved pre-lock builds</button>
+  <p id="fdHistoryStatus" role="status"></p>
   <form id="fdContestReview" class="controls">
    <label>FanDuel leaderboard CSV <input id="fdLeaderboard" type="file" accept=".csv,text/csv" required></label>
    <label>FanDuel username <input id="fdReviewUser" required></label>
