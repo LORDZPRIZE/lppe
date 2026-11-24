@@ -213,6 +213,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <details id="fdGames" hidden><summary>Games in this slate</summary><ul id="fdGameList"></ul></details>
   <div class="controls">
    <label>Mode <select id="fdMode"><option value="gpp">GPP tournament</option><option value="cash">Cash</option></select></label>
+   <button type="button" data-gpp id="fdSpreadFive">Spread exposure across five lineups</button>
    <label data-gpp>Lineups <input id="fdCount" type="number" min="1" max="20" value="5" required></label>
    <label data-gpp>Minimum different players per lineup <input id="fdDifference" type="number" min="1" max="9" value="2" required></label>
    <label data-gpp>Max exposure (%) <input id="fdExposure" type="number" min="1" max="100" value="100" required></label>
@@ -244,6 +245,15 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   </div>
   <div class="tablewrap"><table><thead><tr><th>Player</th><th class="player-detail">Position</th><th class="player-detail">Team</th><th>Salary</th><th>FPTS</th><th class="player-detail">Source</th><th class="player-detail">Injury status</th><th>Selection</th></tr></thead>
    <tbody id="fdPlayers"></tbody></table></div>
+ </section>
+ <section aria-labelledby="fdReviewTitle">
+  <h2 id="fdReviewTitle">Review a finished contest</h2>
+  <form id="fdContestReview" class="controls">
+   <label>FanDuel leaderboard CSV <input id="fdLeaderboard" type="file" accept=".csv,text/csv" required></label>
+   <label>FanDuel username <input id="fdReviewUser" required></label>
+   <button type="submit">Compare with top 100</button>
+  </form>
+  <p id="fdContestResult" role="status"></p>
  </section>
 </main>
 <script type="module" src="/fanduel-ui.js"></script>
