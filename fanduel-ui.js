@@ -1,3 +1,4 @@
+import {enteredNBAIds,ownershipReview,pairHeldOut} from "./fanduel-nba-review.js";
 import { addRotations } from "./fanduel-nba-tournament.js";
 import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
@@ -95,7 +96,7 @@ let inspectedSalary;
 let importedSlateName;
 const savedSlateKey = "lppe-fanduel-import-v1";
 const savedSlateLifetime = 48 * 60 * 60 * 1000;
-const slateSettings = [mode,objective,count,difference,exposure,stack,depth,byId("fdFieldSize")];
+const slateSettings = [byId("fdTarget"),mode,objective,count,difference,exposure,stack,depth,byId("fdFieldSize")];
 
 function readSavedSlate() {
   try {
@@ -534,7 +535,7 @@ function compareLineups(highCeiling,simulation) {
   const table = document.createElement("table");
   const headings = ["Lineup","Projected FPTS","FPTS vs. Lineup 1","Salary left","Players changed"];
   if (highCeiling) headings.push("Ceiling FPTS");
-  if (simulation) headings.push("Modeled win share","Added win coverage");
+  if (simulation) headings.push("Modeled win share",simulation.target==="top100" ? "Added top-100 coverage" : "Added win coverage");
   const header = table.createTHead().insertRow();
   for (const label of headings) {
     const cell = document.createElement("th");
@@ -584,12 +585,13 @@ function renderLineups(result,requested,highCeiling) {
     "No valid lineup found. Check projections, locks, exclusions, and roster eligibility.";
   if (result.simulation) {
     const {scenarios,opponents,ownershipPlayers,fieldPlayers} = result.simulation;
-    status.textContent = "Built "+lineups.length+" of "+requested+" lineups. Selected for added first-place coverage across "+
+    status.textContent = "Built "+lineups.length+" of "+requested+(" lineups. Selected for "+(result.simulation.target==="top100"?"top-100":"first-place")+" coverage across ")+
       scenarios+" scenarios against "+opponents+" simulated opponents. "+
       (ownershipPlayers ? "Projected ownership influenced the field for "+ownershipPlayers+" of "+fieldPlayers+" eligible players." :
         "The field used projections and random variation. Import projected ownership to factor in expected popularity.");
   }
   if (result.simulation && sport.value==="NBA") status.textContent += " Experimental model. Win shares describe simulated outcomes only.";
+  if (result.simulation?.coverage != null) status.textContent += " At least one lineup reached the top 100 in "+percent.format(result.simulation.coverage)+" of scenarios.";
   if (result.restriction) status.textContent += " " + result.restriction;
   if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
   refine.hidden = !result.limited || depth.value === "deep" || mode.value !== "gpp";
@@ -642,6 +644,7 @@ function renderLineups(result,requested,highCeiling) {
     if (historical) meta.append(" · "+historical+" using historical FPPG");
     if (uncertain.length) meta.append(" · Status to check: "+uncertain.map(({player}) => player.name).join(", "));
     if (highCeiling) meta.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
+    if (lineup.tournament?.top100 != null) meta.append(" · "+percent.format(lineup.tournament.top100)+" modeled top 100");
     if (lineup.tournament) {
       const {top,win,ceiling,duplicates} = lineup.tournament;
       meta.append(" · "+percent.format(win)+" modeled win · "+percent.format(top)+" modeled top-10% · "+ceiling.toFixed(1)+" simulated 90th percentile · "+duplicates+" field duplicates");
@@ -768,7 +771,7 @@ function buildCurrentLineups() {
   }
   const activeWorker = new Worker("/fanduel-worker.js",{type:"module"});
   optimizer = activeWorker;
-  const options = {fieldSize:Number(byId("fdFieldSize").value),exactFirst:objective.value === "projection",
+  const options = {target:byId("fdTarget").value,fieldSize:Number(byId("fdFieldSize").value),exactFirst:objective.value === "projection",
     exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)};
   buildProgress = {lineups:[],limited:false,requested,highCeiling,tournament,exactFirst:options.exactFirst};
   byId("fdCancel").hidden = false;
@@ -790,7 +793,7 @@ function buildCurrentLineups() {
     } else if (data.error) byId("fdBuildStatus").textContent = data.error;
     else {
       renderLineups(data,requested,highCeiling);
-      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline);
+      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline,data.ownershipForecast);
     }
   });
   activeWorker.addEventListener("error",() => {
@@ -1047,6 +1050,7 @@ function applyMode() {
   const cash = mode.value === "cash";
   const tournament = objective.querySelector('option[value="tournament"]');
   tournament.disabled = tournament.hidden = cash || !["NBA","NFL"].includes(sport.value);
+  byId("fdTargetLabel").hidden = cash || sport.value!=="NBA" || objective.value!=="tournament";
   byId("fdFieldLabel").hidden = cash || sport.value!=="NBA" || objective.value!=="tournament";
   if (tournament.disabled && objective.value === "tournament") objective.value = "projection";
   for (const label of document.querySelectorAll("[data-gpp]")) label.hidden = cash;
@@ -1058,6 +1062,7 @@ function applyMode() {
   if (players.length) renderSlateCheck();
 }
 objective.addEventListener("change",applyMode);
+byId("fdTarget").addEventListener("change",clearLineups);
 byId("fdFieldSize").addEventListener("change",clearLineups);
 mode.addEventListener("change",() => {
   applyMode();
@@ -1126,7 +1131,42 @@ byId("fdContestReview").addEventListener("submit",async event => {
     output.textContent = username+" placed "+result.top100Entries+" of "+result.userEntries+
       " entries in the top 100 of "+result.entries.toLocaleString()+". Best score: "+result.best.toFixed(1)+"."+gap;
     try {
-      const replay = scoreSavedBuilds(rows,readBuildHistory(),result.cutoff);
+      const records=readBuildHistory();
+      const replay = scoreSavedBuilds(rows,records,result.cutoff);
+      let matchedForecast=false;
+      for (const record of records) {
+        const review=ownershipReview(rows,record.tournament);
+        if (!review) continue;
+        matchedForecast=true;
+        const panel=document.createElement("details"),title=document.createElement("summary");
+        title.textContent="Ownership forecast accuracy · "+review.players.length+" matched players";
+        panel.append(title);
+        for (const group of review.groups) {
+          const note=document.createElement("p");
+          note.textContent=group.name+" · "+group.mae.toFixed(1)+" percentage points mean absolute error ("+group.count+" players)";
+          panel.append(note);
+        }
+        const list=document.createElement("ul");
+        for (const p of review.players) {
+          const li=document.createElement("li");
+          li.textContent=p.name+" · forecast "+p.predicted.toFixed(1)+"% · actual "+p.observed.toFixed(1)+"%";
+          list.append(li);
+        }
+        panel.append(list);output.append(panel);
+      }
+      if (!matchedForecast) output.append(" No matching pre-lock ownership forecast was saved for this export.");
+      const paired=pairHeldOut(rows,replay);
+      if (paired) {
+        const history=JSON.parse(localStorage.getItem("lppe-fd-top100-benchmark-v1") || "{}");
+        if (!history[paired.key] || history[paired.key].contest===paired.contest) history[paired.key]=paired;
+        localStorage.setItem("lppe-fd-top100-benchmark-v1",JSON.stringify(history));
+        const values=Object.values(history);
+        const note=document.createElement("p");
+        note.textContent="First pre-lock builds across "+values.length+" reviewed slates · at least one top-100 finish: tournament "+
+          values.filter(x=>x.tournament.hits>0).length+"/"+values.length+" · projection-only "+
+          values.filter(x=>x.projection.hits>0).length+"/"+values.length+". One contest per slate, equal entry counts.";
+        output.append(note);
+      }
       for (const item of replay) {
         const note = document.createElement("p");
         note.textContent = item.slate+" · "+item.version+" saved build · scored "+item.scored+"/"+item.total+
@@ -1157,7 +1197,7 @@ setInterval(async () => {
 document.addEventListener("visibilitychange",startAutomaticSession);
 
 const historyPrefix = "lppe-fd-build-v1/";
-function saveBuildHistory(baseline) {
+function saveBuildHistory(baseline,ownershipForecast) {
   const now = Date.now();
   if (now >= slateLockAt) return;
   const key = historyPrefix+JSON.stringify([sport.value,loadedLiveSlate.id,slateLockAt]);
@@ -1172,8 +1212,12 @@ function saveBuildHistory(baseline) {
     const existing = JSON.parse(localStorage.getItem(key));
     const record = {...existing,first:existing?.first || snapshot,latest:snapshot};
     if (baseline?.length) {
-      record.tournament = snapshot;
+      record.tournament = {...snapshot,ownershipForecast};
       record.projection = {...snapshot,settings:{...snapshot.settings,fdObjective:"projection"},lineups:serialize(baseline)};
+      if (snapshot.settings.fdTarget==="top100" && !record.initialTop100) {
+        record.initialTop100=snapshot;
+        record.initialComparison=record.projection;
+      }
     }
     localStorage.setItem(key,JSON.stringify(record));
     byId("fdHistoryStatus").textContent = "First and latest pre-lock builds saved on this device for "+loadedLiveSlate.name+".";
@@ -1261,3 +1305,96 @@ async function refreshNBAContext(slate,initial) {
     return changed;
   } finally { slate.checking=false; }
 }
+
+let swapTracker;
+let swapExpiry;
+const swapStatus=byId("fdSwapStatus");
+function stopSwap() {
+  clearTimeout(swapExpiry);
+  swapTracker?.worker?.terminate();
+  swapTracker=undefined;
+  byId("fdStopSwap").hidden=true;
+  byId("fdSwapResults").replaceChildren();
+}
+async function refreshSwaps() {
+  const tracker=swapTracker;
+  if (!tracker || tracker.busy || document.hidden) return;
+  tracker.busy=true;
+  clearTimeout(swapExpiry);
+  const output=byId("fdSwapResults");
+  output.replaceChildren();
+  swapStatus.textContent="Checking NBA game locks and availability…";
+  try {
+    const get=async path=>{
+      const r=await fetch("/api/nba/model?"+path,{signal:AbortSignal.timeout(12000)});
+      if(!r.ok) throw new Error("Public NBA updates are unavailable. Retry before making a swap.");
+      return r.json();
+    };
+    const [schedule,injuries]=await Promise.all([get("swapGames="+tracker.pool.date.replaceAll("-","")),get("availability=1")]);
+    if(tracker!==swapTracker)return;
+    if (!Array.isArray(injuries.reports) || !(Date.now()-Date.parse(injuries.checkedAt)<600000) ||
+        !Array.isArray(schedule.games) || !(Date.now()-schedule.checkedAt<120000)) {
+      throw new Error("Current lock times and availability could not be verified.");
+    }
+    const worker=new Worker("/fanduel-worker.js",{type:"module"});
+    tracker.worker=worker;
+    const data=await new Promise((resolve,reject)=>{
+      worker.onmessage=({data})=>data.error ? reject(new Error(data.error)) : resolve(data);
+      worker.onerror=()=>reject(new Error("Late-swap search failed."));
+      worker.postMessage({swap:{pool:tracker.pool,entries:tracker.entries,games:schedule.games,reports:injuries.reports,priorLocks:[...tracker.lockedTeams]}});
+    });
+    if (tracker!==swapTracker)return;
+    for(const swap of data.swaps) for(const team of swap.activeTeams)tracker.lockedTeams.add(team);
+    const until=Math.min(...data.swaps.map(s=>s.expiresAt));
+    if (!Number.isFinite(until)) {
+      stopSwap();swapStatus.textContent="All games are locked.";return;
+    }
+    if(until<=Date.now()) {swapStatus.textContent="A game just locked. Rechecking.";return;}
+    for(const [i,swap] of data.swaps.entries()) {
+      const card=document.createElement("details"), summary=document.createElement("summary"),list=document.createElement("ol");
+      card.open=i===0;
+      summary.textContent="Entry "+(i+1)+" · "+swap.picks.filter(p=>p.changed).length+" proposed changes · "+dollars.format(swap.salary);
+      for(const pick of swap.picks) {
+        const li=document.createElement("li");
+        const old=tracker.pool.players.find(p=>p.id===tracker.entries[i][pick.slot]);
+        li.textContent=profiles.NBA.roster[pick.slot][0]+" · "+(pick.changed?old.name+" → ":"")+pick.name+
+          (pick.locked?" · locked":"")+" · "+pick.id;
+        list.append(li);
+      }
+      card.append(summary,list);output.append(card);
+    }
+    swapStatus.textContent="Checked "+new Date().toLocaleTimeString()+". Apply desired swaps in FanDuel and update the tracked IDs after changing an entry.";
+    swapExpiry=setTimeout(()=>{output.replaceChildren();refreshSwaps();},Math.max(1,until-Date.now()));
+  } catch(error) {
+    if(tracker===swapTracker)swapStatus.textContent=error.message;
+  } finally {
+    tracker.worker?.terminate();tracker.worker=undefined;tracker.busy=false;
+  }
+}
+byId("fdSwap").addEventListener("click",()=>{
+  stopSwap();
+  const pool=readSession()?.data;
+  if(sport.value!=="NBA" || !pool?.players?.length) {swapStatus.textContent="Load the matching live NBA slate first.";return;}
+  const entries=byId("fdEnteredIds").value.trim().split(/\r?\n/).map(line=>line.trim().split(/[\s,]+/));
+  if(entries.length>20 || entries.some(ids=>ids.length!==9 || new Set(ids).size!==9 || ids.some(id=>!pool.players.some(p=>p.id===id)))) {
+    swapStatus.textContent="Enter 1–20 lineups with nine distinct player IDs from this slate on each line.";return;
+  }
+  swapTracker={pool,entries,lockedTeams:new Set(),busy:false};
+  byId("fdStopSwap").hidden=false;refreshSwaps();
+});
+byId("fdStopSwap").addEventListener("click",()=>{stopSwap();swapStatus.textContent="Tracking stopped.";});
+byId("fdEnteredIds").addEventListener("input",()=>{if(swapTracker){stopSwap();swapStatus.textContent="Restart tracking to use the edited entries.";}});
+sport.addEventListener("change",()=>{stopSwap();swapStatus.textContent="";});
+setInterval(refreshSwaps,300000);
+document.addEventListener("visibilitychange",()=>{if(swapTracker&&!document.hidden)refreshSwaps();});
+
+byId("fdSwapFile").addEventListener("change",async event=>{
+  const file=event.target.files[0];
+  if(!file)return;
+  stopSwap();
+  try {
+    const entries=enteredNBAIds(await file.text());
+    byId("fdEnteredIds").value=entries.map(ids=>ids.join(", ")).join("\n");
+    byId("fdSwap").click();
+  } catch(error) { swapStatus.textContent=error.message; }
+});

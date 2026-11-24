@@ -163,6 +163,21 @@ async function pregameStarters(request) {
 }
 
 export async function onRequestGet({request}) {
+  const swapDay=new URL(request.url).searchParams.get("swapGames");
+  if (swapDay!==null) {
+    if (!/^\d{8}$/.test(swapDay) || ![-1,0,1].some(offset=>nbaDate(Date.now()+offset*86400000)===swapDay)) {
+      return Response.json({error:"Choose a current NBA slate date."},{status:400});
+    }
+    try {
+      return json(await cachedNBA(request,"swap-games/"+swapDay,30,async () => {
+        const board=await getJson(espnNBA+"/scoreboard?dates="+swapDay);
+        return {checkedAt:Date.now(),games:(board.events||[]).map(game=>({
+          start:Date.parse(game.date),state:game.status?.type?.state,status:game.status?.type?.name,
+          teams:(game.competitions?.[0]?.competitors||[]).map(c=>c.team?.abbreviation)
+        }))};
+      }));
+    } catch { return Response.json({error:"NBA game times unavailable"},{status:502}); }
+  }
   if (new URL(request.url).searchParams.has("starters")) {
     try { return json(await pregameStarters(request)); }
     catch { return Response.json({error:"Pregame starters unavailable"},{status:502}); }

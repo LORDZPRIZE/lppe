@@ -34,7 +34,7 @@ function positionCodes(raw, sport, allowed) {
     .map(position => aliases[position] || position).filter(position => allowed.has(position)))];
 }
 
-export function parseCSV(source) {
+export function csvRecords(source) {
   const records = [];
   let record = [], field = "", quoted = false;
   for (let i = 0; i < source.length; i++) {
@@ -61,6 +61,11 @@ export function parseCSV(source) {
   if (quoted) throw new Error("The CSV has an unclosed quoted field.");
   record.push(field.trim());
   if (record.some(Boolean)) records.push(record);
+  return records;
+}
+
+export function parseCSV(source) {
+  const records=csvRecords(source);
   const headings = records.shift()?.map(name => name.toLowerCase().replace(/[^a-z0-9]/g, "")) || [];
   if (!headings.length) throw new Error("The CSV is empty.");
   return records.map(row => Object.fromEntries(headings.map((name, i) => [name, row[i] || ""])));
@@ -297,7 +302,7 @@ function requiredLockSlots(locked, profile) {
   return required;
 }
 
-export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false,onLineup} = {}) {
+export function buildLineups(players, count, difference, searchLimit = 160000, sport = "NBA", {exposure = 100,stack = 0,exactFirst = false,fixedSlots = new Map(),onLineup} = {}) {
   const profile = rosterProfile(sport);
   const roster = profile.roster;
   const salaryCap = profile.salaryCap;
@@ -308,7 +313,7 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   const eligible = players.filter(player => player.selection !== "exclude" && Number.isFinite(player.points));
   const locked = players.filter(player => player.selection === "lock");
   if (locked.some(player => !Number.isFinite(player.points))) throw new Error("A locked player is missing a projection.");
-  const reservedSlots = requiredLockSlots(locked,profile);
+  const reservedSlots = fixedSlots.size ? 0 : requiredLockSlots(locked,profile);
   if (new Set(eligible.map(player => player.team)).size < 3) return {lineups:[],limited:false};
   const usage = new Map();
   const exposureLimits = new Map(eligible.map(player => [
@@ -328,6 +333,8 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   const eligibleSlots = new Map(projectionOrder.map(player => [player.id,0]));
   const slots = roster.map(([label,positions],index) => ({
     label,index,pool:projectionOrder.filter(player => {
+      if (fixedSlots.has(index) && fixedSlots.get(index)!==player.id) return false;
+      if (fixedSlots.size && [...fixedSlots].some(([slot,id])=>id===player.id && slot!==index)) return false;
       if ((reservedSlots & (1 << index)) && !lockedIds.has(player.id)) return false;
       if (!player.positions.some(position => positions.includes(position))) return false;
       eligibleSlots.set(player.id,eligibleSlots.get(player.id) | (1 << index));
@@ -579,7 +586,7 @@ export function scoreSavedBuilds(rows,records,cutoff) {
         const ties = field.filter(n=>n===value).length+rounded.filter(n=>n===value).length;
         for (let place=rank;place<rank+ties;place++) gross+=(payouts.get(place)||0)/ties;
       }
-      results.push({version,slate:build.slate,scored:scores.length,total:build.lineups.length,
+      results.push({version,slate:build.slate,capturedAt:build.capturedAt,lockAt:build.lockAt,requested:build.requested,scored:scores.length,total:build.lineups.length,
         best,bestRank,gapToFirst:Math.max(0,(field[0]??best)-best),
         net:rounded.length===build.lineups.length && payouts.size && Number.isFinite(fee) ? gross-fee*rounded.length : null,hits:cutoff === null ? null : scores.filter(score => Math.round(score*100) >= Math.round(cutoff*100)).length});
     }
