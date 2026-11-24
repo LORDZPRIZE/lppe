@@ -44,7 +44,7 @@ function playerBoxScores(summary) {
         const counts = [points,rebounds,assists,String(threePointers).split("-")[0]];
         if (!(played > 0) || counts.some(value => !/^\d+$/.test(value))) continue;
         results.push({id:row.athlete.id,player:row.athlete.displayName,
-          team:team.team.abbreviation,minutes:played,values:counts.map(Number)});
+          team:team.team.abbreviation,minutes:played,starter:row.starter,values:counts.map(Number)});
       }
     }
   }
@@ -63,7 +63,7 @@ function slateGames(events,today,part) {
 async function recentNBA(request, now, part) {
   const dates = [...new Set(Array.from({length:12},(_,day) => nbaDate(now + (1-day) * 86400000)))];
   const today = pacificSlate.format(now);
-  const cachePath = "model-v6/" + nbaDate(now) + "/" + encodeURIComponent(today) + "/" + (part ?? "all");
+  const cachePath = "model-v7/" + nbaDate(now) + "/" + encodeURIComponent(today) + "/" + (part ?? "all");
   return cachedNBA(request,cachePath,900,async () => {
     const boards = await Promise.allSettled(dates.map(date => getJson(espnNBA + "/scoreboard?dates=" + date)));
     if (boards[1].status !== "fulfilled" || !Array.isArray(boards[1].value.events)) {
@@ -96,12 +96,12 @@ async function recentNBA(request, now, part) {
       await Promise.all(games.slice(offset,offset+6).map(async game => {
         try {
           const rows = playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id)));
-          for (const {id,player,team,minutes,values} of rows) {
+          for (const {id,player,team,minutes,starter,values} of rows) {
             if (!teams.has(team)) continue;
             const key = id + ":" + team;
             if (!players.has(key)) players.set(key,{player,team,games:[]});
             const opponent = game.competitions?.[0]?.competitors?.find(entry => entry.team?.abbreviation !== team);
-            players.get(key).games.push({date:game.date,minutes,values,opponent:opponent?.team?.abbreviation});
+            players.get(key).games.push({date:game.date,minutes,starter,values,opponent:opponent?.team?.abbreviation});
           }
         } catch {
           partial = true;
@@ -141,7 +141,32 @@ function normalizeNBAAvailability(data) {
       typeof row.status === "string" && Number.isFinite(Date.parse(row.updatedAt)));
 }
 
+async function pregameStarters(request) {
+  const now=Date.now();
+  const day=nbaDate(now);
+  return cachedNBA(request,"starters-v1/"+day,300,async () => {
+    const board=await getJson(espnNBA+"/scoreboard?dates="+day);
+    const games=(board.events||[]).filter(game => game.status?.type?.state==="pre" &&
+      Date.parse(game.date)>now && Date.parse(game.date)-now<=3*3600000);
+    const teams=[];
+    await Promise.allSettled(games.map(async game => {
+      const summary=await getJson(espnNBA+"/summary?event="+encodeURIComponent(game.id));
+      if (summary.header?.competitions?.[0]?.status?.type?.state!=="pre") return;
+      for (const group of summary.boxscore?.players || []) {
+        const names=new Set((group.statistics||[]).flatMap(block=>(block.athletes||[])
+          .filter(row=>row.starter===true && row.athlete?.displayName).map(row=>row.athlete.displayName)));
+        if (names.size===5 && group.team?.abbreviation) teams.push({team:group.team.abbreviation,start:game.date,starters:[...names]});
+      }
+    }));
+    return {teams};
+  });
+}
+
 export async function onRequestGet({request}) {
+  if (new URL(request.url).searchParams.has("starters")) {
+    try { return json(await pregameStarters(request)); }
+    catch { return Response.json({error:"Pregame starters unavailable"},{status:502}); }
+  }
   if (new URL(request.url).searchParams.has("availability")) {
     try {
       return json(await cachedNBA(request,"availability-v1",300,async () => ({
