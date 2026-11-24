@@ -27,7 +27,7 @@ function normal(random) {
   return Math.sqrt(-2*Math.log(random()))*Math.cos(2*Math.PI*random());
 }
 
-function rolePool(players) {
+export function nbaRoleProjections(players) {
   const absent = players.filter(p => unavailable(p.status) && p.rotation?.[0].starter);
   return players.map(p => {
     if (!p.rotation?.length) return p;
@@ -83,7 +83,7 @@ function opponentField(players,size,random) {
 export function buildNBATournament(raw,count,difference,limit,options={}) {
   const entries=Number(options.fieldSize ?? 1000);
   if (!Number.isInteger(entries)||entries<=count||entries>50000) throw new Error("Choose a field larger than your portfolio, up to 50,000 entries.");
-  const players=rolePool(raw).sort((a,b)=>a.id.localeCompare(b.id));
+  const players=nbaRoleProjections(raw).sort((a,b)=>a.id.localeCompare(b.id));
   const baseline=buildLineups(raw,count,difference,limit,"NBA",{...options,exactFirst:true});
   if (!baseline.lineups.length) return baseline;
   const index=new Map(players.map((p,i)=>[p.id,i]));
@@ -93,6 +93,9 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     candidates.set(key(lineup.ids),{...lineup,picks,points:picks.reduce((s,p)=>s+p.player.points,0)});
   };
   baseline.lineups.forEach(add);
+  const adjusted = players.some(p=>p.rotation?.length && p.source==="FanDuel FPPG");
+  const projected = adjusted ? buildLineups(players,count,difference,limit,"NBA",{...options,exactFirst:true}) : baseline;
+  projected.lineups.forEach(add);
   const random=generator(77419);
   for(let batch=0;batch<8;batch++) {
     const pool=players.map(p=>({...p,points:Number.isFinite(p.points) ? p.points*Math.exp(.22*normal(random)) : NaN,maxExposure:100}));
@@ -154,5 +157,5 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     const keys=new Set(baseline.lineups.map(l=>key(l.ids)));
     result=selectTournamentPortfolio({...pool,lineups:ranked.filter(l=>keys.has(key(l.ids)))},limits,count,difference,baseline.limited);
   }
-  return {...result,baseline:baseline.lineups};
+  return {...result,highestProjected:candidates.get(key(projected.lineups[0].ids)),baseline:baseline.lineups};
 }
