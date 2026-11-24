@@ -46,19 +46,64 @@ export function nbaRoleProjections(players) {
   });
 }
 
-function sampleScores(players,scenarioRandom,outcomes) {
-    const games=new Map();
-    players.forEach((p,i)=>{
-      const id=p.game||p.team;
-      if(!games.has(id)) games.set(id,{pace:normal(scenarioRandom),script:scenarioRandom()});
-      const {pace,script}=games.get(id);
-      const starter=p.confirmedStarter ?? p.starter ?? (p.minutes>=28 || (!p.minutes && p.points>=28));
-      const minutes=p.minutes || (starter?32:20);
-      const shift=script<.06 ? (starter?4:1) : script>.84 ? (starter?-5:3) : 0;
-      const played=bounded(minutes+shift+(p.minuteSpread||5)*normal(scenarioRandom),0,53);
-      const rate=.24*normal(scenarioRandom)+.09*pace;
-      outcomes[i]=Math.round(Math.max(0,p.points||0)*played/minutes*Math.exp(rate-.033)*10);
-    });
+// Balance only rotations with enough observed playing time to represent a team.
+export function teamRotations(players) {
+  const groups=new Map();
+  players.forEach((p,i)=>{
+    if (!p.team || unavailable(p.status)) return;
+    const indices=groups.get(p.team) || [];
+    indices.push(i);
+    groups.set(p.team,indices);
+  });
+  return [...groups.values()].filter(indices=>{
+    if (indices.length<8 || !indices.every(i=>Number.isFinite(players[i].minutes) && players[i].minutes>0)) return false;
+    const minutes=indices.reduce((sum,i)=>sum+players[i].minutes,0);
+    return minutes>=200 && minutes<=280;
+  });
+}
+
+export function balanceMinutes(indices,played,weights,overtime) {
+  const cap=overtime ? 53 : 48;
+  let remaining=5*cap;
+  let open=indices;
+  // Weighted redistribution preserves role differences when teammates lose minutes.
+  while (open.length) {
+    const delta=remaining-open.reduce((sum,i)=>sum+played[i],0);
+    const totalWeight=open.reduce((sum,i)=>sum+weights[i],0);
+    const next=[];
+    for (const i of open) {
+      const adjusted=played[i]+delta*weights[i]/totalWeight;
+      played[i]=bounded(adjusted,0,cap);
+      if (played[i]===adjusted) next.push(i);
+      else remaining-=played[i];
+    }
+    if (next.length===open.length) break;
+    open=next;
+  }
+}
+
+function sampleScores(players,scenarioRandom,outcomes,rotations) {
+  const games=new Map();
+  const played=new Float64Array(players.length);
+  const multiplier=new Float64Array(players.length);
+  const weights=new Float64Array(players.length);
+  players.forEach((p,i)=>{
+    const id=p.game||p.team;
+    if(!games.has(id)) games.set(id,{pace:normal(scenarioRandom),script:scenarioRandom()});
+    const {pace,script}=games.get(id);
+    const starter=p.confirmedStarter ?? p.starter ?? (p.minutes>=28 || (!p.minutes && p.points>=28));
+    const minutes=p.minutes || (starter?32:20);
+    const shift=script<.06 ? (starter?4:1) : script>.84 ? (starter?-5:3) : 0;
+    played[i]=bounded(minutes+shift+(p.minuteSpread||5)*normal(scenarioRandom),0,script<.06?53:48);
+    weights[i]=minutes;
+    const rate=.24*normal(scenarioRandom)+.09*pace;
+    multiplier[i]=unavailable(p.status) ? 0 : Math.max(0,p.points||0)/minutes*Math.exp(rate-.033);
+  });
+  for (const indices of rotations) {
+    const p=players[indices[0]];
+    balanceMinutes(indices,played,weights,games.get(p.game||p.team).script<.06);
+  }
+  for (let i=0;i<players.length;i++) outcomes[i]=Math.round(played[i]*multiplier[i]*10);
 }
 
 function opponentField(players,size,random,adjustments) {
@@ -120,14 +165,14 @@ function ownershipFit(players) {
   return best;
 }
 
-function comparePortfolios(players,index,field,portfolios) {
+function comparePortfolios(players,index,field,portfolios,rotations) {
   const random=generator(83713);
   const outcomes=new Int32Array(players.length);
   const mapped=portfolios.map(portfolio=>portfolio.map(lineup=>[...lineup.ids].map(id=>index.get(id))));
   const hits=[0,0], scenarios=512;
   const score=indices=>indices.reduce((sum,i)=>sum+outcomes[i],0);
   for(let n=0;n<scenarios;n++) {
-    sampleScores(players,random,outcomes);
+    sampleScores(players,random,outcomes,rotations);
     const best=mapped.map(rosters=>Math.max(...rosters.map(score)));
     const above=[0,0];
     for(const roster of field) {
@@ -145,6 +190,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   const entries=Number(options.fieldSize ?? 1000);
   if (!Number.isInteger(entries)||entries<=count||entries>50000) throw new Error("Choose a field larger than your portfolio, up to 50,000 entries.");
   const players=nbaRoleProjections(raw).sort((a,b)=>a.id.localeCompare(b.id));
+  const rotations=teamRotations(players);
   const baseline=buildLineups(raw,count,difference,limit,"NBA",{...options,exactFirst:true});
   if (!baseline.lineups.length) return baseline;
   const index=new Map(players.map((p,i)=>[p.id,i]));
@@ -165,7 +211,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   const sampled=new Int32Array(players.length);
   const gameRandom=generator(43817);
   for(let batch=0;batch<4;batch++) {
-    sampleScores(players,gameRandom,sampled);
+    sampleScores(players,gameRandom,sampled,rotations);
     const pool=players.map((p,i)=>({...p,maxExposure:100,
       points:Number.isFinite(p.points) ? .55*p.points+.45*sampled[i]/10 : NaN}));
     buildLineups(pool,Math.min(5,count+1),1,Math.min(limit,40000),"NBA").lineups.forEach(add);
@@ -197,7 +243,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   const scenarioRandom=generator(78602);
   const score=ids=>outcomes[ids[0]]+outcomes[ids[1]]+outcomes[ids[2]]+outcomes[ids[3]]+outcomes[ids[4]]+outcomes[ids[5]]+outcomes[ids[6]]+outcomes[ids[7]]+outcomes[ids[8]];
   for(let n=0;n<scenarios;n++) {
-    sampleScores(players,scenarioRandom,outcomes);
+    sampleScores(players,scenarioRandom,outcomes,rotations);
     for(let i=0;i<field.length;i++) opponents[i]=score(field[i]);
     opponents.sort();
     const max=opponents.at(-1);
@@ -236,12 +282,13 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     const item=items.find(candidate=>candidate.lineup.ids===lineup.ids);
     item.hits.forEach((hit,i)=>{ if(hit)covered[i]=1; });
   }
+  result.simulation.balancedTeams=rotations.length;
   result.simulation.target=top100Target ? "top100" : "first";
   result.simulation.coverage=covered.reduce((sum,v)=>sum+v,0)/scenarios;
   if (result.lineups.length && result.lineups.length===baseline.lineups.length) {
     const testField=opponentField(players,entries-result.lineups.length,generator(92481),factors);
     if (testField.length===entries-result.lineups.length) {
-      result.simulation.comparison=comparePortfolios(players,index,testField,[result.lineups,baseline.lineups]);
+      result.simulation.comparison=comparePortfolios(players,index,testField,[result.lineups,baseline.lineups],rotations);
     }
   }
   return {...result,ownershipForecast,highestProjected:candidates.get(key(projected.lineups[0].ids)),baseline:baseline.lineups};
