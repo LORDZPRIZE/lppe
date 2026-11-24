@@ -112,7 +112,7 @@ function selectTournamentPair(ranked,limits,difference) {
       if (second.ids.size-shared.length < difference || shared.some(id => limits.get(id) < 2)) continue;
       const secondShares = ranked.firstPlaceShares.get(second.ids);
       let coverage = 0;
-      for (let scenario = 0; scenario < scenarioCount; scenario++) {
+      for (let scenario = 0; scenario < ranked.scenarios; scenario++) {
         coverage += Math.max(firstShares[scenario],secondShares[scenario]);
       }
       if (coverage > bestCoverage+1e-9) {
@@ -175,6 +175,11 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
   if (!candidates.size) return {lineups:[],limited,restriction};
 
   const ranked = simulateNFLTournament(players,[...candidates.values()]);
+  return selectTournamentPortfolio(ranked,limits,count,difference,limited);
+}
+
+export function selectTournamentPortfolio(ranked,limits,count,difference,limited) {
+  const scenarioCount = ranked.scenarios;
   const pair = count === 2 ? selectTournamentPair(ranked,limits,difference) : undefined;
   const selectionPool = pair ?? ranked.lineups;
   const usage = new Map();
