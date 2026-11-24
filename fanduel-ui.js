@@ -591,7 +591,10 @@ function renderLineups(result,requested,highCeiling) {
         "The field used projections and random variation. Import projected ownership to factor in expected popularity.");
   }
   if (result.simulation && sport.value==="NBA") status.textContent += " Experimental model. Win shares describe simulated outcomes only.";
-  if (result.simulation?.coverage != null) status.textContent += " At least one lineup reached the top 100 in "+percent.format(result.simulation.coverage)+" of scenarios.";
+  if (result.simulation?.coverage != null) status.textContent += " At least one lineup reached the top 100 in "+percent.format(result.simulation.coverage)+" of selection scenarios.";
+  const comparison=result.simulation?.comparison;
+  if (comparison) status.textContent += " Separate simulation check · at least one top-100 finish: tournament "+
+    comparison.tournamentHits+"/"+comparison.scenarios+" · projected points "+comparison.projectionHits+"/"+comparison.scenarios+".";
   if (result.restriction) status.textContent += " " + result.restriction;
   if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
   refine.hidden = !result.limited || depth.value === "deep" || mode.value !== "gpp";
@@ -793,7 +796,7 @@ function buildCurrentLineups() {
     } else if (data.error) byId("fdBuildStatus").textContent = data.error;
     else {
       renderLineups(data,requested,highCeiling);
-      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline,data.ownershipForecast);
+      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline,data.ownershipForecast,data.simulation?.comparison);
     }
   });
   activeWorker.addEventListener("error",() => {
@@ -1197,7 +1200,7 @@ setInterval(async () => {
 document.addEventListener("visibilitychange",startAutomaticSession);
 
 const historyPrefix = "lppe-fd-build-v1/";
-function saveBuildHistory(baseline,ownershipForecast) {
+function saveBuildHistory(baseline,ownershipForecast,comparison) {
   const now = Date.now();
   if (now >= slateLockAt) return;
   const key = historyPrefix+JSON.stringify([sport.value,loadedLiveSlate.id,slateLockAt]);
@@ -1212,7 +1215,7 @@ function saveBuildHistory(baseline,ownershipForecast) {
     const existing = JSON.parse(localStorage.getItem(key));
     const record = {...existing,first:existing?.first || snapshot,latest:snapshot};
     if (baseline?.length) {
-      record.tournament = {...snapshot,ownershipForecast};
+      record.tournament = {...snapshot,ownershipForecast,comparison};
       record.projection = {...snapshot,settings:{...snapshot.settings,fdObjective:"projection"},lineups:serialize(baseline)};
       if (snapshot.settings.fdTarget==="top100" && !record.initialTop100) {
         record.initialTop100=snapshot;

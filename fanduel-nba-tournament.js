@@ -46,14 +46,29 @@ export function nbaRoleProjections(players) {
   });
 }
 
-function opponentField(players,size,random) {
+function sampleScores(players,scenarioRandom,outcomes) {
+    const games=new Map();
+    players.forEach((p,i)=>{
+      const id=p.game||p.team;
+      if(!games.has(id)) games.set(id,{pace:normal(scenarioRandom),script:scenarioRandom()});
+      const {pace,script}=games.get(id);
+      const starter=p.confirmedStarter ?? p.starter ?? (p.minutes>=28 || (!p.minutes && p.points>=28));
+      const minutes=p.minutes || (starter?32:20);
+      const shift=script<.06 ? (starter?4:1) : script>.84 ? (starter?-5:3) : 0;
+      const played=bounded(minutes+shift+(p.minuteSpread||5)*normal(scenarioRandom),0,53);
+      const rate=.24*normal(scenarioRandom)+.09*pace;
+      outcomes[i]=Math.round(Math.max(0,p.points||0)*played/minutes*Math.exp(rate-.033)*10);
+    });
+}
+
+function opponentField(players,size,random,adjustments) {
   const eligible = players.map((p,i)=>({p,i})).filter(({p})=>p.points>0 && !unavailable(p.status));
   const slots = profile.roster.map(([,positions])=>{
     let sum=0;
     const options=eligible.filter(({p})=>p.positions.some(pos=>positions.includes(pos))).map(({p,i})=>{
       const weight = Number.isFinite(p.ownership) ? bounded(p.ownership,.002,.98) :
         bounded((p.points/32)**2*(p.points/Math.max(1,p.salary/1000)/5)**2,.01,8);
-      sum+=weight;
+      sum+=weight*(adjustments?.[i] ?? 1);
       return {i,end:sum};
     });
     return {options,sum};
@@ -76,8 +91,54 @@ function opponentField(players,size,random) {
     }
     if (picks.length===9 && teams.size>=3) field.push(picks);
   }
-  if (field.length!==size) throw new Error("Insufficient eligible players to model the requested NBA field.");
   return field;
+}
+
+function ownershipFit(players) {
+  const targets=players.map(p=>p.points>0 && !unavailable(p.status) && Number.isFinite(p.ownership) ? p.ownership : null);
+  if (!targets.some(t=>t!==null)) return null;
+  const factors=new Float64Array(players.length).fill(1);
+  let bestError=Infinity;
+  let best;
+  // Iterate on small legal fields. Salary and roster constraints alter marginal selection rates.
+  for (let pass=0;pass<5;pass++) {
+    const field=opponentField(players,512,generator(33921),factors);
+    if (field.length<512) break;
+    const observed=new Uint32Array(players.length);
+    for (const roster of field) for (const id of roster) observed[id]++;
+    let error=0;
+    for (const [i,target] of targets.entries()) {
+      if (target!==null) error+=Math.abs(target-observed[i]/field.length);
+    }
+    if (error<bestError) {bestError=error;best=factors.slice();}
+    for (const [i,target] of targets.entries()) {
+      if (target===null) continue;
+      const ratio=(target+.005)/(observed[i]/field.length+.005);
+      factors[i]=bounded(factors[i]*bounded(Math.sqrt(ratio),.5,2),.05,20);
+    }
+  }
+  return best;
+}
+
+function comparePortfolios(players,index,field,portfolios) {
+  const random=generator(83713);
+  const outcomes=new Int32Array(players.length);
+  const mapped=portfolios.map(portfolio=>portfolio.map(lineup=>[...lineup.ids].map(id=>index.get(id))));
+  const hits=[0,0], scenarios=512;
+  const score=indices=>indices.reduce((sum,i)=>sum+outcomes[i],0);
+  for(let n=0;n<scenarios;n++) {
+    sampleScores(players,random,outcomes);
+    const best=mapped.map(rosters=>Math.max(...rosters.map(score)));
+    const above=[0,0];
+    for(const roster of field) {
+      const value=score(roster);
+      if (value>best[0]) above[0]++;
+      if (value>best[1]) above[1]++;
+      if (above[0]>=100 && above[1]>=100) break;
+    }
+    hits.forEach((_,i)=>{ if(above[i]<100) hits[i]++; });
+  }
+  return {scenarios,tournamentHits:hits[0],projectionHits:hits[1]};
 }
 
 export function buildNBATournament(raw,count,difference,limit,options={}) {
@@ -101,7 +162,22 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     const pool=players.map(p=>({...p,points:Number.isFinite(p.points) ? p.points*Math.exp(.22*normal(random)) : NaN,maxExposure:100}));
     buildLineups(pool,Math.min(6,count+1),1,Math.min(limit,40000),"NBA").lineups.forEach(add);
   }
-  const field=opponentField(players,entries-count,generator(67211));
+  const sampled=new Int32Array(players.length);
+  const gameRandom=generator(43817);
+  for(let batch=0;batch<4;batch++) {
+    sampleScores(players,gameRandom,sampled);
+    const pool=players.map((p,i)=>({...p,maxExposure:100,
+      points:Number.isFinite(p.points) ? .55*p.points+.45*sampled[i]/10 : NaN}));
+    buildLineups(pool,Math.min(5,count+1),1,Math.min(limit,40000),"NBA").lineups.forEach(add);
+  }
+  let factors=ownershipFit(players);
+  const size=entries-count;
+  let field=opponentField(players,size,generator(67211),factors);
+  if (field.length<size && factors) {
+    factors=null;
+    field=opponentField(players,size,generator(67211));
+  }
+  if (field.length<size) throw new Error("Insufficient eligible players to model the requested NBA field.");
   const top100Target = options.target !== "first";
   const counts = new Uint32Array(players.length);
   const freq=new Map();
@@ -121,18 +197,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   const scenarioRandom=generator(78602);
   const score=ids=>outcomes[ids[0]]+outcomes[ids[1]]+outcomes[ids[2]]+outcomes[ids[3]]+outcomes[ids[4]]+outcomes[ids[5]]+outcomes[ids[6]]+outcomes[ids[7]]+outcomes[ids[8]];
   for(let n=0;n<scenarios;n++) {
-    const games=new Map();
-    players.forEach((p,i)=>{
-      const id=p.game||p.team;
-      if(!games.has(id)) games.set(id,{pace:normal(scenarioRandom),script:scenarioRandom()});
-      const {pace,script}=games.get(id);
-      const starter=p.confirmedStarter ?? p.starter ?? (p.minutes>=28 || (!p.minutes && p.points>=28));
-      const minutes=p.minutes || (starter?32:20);
-      const shift=script<.06 ? (starter?4:1) : script>.84 ? (starter?-5:3) : 0;
-      const played=bounded(minutes+shift+(p.minuteSpread||5)*normal(scenarioRandom),0,53);
-      const rate=.24*normal(scenarioRandom)+.09*pace;
-      outcomes[i]=Math.round(Math.max(0,p.points||0)*played/minutes*Math.exp(rate-.033)*10);
-    });
+    sampleScores(players,scenarioRandom,outcomes);
     for(let i=0;i<field.length;i++) opponents[i]=score(field[i]);
     opponents.sort();
     const max=opponents.at(-1);
@@ -173,5 +238,11 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   }
   result.simulation.target=top100Target ? "top100" : "first";
   result.simulation.coverage=covered.reduce((sum,v)=>sum+v,0)/scenarios;
+  if (result.lineups.length && result.lineups.length===baseline.lineups.length) {
+    const testField=opponentField(players,entries-result.lineups.length,generator(92481),factors);
+    if (testField.length===entries-result.lineups.length) {
+      result.simulation.comparison=comparePortfolios(players,index,testField,[result.lineups,baseline.lineups]);
+    }
+  }
   return {...result,ownershipForecast,highestProjected:candidates.get(key(projected.lineups[0].ids)),baseline:baseline.lineups};
 }

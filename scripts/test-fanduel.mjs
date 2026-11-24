@@ -355,6 +355,16 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
   assert.equal(result.baseline.length,3);
   assert.equal(result.lineups.length,3);
   assert.equal(result.simulation.opponents,197);
+  const comparison=result.simulation.comparison;
+  assert.equal(comparison.scenarios,512);
+  for (const hits of [comparison.tournamentHits,comparison.projectionHits]) {
+    assert.ok(Number.isInteger(hits) && hits>=0 && hits<=comparison.scenarios);
+  }
+  // With fewer than 100 opponents both portfolios must always reach the target.
+  const small=buildNBATournament(joined.map((p,i)=>i<8 ? {...p,ownership:.2} : p),
+    3,2,18000,{fieldSize:99,exposure:80});
+  assert.deepEqual(small.simulation.comparison,{scenarios:512,tournamentHits:512,projectionHits:512});
+  assert.equal(small.ownershipForecast.filter(p=>p.input!==null).length,8);
   assert.ok(result.highestProjected.ids.has("p0") && !result.highestProjected.ids.has("p1"));
   assert.ok(result.lineups.every(lineup => lineup.points<=result.highestProjected.points+1e-8));
   const usage=new Map();
