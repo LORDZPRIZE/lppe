@@ -1,4 +1,4 @@
-import { liveRefreshSeconds, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -48,7 +48,43 @@ let buildProgress;
 let autoRequest;
 const automatic = byId("fdAutomatic");
 try { automatic.checked = localStorage.getItem("fd-automatic") !== "off"; } catch {}
-let lastLiveRequest = 0;
+const sessionKey = () => "lppe-fd-session-v1/"+sport.value;
+const sessionMemory = new Map();
+let listedSlates = [];
+function readSession() {
+  const key = sessionKey();
+  try { return JSON.parse(localStorage.getItem(key)) || sessionMemory.get(key); }
+  catch { return sessionMemory.get(key); }
+}
+function writeSession(value) {
+  const key = sessionKey();
+  sessionMemory.set(key,value);
+  try { localStorage.setItem(key,JSON.stringify(value)); } catch {}
+}
+function startAutomaticSession() {
+  if (!automatic.checked || document.hidden || autoRequest || optimizer || importedSlateName || sport.disabled) return;
+  const now = Date.now();
+  if (loadedLiveSlate && slateLockAt > now) return;
+  const saved = readSession();
+  if (saved?.data?.lockAt > now && saved.data.players?.length) {
+    listedSlates = saved.slates || [];
+    liveSlate.replaceChildren(...listedSlates.filter(slate => !slate.lockAt || slate.lockAt > now)
+      .map(slate => new Option(slate.label,slate.id)));
+    if (![...liveSlate.options].some(option => option.value === saved.id)) {
+      liveSlate.add(new Option(saved.data.label,saved.id));
+    }
+    liveSlate.value = saved.id;
+    liveSlate.disabled = false;
+    loadPublicPool(false,saved.data);
+    return;
+  }
+  if (saved?.resumeAt > now) {
+    byId("fdStatus").textContent = "Live requests paused until "+new Date(saved.resumeAt).toLocaleString()+". Refresh slates to start sooner.";
+    return;
+  }
+  writeSession({resumeAt:now+4*3600000});
+  loadPublicPool(true);
+}
 let slateLockAt = null;
 let loadedLiveSlate;
 let loadedSalaryFile;
@@ -822,8 +858,7 @@ restoreLiveProjections.addEventListener("click",() => {
   liveProjectionStatus.textContent = "Live slate projections restored.";
 });
 
-async function loadPublicPool(listOnly = false) {
-  lastLiveRequest = Date.now();
+async function loadPublicPool(listOnly = false,savedPool = null) {
   const previousId = liveSlate.value;
   if (!listOnly && !previousId) return;
   if (listOnly) {
@@ -840,12 +875,16 @@ async function loadPublicPool(listOnly = false) {
     const query = new URLSearchParams({sport:sport.value});
     if (listOnly) query.set("list","1");
     else query.set("slate",previousId);
-    const response = await fetch("/api/nba/fanduel?"+query,{signal:request.signal});
-    const data = await response.json();
+    let data = savedPool;
+    if (!data) {
+      const response = await fetch("/api/nba/fanduel?"+query,{signal:request.signal});
+      data = await response.json();
+      if (!response.ok) throw new Error(data.error || "No public FanDuel player pool is available.");
+    }
     if (autoRequest !== request || request.signal.aborted) return;
-    if (!response.ok) throw new Error(data.error || "No public FanDuel player pool is available.");
     if (listOnly) {
       if (!data.slates?.length) throw new Error("No upcoming Classic slates are available. You can import a FanDuel contest CSV.");
+      listedSlates = data.slates;
       liveSlate.replaceChildren(new Option("Choose a slate",""),...data.slates.map(slate => new Option(
         [slate.label,slate.lockAt && new Date(slate.lockAt).toLocaleString(),
           slate.games && slate.games+" games"].filter(Boolean).join(" · "),slate.id)));
@@ -864,6 +903,11 @@ async function loadPublicPool(listOnly = false) {
       return;
     }
     if (!Array.isArray(data.players) || !(data.lockAt > Date.now())) throw new Error("The public pool has expired.");
+    if (!savedPool) {
+      const nextDay = new Date(data.lockAt);
+      nextDay.setHours(24,0,0,0);
+      writeSession({id:previousId,data,slates:listedSlates,resumeAt:nextDay.getTime()});
+    }
     const sameSlate = loadedLiveSlate?.id === previousId;
     const priorSelections = new Map(sameSlate ? players.map(player => [player.id,player]) : []);
     const baseline = new Map(data.players.map(player => [player.id,player]));
@@ -911,6 +955,7 @@ async function loadPublicPool(listOnly = false) {
       " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+estimateSummary+
       (injuries ? " ESPN injury updates excluded "+injuries.excluded+" additional players." : "")+
       (removedLocks.length ? " Unlocked after refresh: "+removedLocks.join(", ")+".": "");
+    byId("fdStatus").textContent += " Using this snapshot until lock. Load slate and build checks for newer injuries and projections.";
     byId("fdPool").hidden = false;
     renderPlayers();
     buildCurrentLineups();
@@ -973,7 +1018,8 @@ sport.addEventListener("change",() => {
   applySport();
   applyMode();
   liveSlate.value = "";
-  loadPublicPool(true);
+  listedSlates = [];
+  startAutomaticSession();
 });
 function applyMode() {
   const cash = mode.value === "cash";
@@ -996,7 +1042,7 @@ mode.addEventListener("change",() => {
 applySport();
 applyMode();
 showSavedSlate();
-loadPublicPool(true);
+startAutomaticSession();
 
 function resetPlayerPage() {
   playerPage = 0;
@@ -1070,18 +1116,12 @@ byId("fdContestReview").addEventListener("submit",async event => {
   }
 });
 
-function refreshAutomatic(force = false) {
-  if (!automatic.checked || document.hidden || autoRequest || optimizer || importedSlateName || sport.disabled) return;
-  const delay = liveRefreshSeconds(slateLockAt,lastLiveRequest)*1000;
-  if (!force && Date.now()-lastLiveRequest < delay) return;
-  loadPublicPool(!liveSlate.value || (loadedLiveSlate && slateLockAt <= Date.now()));
-}
 automatic.addEventListener("change",() => {
   try { localStorage.setItem("fd-automatic",automatic.checked ? "on" : "off"); } catch {}
-  if (automatic.checked) refreshAutomatic(true);
+  startAutomaticSession();
 });
-setInterval(() => refreshAutomatic(),60000);
-document.addEventListener("visibilitychange",() => refreshAutomatic());
+setInterval(startAutomaticSession,60000);
+document.addEventListener("visibilitychange",startAutomaticSession);
 
 const historyPrefix = "lppe-fd-build-v1/";
 function saveBuildHistory() {
