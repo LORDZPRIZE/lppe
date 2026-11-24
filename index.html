@@ -291,10 +291,13 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
    <div class="slate-filters">
    <div class="toolbar quick-filters">
     <label>Player <input id="picksPlayer" type="search" placeholder="Search player"></label>
+    <label>Side <select id="picksSide"><option value="all">MORE and LESS</option><option value="more" selected>MORE only</option><option value="less">LESS only</option></select></label>
     <label>Market <select id="picksMarket"><option value="">All markets</option><option value="points">Points</option><option value="rebounds">Rebounds</option><option value="assists">Assists</option><option value="three-pointers">Three-pointers</option><option value="points + rebounds + assists">Points + rebounds + assists</option><option value="points + rebounds">Points + rebounds</option><option value="points + assists">Points + assists</option><option value="rebounds + assists">Rebounds + assists</option></select></label>
    </div>
    <details class="disclosure">
     <summary>Filters</summary>
+    <label>Pick grade <select id="picksGrade"><option value="">All grades</option><option value="GREEN">GREEN (60%+)</option><option value="YELLOW">YELLOW (55% to under 60%)</option><option value="RED">RED (under 55%)</option></select></label>
+    <label>Show <select id="picksLimit"><option value="8">First 8 matches</option><option value="all">All matches</option></select></label>
     <label>Evidence <select id="picksEvidence"><option value="all">Any estimate</option><option value="agreement">Market and stats agree</option><option value="market">Market estimate available</option><option value="stats">Stats estimate available</option></select></label>
     <label>Recent minutes <select id="picksMinutes"><option value="0">Any</option><option value="20">20+ per game</option><option value="25">25+ per game</option><option value="30">30+ per game</option><option value="35">35+ per game</option></select></label>
    </details>
@@ -314,7 +317,7 @@ footer{color:var(--muted);font-size:11px;padding:30px 0}
    <div class="toolbar quick-filters">
   <label>Estimate source <select id="estimateSource"><option value="auto">Market first, stats where needed</option><option value="stats" selected>Stats only (no sportsbook credits)</option></select></label>
   <label>Tier <select id="rankTier"><option value="all">All tiers</option><option value="standard">Standard only</option><option value="no-goblins">Exclude Goblins</option><option value="demon">Demon only</option><option value="goblin">Goblin only</option></select></label>
-  <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more">MORE only</option><option value="less">LESS only</option></select></label>
+  <label>Side <select id="rankSide"><option value="all">MORE and LESS</option><option value="more" selected>MORE only</option><option value="less">LESS only</option></select></label>
   <label>Books required for entry suggestions <select id="minBooks"><option value="2">2 or more</option><option value="3">3 or more</option><option value="4">4 or more</option></select></label>
    </div>
   <p class="sub">LPPE scans on opening and every five minutes while this tab is visible. PrizePicks uses up to 100 offers per scheduled snapshot. Opening or refreshing the dashboard reads the latest snapshot.</p>
@@ -2229,7 +2232,6 @@ function renderWatchlist() {
  }
 }
 
-const todayPicksLimit = 8;
 let todayPicksExpiry;
 let lastScanStartedAt = 0;
 const scanInterval = 5 * 60 * 1000;
@@ -2454,16 +2456,20 @@ function renderTodayPicks() {
  const marketFilter = document.getElementById("picksMarket").value;
  const minMinutes = Number(document.getElementById("picksMinutes").value);
  const evidence = document.getElementById("picksEvidence").value;
- const picks = candidates.filter(({pick}) => {
+ const pickGrade = document.getElementById("picksGrade").value;
+ const matching = candidates.filter(({pick}) => {
+  if (pickGrade && grade(pick.chance) !== pickGrade) return false;
   if (pick.chance <= .5 || availabilityHold(pick) || !modelPlayerKey(pick.player).includes(player) ||
       (marketFilter && supportedMarkets.get(pick.market.trim().toLowerCase()) !== marketFilter)) return false;
   const key = pickKey(pick);
   const model = models.get(key);
   return (!minMinutes || (model?.minutes ?? 0) >= minMinutes) && matchesPickEvidence(evidence,markets.get(key),model);
- }).slice(0,todayPicksLimit);
+ });
+ const limit = document.getElementById("picksLimit").value;
+ const picks = limit === "all" ? matching : matching.slice(0,Number(limit));
  updateSlateStats(fresh.length,picks.filter(({pick}) => grade(pick.chance) === "GREEN").length);
  status.textContent = picks.length ?
-  "Showing " + picks.length + " sides above 50%. " +
+  "Showing " + picks.length + " of " + matching.length + " matching sides above 50%. " +
   (useMarket ? "Market estimates appear first, followed by stats-only sides. " : "") +
   "Estimates are before payouts." :
   "No comparable sides above 50% for these filters yet.";
@@ -2997,14 +3003,20 @@ function useLatestBoard() {
   tier:document.getElementById("rankTier").value,side:document.getElementById("rankSide").value
  });
 }
-for (const id of ["rankTier","rankSide","minBooks"]) {
+for (const [changed,other] of [["picksSide","rankSide"],["rankSide","picksSide"]]) {
+ document.getElementById(changed).addEventListener("change",event => {
+  document.getElementById(other).value = event.target.value;
+  useLatestBoard();
+ });
+}
+for (const id of ["rankTier","minBooks"]) {
  document.getElementById(id).addEventListener("change",useLatestBoard);
 }
 document.getElementById("liveBoardPlayer").addEventListener("input",() => {
  if (latestBoard) renderMarketBoard(latestBoard.prizePicks,latestBoard.sportsbook,latestBoard.needsOdds,{searchOnly:true});
 });
 document.getElementById("picksPlayer").addEventListener("input",renderTodayPicks);
-for (const id of ["picksMarket","picksMinutes","picksEvidence"]) {
+for (const id of ["picksMarket","picksMinutes","picksEvidence","picksGrade","picksLimit"]) {
  document.getElementById(id).addEventListener("change",renderTodayPicks);
 }
 findEntries.addEventListener("click",() => latestBoard ? useLatestBoard() : scanAndRankProps());
