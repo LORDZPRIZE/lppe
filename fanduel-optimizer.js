@@ -66,6 +66,38 @@ export function parseCSV(source) {
   return records.map(row => Object.fromEntries(headings.map((name, i) => [name, row[i] || ""])));
 }
 
+export function reviewContest(source, username) {
+  const rows = parseCSV(source);
+  if (!["entryid","entryname","rank","points"].every(key => key in (rows[0] || {}))) {
+    throw new Error("Choose a FanDuel contest leaderboard CSV.");
+  }
+  let entries = 0;
+  let userEntries = 0;
+  let cutoff = Infinity;
+  let best = -Infinity;
+  let top100Entries = 0;
+  const handle = username.trim().toLowerCase();
+  for (const row of rows) {
+    if (!row.entryid) continue;
+    entries++;
+    const rank = Number(row.rank);
+    if (!Number.isInteger(rank) || rank < 1) throw new Error("An entry has no valid finishing rank.");
+    const score = row.points ? Number(row.points) : NaN;
+    if (rank <= 100) {
+      if (!Number.isFinite(score)) throw new Error("A top-100 entry is missing its score.");
+      cutoff = Math.min(cutoff,score);
+    }
+    if (row.entryname.replace(/\s*\(\d+\/\d+\)$/, "").trim().toLowerCase() === handle) {
+      userEntries++;
+      if (Number.isFinite(score)) best = Math.max(best,score);
+      if (rank <= 100) top100Entries++;
+    }
+  }
+  if (!userEntries) throw new Error("That username was not found in this leaderboard.");
+  if (!Number.isFinite(best)) throw new Error("No scored entries found for that username.");
+  return {entries,userEntries,best,cutoff:entries >= 100 && Number.isFinite(cutoff) ? cutoff : null,top100Entries};
+}
+
 const csvNumber = value => value?.trim() ? Number(value.replace(/[$,]/g, "")) : NaN;
 const playerName = row => row.nickname || row.playername || row.player || row.name ||
   [row.firstname,row.lastname].filter(Boolean).join(" ");

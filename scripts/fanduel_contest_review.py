@@ -2,7 +2,7 @@
 """Post-slate FanDuel exposure audit. Never use final results as pre-lock predictions."""
 import argparse,csv,json,re,collections,statistics
 from pathlib import Path
-P=re.compile(r'(QB|RB|WR|TE|D|DST)\s+(.+?)\s+\((\d+-\d+)\)(?=,\s*(?:QB|RB|WR|TE|D|DST)\s+|$)')
+P=re.compile(r'(PG|SG|SF|PF|C|QB|RB|WR|TE|D|DST)\s+(.+?)\s+\((\d+-\d+)\)(?=,\s*(?:PG|SG|SF|PF|C|QB|RB|WR|TE|D|DST)\s+|$)')
 def num(s):
  try:return float(str(s).replace('$','').replace(',','').replace('%',''))
  except (ValueError,TypeError):return None
