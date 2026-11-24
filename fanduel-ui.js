@@ -1,4 +1,4 @@
-import { applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { liveRefreshSeconds, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -1072,7 +1072,8 @@ byId("fdContestReview").addEventListener("submit",async event => {
 
 function refreshAutomatic(force = false) {
   if (!automatic.checked || document.hidden || autoRequest || optimizer || importedSlateName || sport.disabled) return;
-  if (!force && Date.now()-lastLiveRequest < 10*60*1000) return;
+  const delay = liveRefreshSeconds(slateLockAt,lastLiveRequest)*1000;
+  if (!force && Date.now()-lastLiveRequest < delay) return;
   loadPublicPool(!liveSlate.value || (loadedLiveSlate && slateLockAt <= Date.now()));
 }
 automatic.addEventListener("change",() => {
