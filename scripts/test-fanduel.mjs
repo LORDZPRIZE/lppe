@@ -429,3 +429,25 @@ test("replays a portable NBA build without an entered username and rejects incom
   assert.throws(()=>read({...build,capturedAt:build.lockAt}),/timestamp/);
   assert.throws(()=>read({...build,lineups:[players.map(()=>players[0])]}),/lineup/);
 });
+
+test("NBA team minutes cover regulation and overtime, preserve user exclusions and skip partial rotations",async()=>{
+  const {teamRotations,balanceMinutes}=await import("../fanduel-nba-tournament.js");
+  const players=[36,36,34,32,30,26,22,22,20].map(minutes=>({team:"A",minutes}));
+  players[0].status="OUT";
+  players[1].selection="exclude";
+  players.push({team:"B",minutes:32});
+  const groups=teamRotations(players);
+  assert.deepEqual(groups,[[1,2,3,4,5,6,7,8]]);
+  const weights=players.map(p=>p.minutes);
+  for (const overtime of [false,true]) {
+    const cap=overtime?53:48;
+    const played=weights.slice();
+    played[1]=cap;
+    balanceMinutes(groups[0],played,weights,overtime);
+    assert.ok(Math.abs(groups[0].reduce((sum,i)=>sum+played[i],0)-5*cap)<1e-8);
+    assert.ok(groups[0].every(i=>played[i]>=0 && played[i]<=cap));
+    assert.ok(played[8]>weights[8]);
+  }
+  players[2].minutes=undefined;
+  assert.deepEqual(teamRotations(players),[]);
+});
