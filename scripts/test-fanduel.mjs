@@ -368,3 +368,29 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
   assert.ok((usage.get("p2")||0)<=1);
   assert.ok([...usage].every(([id,n])=>id==="p0" || n<=2));
 });
+
+test("late swap preserves the exact flexible slot of a started player and excludes other locked-game players",async()=>{
+  const {lateSwapLineup,enteredNBAIds}=await import("../fanduel-nba-review.js");
+  const positions=["PG","SG","SF","PF","C","PG","SF","SG","C"];
+  const players=Array.from({length:27},(_,i)=>({id:"111-"+i,name:"Name "+i,team:["A","B","C","D"][i%4],
+    positions:[positions[i%9]],salary:5500,points:i+12,status:"",selection:"available"}));
+  const ids=players.slice(0,9).map(p=>p.id);
+  const text="Entry ID,PG,SG,SF,PF,C,G/F,F/C,UTIL,UTIL\n1,"+ids.join(",");
+  assert.deepEqual(enteredNBAIds(text),[ids]);
+  const games=[{teams:["A","B"],state:"in",start:1},{teams:["C","D"],state:"pre",start:50000}];
+  const result=lateSwapLineup({players,date:"2026-11-24"},ids,games,[],100);
+  for(const p of result.picks) {
+    if(["A","B"].includes(players[p.slot].team))assert.equal(p.id,ids[p.slot]);
+    else assert.ok(["C","D"].includes(players.find(x=>x.id===p.id).team));
+  }
+  assert.ok(result.picks.some(p=>p.changed));
+  assert.throws(()=>lateSwapLineup({players},ids,[],[],100),/time/);
+});
+test("ownership review requires a pre-lock timestamp and matches explicit zeros by exact ID",async()=>{
+  const {ownershipReview}=await import("../fanduel-nba-review.js");
+  const rows=[{player:"Test (123-456)",drafted:"0.00%"}];
+  const snap={capturedAt:"2026-11-24T20:00Z",lockAt:"2026-11-25T00:00Z",
+    ownershipForecast:[{id:"123-456",estimate:.12,name:"Test",salary:5500,role:"Recent bench"}]};
+  assert.equal(ownershipReview(rows,snap).groups[0].mae,12);
+  assert.equal(ownershipReview(rows,{...snap,capturedAt:snap.lockAt}),null);
+});
