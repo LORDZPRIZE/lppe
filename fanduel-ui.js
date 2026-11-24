@@ -602,6 +602,20 @@ function renderLineups(result,requested,highCeiling) {
     status.textContent += " " + summary;
   }
   const output = byId("fdResults");
+  if (result.highestProjected) {
+    const best = result.highestProjected;
+    const panel = document.createElement("details");
+    const title = document.createElement("summary");
+    title.textContent = "Highest projected lineup · "+best.points.toFixed(2)+" FPTS · "+dollars.format(best.salary);
+    const list = document.createElement("ul");
+    for (const {slot,player} of [...best.picks].sort((a,b)=>a.slot-b.slot)) {
+      const item = document.createElement("li");
+      item.textContent = profiles.NBA.roster[slot][0]+" · "+player.name+" · "+player.points.toFixed(2)+" FPTS";
+      list.append(item);
+    }
+    panel.append(title,list);
+    output.append(panel);
+  }
   if (lineups.length > 1) output.append(compareLineups(highCeiling,result.simulation));
   for (const [index,lineup] of lineups.entries()) {
     const details = document.createElement("details");
@@ -960,7 +974,7 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
       (removedLocks.length ? " Unlocked after refresh: "+removedLocks.join(", ")+".": "");
     byId("fdStatus").textContent += " Using this snapshot until lock. Load slate and build refreshes salary and projection data.";
     byId("fdPool").hidden = false;
-    if (sport.value==="NBA" && objective.value==="tournament") {
+    if (sport.value==="NBA" && objective.value!=="ceiling") {
       const current = loadedLiveSlate;
       await refreshNBAContext(current,true);
       if (autoRequest!==request || current!==loadedLiveSlate || request.signal.aborted) return;
@@ -1134,7 +1148,7 @@ setInterval(startAutomaticSession,60000);
 setInterval(async () => {
   const slate=loadedLiveSlate;
   if (!slate || sport.value!=="NBA" || !automatic.checked || document.hidden || autoRequest || optimizer ||
-      objective.value!=="tournament" || Date.now()>=slateLockAt) return;
+      objective.value==="ceiling" || Date.now()>=slateLockAt) return;
   if (await refreshNBAContext(slate,false) && loadedLiveSlate===slate && !autoRequest && !optimizer && Date.now()<slateLockAt) {
     renderPlayers();
     buildCurrentLineups();

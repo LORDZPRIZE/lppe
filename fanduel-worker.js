@@ -1,6 +1,6 @@
 import { buildLineups } from "./fanduel-optimizer.js";
 
-import { buildNBATournament } from "./fanduel-nba-tournament.js";
+import { buildNBATournament, nbaRoleProjections } from "./fanduel-nba-tournament.js";
 import { buildNFLTournament } from "./fanduel-nfl-tournament.js";
 
 self.addEventListener("message",({data}) => {
@@ -18,7 +18,7 @@ self.addEventListener("message",({data}) => {
     const pool = highCeiling ? players.map(player => ({
       ...player,
       points:Number.isFinite(player.points) ? player.ceiling : NaN
-    })) : players;
+    })) : sport==="NBA" && options?.exactFirst ? nbaRoleProjections(players) : players;
     const originals = highCeiling ? new Map(players.map(player => [player.id,player])) : null;
     function displayLineup(lineup) {
       if (!originals) return lineup;
