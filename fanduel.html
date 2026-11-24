@@ -163,6 +163,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <div class="controls slate-controls">
    <label>Sport <select id="fdSport"><option value="NBA">NBA</option><option value="NFL">NFL</option><option value="MLB">MLB</option><option value="CFB">College football</option></select></label>
    <label>Optimize for <select id="fdObjective"><option value="projection">Projected points</option><option value="ceiling">High Ceiling</option><option value="tournament" selected>Tournament simulation</option></select></label>
+   <label id="fdTargetLabel">NBA portfolio target <select id="fdTarget"><option value="top100">At least one top-100 lineup</option><option value="first">First-place share</option></select></label>
    <label id="fdFieldLabel">NBA contest entries <input id="fdFieldSize" type="number" value="19841" min="2" max="50000" required></label>
    <label>Live contest slate <select id="fdLiveSlate" disabled><option value="">Looking for slates…</option></select></label>
    <button type="button" id="fdAutoLoad" class="primary" disabled>Load slate and build</button>
@@ -248,6 +249,15 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   </div>
   <div class="tablewrap"><table><thead><tr><th>Player</th><th class="player-detail">Position</th><th class="player-detail">Team</th><th>Salary</th><th>FPTS</th><th class="player-detail">Source</th><th class="player-detail">Injury status</th><th>Selection</th></tr></thead>
    <tbody id="fdPlayers"></tbody></table></div>
+ </section>
+ <section>
+  <h2>NBA late swap</h2>
+  <p>For a late-swap eligible contest, paste the nine FanDuel player IDs in the exact order of your entered lineup. Use one lineup per line. LPPE checks public game and injury updates every five minutes while open.</p>
+  <label>Import entered NBA lineups <input id="fdSwapFile" type="file" accept=".csv,text/csv"></label>
+  <label>PG, SG, SF, PF, C, G/F, F/C, UTIL, UTIL <textarea id="fdEnteredIds" rows="3"></textarea></label>
+  <button id="fdSwap" type="button">Track late swaps</button>
+  <button id="fdStopSwap" type="button" hidden>Stop tracking</button>
+  <p id="fdSwapStatus" role="status"></p><div id="fdSwapResults"></div>
  </section>
  <section aria-labelledby="fdReviewTitle">
   <h2 id="fdReviewTitle">Review a finished contest</h2>
