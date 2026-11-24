@@ -1,4 +1,4 @@
-import { applyPlayerProjections, importPlayers, inspectSalaryCSV, profiles, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { applyPlayerProjections, importPlayers, inspectSalaryCSV, profiles, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -1012,4 +1012,29 @@ exportButton.addEventListener("click",() => {
   download.download = "fanduel-"+sport.value.toLowerCase()+"-lineups-review.csv";
   download.click();
   setTimeout(() => URL.revokeObjectURL(url),1000);
+});
+
+byId("fdSpreadFive").addEventListener("click",() => {
+  count.value = "5";
+  exposure.value = "80";
+  difference.value = "3";
+  applyMode();
+  byId("fdBuildStatus").textContent = "Ready to build five lineups with at least three different players per pair and a four-lineup cap per unlocked player.";
+});
+
+byId("fdContestReview").addEventListener("submit",async event => {
+  event.preventDefault();
+  const output = byId("fdContestResult");
+  const file = byId("fdLeaderboard").files[0];
+  const username = byId("fdReviewUser").value.trim();
+  if (!file || !username) return;
+  try {
+    const result = reviewContest(await file.text(),username);
+    const gap = result.cutoff === null ? "" : " Top-100 cutoff: "+result.cutoff.toFixed(1)+
+      ". Points short: "+Math.max(0,result.cutoff-result.best).toFixed(1)+".";
+    output.textContent = username+" placed "+result.top100Entries+" of "+result.userEntries+
+      " entries in the top 100 of "+result.entries.toLocaleString()+". Best score: "+result.best.toFixed(1)+"."+gap;
+  } catch (error) {
+    output.textContent = error.message;
+  }
 });
