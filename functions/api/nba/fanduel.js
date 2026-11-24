@@ -189,8 +189,8 @@ export function attachSlateGames(pool,events,now,sport = "NBA") {
   if (unique.size !== pool.gameCount || firstStart !== pool.lockAt ||
       [...slateTeams].some(team => !games.get(team))) return pool;
   const players = pool.players.map(player => {
-    const {game,gameDate} = games.get(player.team);
-    return {...player,game,gameDate};
+    const {game,gameDate,start} = games.get(player.team);
+    return {...player,game,gameDate,gameStart:start};
   });
   return {...pool,players};
 }
