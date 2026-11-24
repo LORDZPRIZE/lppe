@@ -1,4 +1,4 @@
-import {enteredNBAIds,ownershipReview,pairHeldOut} from "./fanduel-nba-review.js";
+import {enteredNBAIds,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
 import { addRotations } from "./fanduel-nba-tournament.js";
 import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
@@ -1125,16 +1125,21 @@ byId("fdContestReview").addEventListener("submit",async event => {
   const output = byId("fdContestResult");
   const file = byId("fdLeaderboard").files[0];
   const username = byId("fdReviewUser").value.trim();
-  if (!file || !username) return;
+  if (!file) return;
   try {
     const rows = parseCSV(await file.text());
     const result = reviewContest(rows,username);
-    const gap = result.cutoff === null ? "" : " Top-100 cutoff: "+result.cutoff.toFixed(1)+
-      ". Points short: "+Math.max(0,result.cutoff-result.best).toFixed(1)+".";
-    output.textContent = username+" placed "+result.top100Entries+" of "+result.userEntries+
-      " entries in the top 100 of "+result.entries.toLocaleString()+". Best score: "+result.best.toFixed(1)+"."+gap;
+    output.textContent = "Field: "+result.entries.toLocaleString()+" entries."+
+      (result.cutoff===null ? "" : " Top-100 cutoff: "+result.cutoff.toFixed(2)+".");
+    if (result.userEntries) {
+      output.append(" "+username+" placed "+result.top100Entries+" of "+result.userEntries+
+        " entries in the top 100. Best score: "+result.best.toFixed(2)+"."+
+        (result.cutoff===null ? "" : " Points short: "+Math.max(0,result.cutoff-result.best).toFixed(2)+"."));
+    } else if (username) output.append(" No entries matched "+username+".");
+    const archive=byId("fdReplayArchive").files[0];
+    const imported=archive ? readNBAArchive(await archive.text()) : null;
     try {
-      const records=readBuildHistory();
+      const records=imported ?? readBuildHistory();
       const replay = scoreSavedBuilds(rows,records,result.cutoff);
       let matchedForecast=false;
       for (const record of records) {
@@ -1161,7 +1166,9 @@ byId("fdContestReview").addEventListener("submit",async event => {
       const paired=pairHeldOut(rows,replay);
       if (paired) {
         const history=JSON.parse(localStorage.getItem("lppe-fd-top100-benchmark-v1") || "{}");
-        if (!history[paired.key] || history[paired.key].contest===paired.contest) history[paired.key]=paired;
+        const prior=history[paired.key];
+        if (!prior || (prior.contest===paired.contest &&
+            Date.parse(paired.tournament.capturedAt)<=Date.parse(prior.tournament.capturedAt))) history[paired.key]=paired;
         localStorage.setItem("lppe-fd-top100-benchmark-v1",JSON.stringify(history));
         const values=Object.values(history);
         const note=document.createElement("p");
