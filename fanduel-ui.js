@@ -1,4 +1,4 @@
-import { applyPlayerProjections, importPlayers, inspectSalaryCSV, profiles, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -46,6 +46,9 @@ let lineups = [];
 let optimizer;
 let buildProgress;
 let autoRequest;
+const automatic = byId("fdAutomatic");
+try { automatic.checked = localStorage.getItem("fd-automatic") !== "off"; } catch {}
+let lastLiveRequest = 0;
 let slateLockAt = null;
 let loadedLiveSlate;
 let loadedSalaryFile;
@@ -732,7 +735,10 @@ function buildCurrentLineups() {
     if (slateLockAt && slateLockAt <= Date.now()) {
       byId("fdBuildStatus").textContent = "The slate reached its first game start during the search.";
     } else if (data.error) byId("fdBuildStatus").textContent = data.error;
-    else renderLineups(data,requested,highCeiling);
+    else {
+      renderLineups(data,requested,highCeiling);
+      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory();
+    }
   });
   activeWorker.addEventListener("error",() => {
     if (optimizer !== activeWorker) return;
@@ -817,6 +823,7 @@ restoreLiveProjections.addEventListener("click",() => {
 });
 
 async function loadPublicPool(listOnly = false) {
+  lastLiveRequest = Date.now();
   const previousId = liveSlate.value;
   if (!listOnly && !previousId) return;
   if (listOnly) {
@@ -844,6 +851,15 @@ async function loadPublicPool(listOnly = false) {
           slate.games && slate.games+" games"].filter(Boolean).join(" · "),slate.id)));
       if (data.slates.some(slate => slate.id === previousId)) liveSlate.value = previousId;
       liveSlate.disabled = false;
+      if (automatic.checked && !importedSlateName) {
+        const upcoming = data.slates.filter(slate => !slate.lockAt || slate.lockAt > Date.now());
+        const preferred = upcoming.find(slate => String(slate.id) === previousId) ||
+          upcoming[0];
+        if (preferred) {
+          liveSlate.value = String(preferred.id);
+          return loadPublicPool();
+        }
+      }
       byId("fdStatus").textContent = "Choose the slate that matches your FanDuel contest, then build.";
       return;
     }
@@ -931,6 +947,10 @@ liveSlate.addEventListener("change",() => {
   autoRequest?.abort();
   autoRequest = undefined;
   autoLoad.disabled = !liveSlate.value;
+  if (automatic.checked && liveSlate.value) {
+    loadPublicPool();
+    return;
+  }
   const selected = liveSlate.value;
   const current = loadedLiveSlate?.name || importedSlateName;
   const selectedMessage = selected ? "Tap Load slate and build to use this selection." : "Choose a slate.";
@@ -1029,12 +1049,73 @@ byId("fdContestReview").addEventListener("submit",async event => {
   const username = byId("fdReviewUser").value.trim();
   if (!file || !username) return;
   try {
-    const result = reviewContest(await file.text(),username);
+    const rows = parseCSV(await file.text());
+    const result = reviewContest(rows,username);
     const gap = result.cutoff === null ? "" : " Top-100 cutoff: "+result.cutoff.toFixed(1)+
       ". Points short: "+Math.max(0,result.cutoff-result.best).toFixed(1)+".";
     output.textContent = username+" placed "+result.top100Entries+" of "+result.userEntries+
       " entries in the top 100 of "+result.entries.toLocaleString()+". Best score: "+result.best.toFixed(1)+"."+gap;
+    try {
+      const replay = scoreSavedBuilds(rows,readBuildHistory(),result.cutoff);
+      for (const item of replay) {
+        const note = document.createElement("p");
+        note.textContent = item.slate+" · "+item.version+" saved build · scored "+item.scored+"/"+item.total+
+          " lineups · best "+item.best.toFixed(1)+(item.hits === null ? "" : " · "+item.hits+" reached the top-100 score");
+        output.append(note);
+      }
+      if (!replay.length) output.append(" No saved pre-lock lineups fully matched this export by FanDuel player ID.");
+    } catch { output.append(" Saved build history is unavailable."); }
   } catch (error) {
     output.textContent = error.message;
   }
+});
+
+function refreshAutomatic(force = false) {
+  if (!automatic.checked || document.hidden || autoRequest || optimizer || importedSlateName || sport.disabled) return;
+  if (!force && Date.now()-lastLiveRequest < 10*60*1000) return;
+  loadPublicPool(!liveSlate.value || (loadedLiveSlate && slateLockAt <= Date.now()));
+}
+automatic.addEventListener("change",() => {
+  try { localStorage.setItem("fd-automatic",automatic.checked ? "on" : "off"); } catch {}
+  if (automatic.checked) refreshAutomatic(true);
+});
+setInterval(() => refreshAutomatic(),60000);
+document.addEventListener("visibilitychange",() => refreshAutomatic());
+
+const historyPrefix = "lppe-fd-build-v1/";
+function saveBuildHistory() {
+  const now = Date.now();
+  if (now >= slateLockAt) return;
+  const key = historyPrefix+JSON.stringify([sport.value,loadedLiveSlate.id,slateLockAt]);
+  const snapshot = {capturedAt:new Date(now).toISOString(),sport:sport.value,slate:loadedLiveSlate.name,
+    lockAt:new Date(slateLockAt).toISOString(),requested:Number(count.value),
+    settings:Object.fromEntries(slateSettings.map(control => [control.id,control.value])),
+    lineups:lineups.map(lineup => lineup.picks.map(({player}) => ({id:player.id,name:player.name,team:player.team,
+      points:player.points,source:player.source,salary:player.salary,ceiling:player.ceiling,ownership:player.ownership})))};
+  try {
+    const existing = JSON.parse(localStorage.getItem(key));
+    localStorage.setItem(key,JSON.stringify({first:existing?.first || snapshot,latest:snapshot}));
+    byId("fdHistoryStatus").textContent = "First and latest pre-lock builds saved on this device for "+loadedLiveSlate.name+".";
+  } catch {
+    byId("fdHistoryStatus").textContent = "Build history could not be saved on this device.";
+  }
+}
+function readBuildHistory() {
+  return Object.keys(localStorage).filter(key => key.startsWith(historyPrefix))
+    .map(key => JSON.parse(localStorage.getItem(key)));
+}
+byId("fdBuildHistory").addEventListener("click",() => {
+  try {
+    const records = readBuildHistory();
+    if (!records.length) {
+      byId("fdHistoryStatus").textContent = "History starts with a completed live build before slate lock.";
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(records)],{type:"application/json"}));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "lppe-prelock-builds.json";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url),1000);
+  } catch { byId("fdHistoryStatus").textContent = "Saved builds could not be downloaded."; }
 });

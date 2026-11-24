@@ -67,7 +67,7 @@ export function parseCSV(source) {
 }
 
 export function reviewContest(source, username) {
-  const rows = parseCSV(source);
+  const rows = typeof source === "string" ? parseCSV(source) : source;
   if (!["entryid","entryname","rank","points"].every(key => key in (rows[0] || {}))) {
     throw new Error("Choose a FanDuel contest leaderboard CSV.");
   }
@@ -542,4 +542,25 @@ export function reviewCSV(lineups,sport = "NBA") {
     }
   }
   return rows.map(row => row.map(escape).join(",")).join("\r\n");
+}
+
+export function scoreSavedBuilds(rows,records,cutoff) {
+  const actuals = new Map();
+  for (const row of rows) {
+    const id = row.player?.match(/\((\d+-\d+)\)$/)?.[1];
+    if (id && row.fpts && Number.isFinite(Number(row.fpts))) actuals.set(id,Number(row.fpts));
+  }
+  const results = [];
+  for (const record of records) {
+    for (const [version,build] of Object.entries(record)) {
+      if (version === "latest" && build.capturedAt === record.first?.capturedAt) continue;
+      if (!(Date.parse(build.capturedAt) < Date.parse(build.lockAt))) continue;
+      const scores = build.lineups.filter(players => players.length &&
+        players.every(player => actuals.has(player.id))).map(players =>
+          players.reduce((total,player) => total+actuals.get(player.id),0));
+      if (scores.length) results.push({version,slate:build.slate,scored:scores.length,total:build.lineups.length,
+        best:Math.max(...scores),hits:cutoff === null ? null : scores.filter(score => Math.round(score*100) >= Math.round(cutoff*100)).length});
+    }
+  }
+  return results;
 }
