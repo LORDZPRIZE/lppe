@@ -592,6 +592,9 @@ function renderLineups(result,requested,highCeiling) {
   }
   if (result.simulation && sport.value==="NBA") status.textContent += " Experimental model. Win shares describe simulated outcomes only.";
   if (result.simulation?.coverage != null) status.textContent += " At least one lineup reached the top 100 in "+percent.format(result.simulation.coverage)+" of selection scenarios.";
+  if (Number.isInteger(result.simulation?.balancedTeams)) {
+    status.textContent += " Teams with enough rotation data for shared minutes: "+result.simulation.balancedTeams+".";
+  }
   const comparison=result.simulation?.comparison;
   if (comparison) status.textContent += " Separate simulation check · at least one top-100 finish: tournament "+
     comparison.tournamentHits+"/"+comparison.scenarios+" · projected points "+comparison.projectionHits+"/"+comparison.scenarios+".";
