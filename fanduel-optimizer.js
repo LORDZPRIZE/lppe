@@ -564,3 +564,12 @@ export function scoreSavedBuilds(rows,records,cutoff) {
   }
   return results;
 }
+
+
+// Keep provider requests infrequent until the slate enters its final hour.
+export function liveRefreshSeconds(lockAt,now = Date.now()) {
+  if (!Number.isFinite(lockAt)) return 1800;
+  const remaining = Math.ceil((lockAt-now)/1000);
+  if (remaining <= 3600) return 600;
+  return Math.min(1800,remaining-3600);
+}
