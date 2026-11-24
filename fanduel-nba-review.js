@@ -85,6 +85,32 @@ export function enteredNBAIds(text) {
   });
 }
 
+// Import only known snapshot versions. Keep imported builds separate from device history.
+export function readNBAArchive(text) {
+  const records=JSON.parse(text);
+  if (!Array.isArray(records)) throw new Error("Choose a downloaded LPPE NBA build history JSON.");
+  const versions=["first","latest","tournament","projection","initialTop100","initialComparison"];
+  const valid=[];
+  for (const record of records) {
+    const accepted={};
+    for (const version of versions) {
+      const build=record?.[version];
+      if (!build || build.sport!=="NBA") continue;
+      const legal=Array.isArray(build.lineups) && build.lineups.length>0 && build.lineups.every(lineup=>
+        Array.isArray(lineup) && lineup.length===9 && lineup.every(p=>typeof p?.id==="string" &&
+        /^\d+-\d+$/.test(p.id)) && new Set(lineup.map(p=>p.id)).size===9);
+      if (!legal || !build.slate || !(Date.parse(build.capturedAt)<Date.parse(build.lockAt)) ||
+          !Number.isInteger(build.requested) || build.requested<build.lineups.length) {
+        throw new Error("This archive contains an invalid NBA lineup or pre-lock timestamp.");
+      }
+      accepted[version]=build;
+    }
+    if (Object.keys(accepted).length) valid.push(accepted);
+  }
+  if (!valid.length) throw new Error("No saved NBA builds found in this archive.");
+  return valid;
+}
+
 export function pairHeldOut(rows,replay) {
   const tournament=replay.find(item=>item.version==="initialTop100" && item.scored===item.total &&
     item.total===item.requested && item.hits!==null);
@@ -96,7 +122,10 @@ export function pairHeldOut(rows,replay) {
   const date=new Date(tournament.lockAt);
   const format=options=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",...options}).format(date);
   const eastern=format({year:"numeric",month:"2-digit",day:"2-digit"})+" "+format({hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"})+" ET";
+  const entries=rows.filter(r=>r.entryid);
+  if (new Set(entries.map(r=>r.entryid)).size!==entries.length ||
+      entries.some(r=>!String(r.points??"").trim() || !Number.isFinite(Number(r.points)))) return null;
   if(info["Start Time"]!==eastern || !info["Contest Name"] || !info.Slate ||
-     Number(info["Seats Filled"])!==rows.filter(r=>r.entryid).length)return null;
+     Number(String(info["Seats Filled"]).replaceAll(",",""))!==entries.length)return null;
   return {key:JSON.stringify([tournament.lockAt,tournament.slate]),contest:info["Contest Name"],tournament,projection};
 }
