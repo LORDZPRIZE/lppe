@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
+import { liveRefreshSeconds, applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
 import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, onRequestGet } from "../functions/api/nba/fanduel.js";
 import { buildNFLTournament, rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
@@ -295,6 +295,11 @@ test("refreshing NBA projections reuses the longer-lived salary cache", async co
   assert.equal((await reply()).status,200);
   assert.equal(providerCalls.length,2);
   assert.equal(publicCalls.length,3);
+  for (const [url,response] of responses) {
+    if (url.endsWith("/slates") || url.includes("/nba-salaries/")) {
+      assert.equal(response.headers.get("cache-control"),"public, max-age=1800");
+    }
+  }
   for (const key of responses.keys()) {
     if (key.endsWith("/provider/1")) responses.delete(key);
   }
@@ -325,4 +330,13 @@ test("matches NFL schedule aliases and supports projections on a multi-day slate
   const overlay = applyPlayerProjections(result.players,projections,"NFL",{date:pool.date});
   assert.equal(overlay.matched,1);
   assert.deepEqual(overlay.players.map(player => player.points),[12,12,19,12]);
+});
+
+
+test("credit-saving refresh switches at the final hour", () => {
+  const now = 100000;
+  assert.equal(liveRefreshSeconds(null,now),1800);
+  assert.equal(liveRefreshSeconds(now+7200000,now),1800);
+  assert.equal(liveRefreshSeconds(now+3900000,now),300);
+  assert.equal(liveRefreshSeconds(now+3600000,now),600);
 });
