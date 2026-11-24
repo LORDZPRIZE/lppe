@@ -1,3 +1,4 @@
+import {lateSwapLineup} from "./fanduel-nba-review.js";
 import { buildLineups } from "./fanduel-optimizer.js";
 
 import { buildNBATournament, nbaRoleProjections } from "./fanduel-nba-tournament.js";
@@ -5,6 +6,11 @@ import { buildNFLTournament } from "./fanduel-nfl-tournament.js";
 
 self.addEventListener("message",({data}) => {
   try {
+    if (data.swap) {
+      const {pool,entries,games,reports,priorLocks}=data.swap;
+      self.postMessage({swaps:entries.map(ids=>lateSwapLineup(pool,ids,games,reports,Date.now(),priorLocks))});
+      return;
+    }
     const {players,count,difference,sport,options,highCeiling} = data;
     const searchLimit = data.deep ? 1000000 : 160000;
     if (data.tournament && sport === "NBA") {
