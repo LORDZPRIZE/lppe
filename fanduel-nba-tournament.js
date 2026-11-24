@@ -102,8 +102,11 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     buildLineups(pool,Math.min(6,count+1),1,Math.min(limit,40000),"NBA").lineups.forEach(add);
   }
   const field=opponentField(players,entries-count,generator(67211));
+  const top100Target = options.target !== "first";
+  const counts = new Uint32Array(players.length);
   const freq=new Map();
   for(const lineup of field) {
+    for (const i of lineup) counts[i]++;
     const k=key(lineup.map(i=>players[i].id));
     freq.set(k,(freq.get(k)||0)+1);
   }
@@ -112,7 +115,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   const items=[...candidates.values()].map(lineup=>{
     const first=new Float64Array(scenarios);
     shares.set(lineup.ids,first);
-    return {lineup,indices:[...lineup.ids].map(id=>index.get(id)),first,scores:[],wins:0,top:0};
+    return {lineup,indices:[...lineup.ids].map(id=>index.get(id)),first,hits:new Uint8Array(scenarios),scores:[],wins:0,top:0,top100:0};
   });
   const outcomes=new Int32Array(players.length), opponents=new Int32Array(field.length);
   const scenarioRandom=generator(78602);
@@ -136,16 +139,18 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     let tied=1;
     for(let i=opponents.length-2;i>=0 && opponents[i]===max;i--) tied++;
     const top=opponents[Math.max(0,field.length-Math.max(1,Math.floor(entries*.1)))];
+    const cutoff100=field.length<100 ? -Infinity : opponents[field.length-100];
     for(const item of items) {
       const value=score(item.indices);
       item.scores.push(value/10);
       if(value>=top)item.top++;
       const share=value>max?1:value===max?1/(1+tied):0;
-      item.first[n]=share; item.wins+=share;
+      const hit=Number(value>=cutoff100);
+      item.hits[n]=hit; item.top100+=hit; item.first[n]=top100Target ? hit : share; item.wins+=share;
     }
   }
-  const ranked=items.map(({lineup,scores,wins,top})=>({...lineup,tournament:{
-    win:wins/scenarios,top:top/scenarios,duplicates:freq.get(key(lineup.ids))||0,
+  const ranked=items.map(({lineup,scores,wins,top,top100})=>({...lineup,tournament:{
+    win:wins/scenarios,top100:top100/scenarios,top:top/scenarios,duplicates:freq.get(key(lineup.ids))||0,
     ceiling:scores.sort((a,b)=>a-b)[Math.ceil(.9*scenarios)-1]
   }})).sort((a,b)=>b.tournament.win-a.tournament.win||b.tournament.top-a.tournament.top||b.points-a.points);
   const limits=new Map(players.map(p=>[p.id,p.selection==="lock"?count:Math.floor(count*Math.min(options.exposure??100,p.maxExposure??100)/100)]));
@@ -157,5 +162,16 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     const keys=new Set(baseline.lineups.map(l=>key(l.ids)));
     result=selectTournamentPortfolio({...pool,lineups:ranked.filter(l=>keys.has(key(l.ids)))},limits,count,difference,baseline.limited);
   }
-  return {...result,highestProjected:candidates.get(key(projected.lineups[0].ids)),baseline:baseline.lineups};
+  const ownershipForecast=players.map((p,i)=>({id:p.id,name:p.name,salary:p.salary,
+    role:p.confirmedStarter===true ? "Confirmed starter" : p.confirmedStarter===false ? "Confirmed bench" :
+      p.starter===true ? "Recent starter" : p.starter===false ? "Recent bench" : "Role unknown",
+    estimate:counts[i]/field.length,input:Number.isFinite(p.ownership)?p.ownership:null}));
+  const covered = new Uint8Array(scenarios);
+  for (const lineup of result.lineups) {
+    const item=items.find(candidate=>candidate.lineup.ids===lineup.ids);
+    item.hits.forEach((hit,i)=>{ if(hit)covered[i]=1; });
+  }
+  result.simulation.target=top100Target ? "top100" : "first";
+  result.simulation.coverage=covered.reduce((sum,v)=>sum+v,0)/scenarios;
+  return {...result,ownershipForecast,highestProjected:candidates.get(key(projected.lineups[0].ids)),baseline:baseline.lineups};
 }
