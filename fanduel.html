@@ -265,7 +265,8 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <p id="fdHistoryStatus" role="status"></p>
   <form id="fdContestReview" class="controls">
    <label>FanDuel leaderboard CSV <input id="fdLeaderboard" type="file" accept=".csv,text/csv" required></label>
-   <label>FanDuel username <input id="fdReviewUser" required></label>
+   <label>FanDuel username (optional) <input id="fdReviewUser"></label>
+   <label>Saved NBA builds from another device (optional JSON) <input id="fdReplayArchive" type="file" accept=".json,application/json"></label>
    <button type="submit">Compare with top 100</button>
   </form>
   <p id="fdContestResult" role="status"></p>

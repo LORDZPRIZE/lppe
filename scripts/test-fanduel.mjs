@@ -404,3 +404,28 @@ test("ownership review requires a pre-lock timestamp and matches explicit zeros 
   assert.equal(ownershipReview(rows,snap).groups[0].mae,12);
   assert.equal(ownershipReview(rows,{...snap,capturedAt:snap.lockAt}),null);
 });
+
+test("replays a portable NBA build without an entered username and rejects incomplete fields",async()=>{
+  const {readNBAArchive,pairHeldOut}=await import("../fanduel-nba-review.js");
+  const {reviewContest,scoreSavedBuilds}=await import("../fanduel-optimizer.js");
+  const players=Array.from({length:9},(_,i)=>({id:"123-"+i}));
+  const build={sport:"NBA",slate:"Main",capturedAt:"2026-11-24T20:00Z",
+    lockAt:"2026-11-25T00:00Z",requested:1,lineups:[players]};
+  const read=build=>readNBAArchive(JSON.stringify([{initialTop100:build,initialComparison:build}]));
+  const rows=Array.from({length:101},(_,i)=>({entryid:String(i+1),entryname:"Other",rank:String(i+1),points:String(144-i),
+    ...(i<9 ? {player:"Player ("+players[i].id+")",fpts:"5"} : {})}));
+  Object.entries({"Start Time":"2026-11-24 19:00:00 ET","Contest Name":"Example",Slate:"Main","Seats Filled":"101"})
+    .forEach(([contestinfo,contestvalue],i)=>Object.assign(rows[i],{contestinfo,contestvalue}));
+  const field=reviewContest(rows);
+  assert.equal(field.cutoff,45);
+  assert.equal(field.best,null);
+  assert.equal(reviewContest(rows,"absent").userEntries,0);
+  const replay=scoreSavedBuilds(rows,read(build),field.cutoff);
+  assert.equal(pairHeldOut(rows,replay).tournament.bestRank,100);
+  assert.equal(pairHeldOut(rows,replay).projection.hits,1);
+  assert.equal(pairHeldOut(rows.slice(0,-1),replay),null);
+  assert.equal(pairHeldOut([...rows.slice(0,-1),rows[99]],replay),null);
+  assert.equal(pairHeldOut([...rows.slice(0,-1),{...rows[100],points:""}],replay),null);
+  assert.throws(()=>read({...build,capturedAt:build.lockAt}),/timestamp/);
+  assert.throws(()=>read({...build,lineups:[players.map(()=>players[0])]}),/lineup/);
+});
