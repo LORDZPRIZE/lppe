@@ -178,15 +178,8 @@ export function readNBAArchive(text) {
 }
 
 export function pairHeldOut(rows,replay) {
-  const tournament=replay.find(item=>item.version==="initialTournament" && item.scored===item.total &&
-    item.total===item.requested && item.hits!==null) || replay.find(item=>item.version==="initialTop100" && item.scored===item.total &&
-    item.total===item.requested && item.hits!==null);
-  const projection=tournament && replay.find(item=>item.version===(tournament.version==="initialTournament"?"initialBaseline":"initialComparison") &&
-    item.capturedAt===tournament.capturedAt && item.lockAt===tournament.lockAt && item.slate===tournament.slate &&
-    item.scored===tournament.total && item.total===item.scored);
-  if(!projection || !(Date.parse(tournament.capturedAt)<Date.parse(tournament.lockAt)))return null;
   const info=Object.fromEntries(rows.filter(r=>r.contestinfo).map(r=>[r.contestinfo,r.contestvalue]));
-  const eastern=easternLockLabel(tournament.lockAt);
+
   const entries=rows.filter(r=>r.entryid);
   if (new Set(entries.map(r=>r.entryid)).size!==entries.length) return null;
   const emptySeats=entries.filter(row=>row.points==="null");
@@ -197,7 +190,24 @@ export function pairHeldOut(rows,replay) {
   if (entries.some(row=>row.points!=="null" && (!String(row.points??"").trim() ||
       !Number.isFinite(Number(row.points)) || (emptySeats.length &&
       !(Number(row.rank)>=1 && Number(row.rank)<=scoredSeats))))) return null;
-  if(info["Start Time"]!==eastern || !info["Contest Name"] || !info.Slate ||
-     Number(String(info["Seats Filled"]).replaceAll(",",""))!==entries.length)return null;
-  return {key:JSON.stringify([tournament.lockAt,tournament.slate]),contest:info["Contest Name"],tournament,projection};
+  if (!entries.length || !info["Start Time"] || !info["Contest Name"] || !info.Slate ||
+      Number(String(info["Seats Filled"]).replaceAll(",",""))!==entries.length) return null;
+
+  // Live snapshots append the slate date to the provider label.
+  const label=value=>String(value || "").trim().toLowerCase().replace(/\s*·\s*\d{4}-\d{2}-\d{2}$/, "")
+    .replace(/^(?:fanduel\s+)?nba\s+/, "").replace(/\s+slate$/, "").trim();
+  const complete=item=>item.total>0 && item.scored===item.total && item.requested===item.total && Number.isInteger(item.hits);
+  const candidates=replay.filter(item=>(item.version==="initialTournament" || item.version==="initialTop100") &&
+    complete(item) && Date.parse(item.capturedAt)<Date.parse(item.lockAt) &&
+    easternLockLabel(item.lockAt)===info["Start Time"] && label(item.slate)===label(info.Slate))
+    .sort((a,b)=>Date.parse(a.capturedAt)-Date.parse(b.capturedAt));
+  for (const tournament of candidates) {
+    const baselineVersion=tournament.version==="initialTournament" ? "initialBaseline" : "initialComparison";
+    const projection=replay.find(item=>item.recordIndex===tournament.recordIndex && item.version===baselineVersion &&
+      complete(item) && item.total===tournament.total && item.capturedAt===tournament.capturedAt &&
+      item.lockAt===tournament.lockAt && item.slate===tournament.slate);
+    if (!projection) continue;
+    return {key:JSON.stringify([tournament.lockAt,tournament.slate]),contest:info["Contest Name"],tournament,projection};
+  }
+  return null;
 }

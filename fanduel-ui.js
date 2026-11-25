@@ -1267,8 +1267,7 @@ byId("fdContestReview").addEventListener("submit",async event => {
       if (!matchedForecast) output.append(" No matching pre-lock ownership forecast was saved for this export.");
       const paired=pairHeldOut(rows,replay);
       if (paired) {
-        const snapshot=records.map(record=>record.initialTournament).find(build=>build?.capturedAt===paired.tournament.capturedAt &&
-          build.lockAt===paired.tournament.lockAt && build.slate===paired.tournament.slate);
+        const snapshot=records[paired.tournament.recordIndex]?.[paired.tournament.version];
         const ceilings=reviewPlayerCeilings(rows,snapshot);
         if (ceilings) {
           const panel=document.createElement("details"),title=document.createElement("summary");
@@ -1294,6 +1293,8 @@ byId("fdContestReview").addEventListener("submit",async event => {
           values.filter(x=>x.tournament.hits>0).length+"/"+values.length+" · projection-only "+
           values.filter(x=>x.projection.hits>0).length+"/"+values.length+". One contest per slate, equal entry counts.";
         output.append(note);
+      } else if (replay.length) {
+        output.append(" Paired benchmark pending. Use complete standings and an archive containing both original builds for the same slate, lock and lineup count.");
       }
       for (const item of replay) {
         const note = document.createElement("p");

@@ -458,6 +458,16 @@ test("replays a portable NBA build without an entered username and rejects incom
   const replay=scoreSavedBuilds(rows,read(build),field.cutoff);
   assert.equal(pairHeldOut(rows,replay).tournament.bestRank,100);
   assert.equal(pairHeldOut(rows,replay).projection.hits,0);
+  const modern=(changes={})=>({...build,slate:"NBA Main Slate · 2026-11-24",...changes});
+  const pair=build=>({initialTournament:build,initialBaseline:build});
+  const choose=records=>pairHeldOut(rows,scoreSavedBuilds(rows,records,field.cutoff));
+  const early=modern(), late=modern({capturedAt:"2026-11-24T21:00Z"});
+  const wrong=pair(modern({slate:"All Day"}));
+  assert.equal(choose([wrong]),null);
+  assert.equal(choose([wrong,pair(late),pair(early)]).tournament.capturedAt,early.capturedAt);
+  assert.equal(choose([{initialTournament:early},{initialBaseline:early}]),null);
+  assert.equal(choose([{initialTournament:early,initialBaseline:{...early,requested:2}}]),null);
+  assert.equal(choose([pair(modern({lockAt:"2026-11-25T01:00Z"})),pair(late)]).projection.capturedAt,late.capturedAt);
   const emptySeat={...rows[100],points:"null",lineup:"",won:"$0.00",rank:"101"};
   assert.ok(pairHeldOut([...rows.slice(0,-1),emptySeat],replay));
   for (const invalid of [{lineup:"PG Player"}, {won:"$1.00"}, {rank:"100"}]) {

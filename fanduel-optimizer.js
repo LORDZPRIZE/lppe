@@ -627,7 +627,7 @@ export function scoreSavedBuilds(rows,records,cutoff) {
     if (id && row.fpts && Number.isFinite(Number(row.fpts))) actuals.set(id,Number(row.fpts));
   }
   const results = [];
-  for (const record of records) {
+  for (const [recordIndex,record] of records.entries()) {
     for (const [version,build] of Object.entries(record)) {
       if (version === "latest" && build.capturedAt === record.first?.capturedAt) continue;
       if (!(Date.parse(build.capturedAt) < Date.parse(build.lockAt))) continue;
@@ -644,7 +644,7 @@ export function scoreSavedBuilds(rows,records,cutoff) {
         const ties = field.filter(n=>n===value).length+rounded.filter(n=>n===value).length;
         for (let place=rank;place<rank+ties;place++) gross+=(payouts.get(place)||0)/ties;
       }
-      results.push({version,slate:build.slate,capturedAt:build.capturedAt,lockAt:build.lockAt,requested:build.requested,scored:scores.length,total:build.lineups.length,
+      results.push({version,recordIndex,slate:build.slate,capturedAt:build.capturedAt,lockAt:build.lockAt,requested:build.requested,scored:scores.length,total:build.lineups.length,
         best,bestRank,gapToFirst:Math.max(0,(field[0]??best)-best),
         net:rounded.length===build.lineups.length && payouts.size && Number.isFinite(fee) ? gross-fee*rounded.length : null,hits:cutoff === null ? null : scores.filter(score => Math.round(score*100) >= Math.round(cutoff*100)).length});
     }
