@@ -444,6 +444,11 @@ test("replays a portable NBA build without an entered username and rejects incom
   const replay=scoreSavedBuilds(rows,read(build),field.cutoff);
   assert.equal(pairHeldOut(rows,replay).tournament.bestRank,100);
   assert.equal(pairHeldOut(rows,replay).projection.hits,0);
+  const emptySeat={...rows[100],points:"null",lineup:"",won:"$0.00",rank:"101"};
+  assert.ok(pairHeldOut([...rows.slice(0,-1),emptySeat],replay));
+  for (const invalid of [{lineup:"PG Player"}, {won:"$1.00"}, {rank:"100"}]) {
+    assert.equal(pairHeldOut([...rows.slice(0,-1),{...emptySeat,...invalid}],replay),null);
+  }
   assert.equal(pairHeldOut(rows.slice(0,-1),replay),null);
   assert.equal(pairHeldOut([...rows.slice(0,-1),rows[99]],replay),null);
   assert.equal(pairHeldOut([...rows.slice(0,-1),{...rows[100],points:""}],replay),null);

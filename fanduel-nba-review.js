@@ -124,8 +124,15 @@ export function pairHeldOut(rows,replay) {
   const format=options=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",...options}).format(date);
   const eastern=format({year:"numeric",month:"2-digit",day:"2-digit"})+" "+format({hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"})+" ET";
   const entries=rows.filter(r=>r.entryid);
-  if (new Set(entries.map(r=>r.entryid)).size!==entries.length ||
-      entries.some(r=>!String(r.points??"").trim() || !Number.isFinite(Number(r.points)))) return null;
+  if (new Set(entries.map(r=>r.entryid)).size!==entries.length) return null;
+  const emptySeats=entries.filter(row=>row.points==="null");
+  const scoredSeats=entries.length-emptySeats.length;
+  // FanDuel lists unfilled rosters at a shared trailing rank with a literal null score.
+  if (emptySeats.length && (!scoredSeats || emptySeats.some(row=>
+    row.lineup!=="" || row.won!=="$0.00" || Number(row.rank)!==scoredSeats+1))) return null;
+  if (entries.some(row=>row.points!=="null" && (!String(row.points??"").trim() ||
+      !Number.isFinite(Number(row.points)) || (emptySeats.length &&
+      !(Number(row.rank)>=1 && Number(row.rank)<=scoredSeats))))) return null;
   if(info["Start Time"]!==eastern || !info["Contest Name"] || !info.Slate ||
      Number(String(info["Seats Filled"]).replaceAll(",",""))!==entries.length)return null;
   return {key:JSON.stringify([tournament.lockAt,tournament.slate]),contest:info["Contest Name"],tournament,projection};
