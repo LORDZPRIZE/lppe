@@ -5,6 +5,19 @@ export const roster = [
 ];
 export const salaryCap = 60000;
 
+export function automaticSlateChoice(slates,sport,selectedId,now = Date.now()) {
+  const upcoming = slates.filter(slate => slate.lockAt == null || slate.lockAt > now);
+  const selected = upcoming.find(slate => String(slate.id) === selectedId);
+  if (selected || sport !== "NBA") return {slate:selected || upcoming[0]};
+  const contestDay = new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York"});
+  const today = contestDay.format(now);
+  const main = upcoming.filter(slate => Number.isFinite(slate.lockAt) && contestDay.format(slate.lockAt) === today &&
+    /^(?:NBA\s+)?Main(?:\s+Slate)?$/i.test(String(slate.label).trim()));
+  if (main.length === 1) return {slate:main[0]};
+  return {message:(main.length ? "Multiple NBA Main slates are listed." : "Today's NBA Main slate could not be identified.") +
+    " Use the Live contest slate menu or import your FanDuel player-list CSV."};
+}
+
 const slot = (label,...positions) => [label,positions.length ? positions : [label]];
 export const profiles = {
   NBA:{name:"NBA",roster,salaryCap,maxTeam:4},

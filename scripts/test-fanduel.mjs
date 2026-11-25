@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { liveRefreshSeconds, applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
+import { automaticSlateChoice, liveRefreshSeconds, applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
 import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, onRequestGet } from "../functions/api/nba/fanduel.js";
 import { buildNFLTournament, rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
@@ -543,4 +543,24 @@ test("pre-lock player ceiling review counts exact-ID results, strict exceedances
   assert.equal(checked.missing,2);
   for(const group of checked.groups){assert.equal(group.above,1);assert.equal(group.total,3)}
   assert.equal(reviewPlayerCeilings(rows,{...snapshot,capturedAt:snapshot.lockAt}),null);
+});
+
+
+test("one-button NBA loading requires one identifiable Main on the current contest day", () => {
+  const now = Date.parse("2026-11-25T20:00:00Z");
+  const lockAt = Date.parse("2026-11-26T00:00:00Z");
+  const all = {id:"all",label:"All Day",lockAt};
+  const main = {id:"main",label:"NBA Main Slate",lockAt};
+  const next = {...main,id:"next",lockAt:lockAt+86400000};
+  const preview = {id:"public",label:"NBA public preview"};
+  const choose = (slates,selected="") => automaticSlateChoice(slates,"NBA",selected,now);
+  assert.equal(choose([all,next,main]).slate,main);
+  assert.equal(choose([all,next,main],"all").slate,all);
+  assert.equal(choose([preview],"public").slate,preview);
+  assert.equal(choose([all,main],"expired-id").slate,main);
+  for (const invalid of [next,preview,{...main,lockAt:now},{...main,lockAt:null},{...main,label:"Main Late"}]) {
+    assert.match(choose([all,invalid]).message,/could not be identified/);
+  }
+  assert.match(choose([main,{...main,id:"second"}]).message,/Multiple/);
+  assert.equal(automaticSlateChoice([all,main],"NFL","",now).slate,all);
 });

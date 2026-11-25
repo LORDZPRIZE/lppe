@@ -1,6 +1,6 @@
 import {enteredNBAIds,reconcileNBAEntries,reviewPlayerCeilings,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
 import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
-import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { automaticSlateChoice, matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -81,7 +81,7 @@ function startAutomaticSession() {
     return;
   }
   if (saved?.resumeAt > now) {
-    byId("fdStatus").textContent = "Live requests paused until "+new Date(saved.resumeAt).toLocaleString()+". Refresh slates to start sooner.";
+    byId("fdStatus").textContent = saved.message || ("Live requests paused until "+new Date(saved.resumeAt).toLocaleString()+". Refresh slates to start sooner.");
     return;
   }
   writeSession({resumeAt:now+4*3600000});
@@ -989,12 +989,18 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
       if (data.slates.some(slate => slate.id === previousId)) liveSlate.value = previousId;
       liveSlate.disabled = false;
       if (automatic.checked && !importedSlateName) {
-        const upcoming = data.slates.filter(slate => !slate.lockAt || slate.lockAt > Date.now());
-        const preferred = upcoming.find(slate => String(slate.id) === previousId) ||
-          upcoming[0];
-        if (preferred) {
-          liveSlate.value = String(preferred.id);
+        const choice = automaticSlateChoice(data.slates,sport.value,previousId);
+        if (choice.slate) {
+          liveSlate.value = String(choice.slate.id);
           return loadPublicPool();
+        }
+        if (choice.message) {
+          liveSlate.value = "";
+          const resumeAt = Date.now()+30*60000;
+          const message = choice.message+" Automatic recheck after "+new Date(resumeAt).toLocaleTimeString()+".";
+          if (!loadedLiveSlate) writeSession({resumeAt,message});
+          byId("fdStatus").textContent = loadedLiveSlate ? choice.message : message;
+          return;
         }
       }
       byId("fdStatus").textContent = "Choose the slate that matches your FanDuel contest, then build.";
