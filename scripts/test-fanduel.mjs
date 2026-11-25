@@ -532,3 +532,15 @@ test("FanDuel entered CSV reconciliation consumes roster copies across reordered
   assert.deepEqual(reconcileNBAEntries([a,b],entries),{matched:1,missing:[2],extra:[2,3],repeated:[2],distinct:2});
   assert.equal(reconcileNBAEntries([a,a,c],entries).matched,3);
 });
+
+test("pre-lock player ceiling review counts exact-ID results, strict exceedances and missing scores",async()=>{
+  const {reviewPlayerCeilings}=await import("../fanduel-nba-review.js");
+  const forecast=[0,1,2,3,4].map(i=>({id:"12-"+i,p90:i,role:"Confirmed starter",salary:6000}));
+  const snapshot={ownershipForecast:forecast,capturedAt:"2026-11-24T20:00Z",lockAt:"2026-11-25T00:00Z"};
+  const rows=["0","2","","3","4"].map((fpts,i)=>({player:"Test (12-"+i+")",fpts}));
+  rows.push({player:"Test (12-4)",fpts:"7"});
+  const checked=reviewPlayerCeilings(rows,snapshot);
+  assert.equal(checked.missing,2);
+  for(const group of checked.groups){assert.equal(group.above,1);assert.equal(group.total,3)}
+  assert.equal(reviewPlayerCeilings(rows,{...snapshot,capturedAt:snapshot.lockAt}),null);
+});

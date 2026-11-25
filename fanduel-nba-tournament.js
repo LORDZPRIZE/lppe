@@ -253,10 +253,12 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     return {lineup,indices:[...lineup.ids].map(id=>index.get(id)),first,hits:new Uint8Array(scenarios),scores:[],wins:0,top:0,top20:0};
   });
   const outcomes=new Int32Array(players.length), opponents=new Int32Array(field.length);
+  const playerScores=players.map(()=>new Int32Array(scenarios));
   const scenarioRandom=generator(78602);
   const score=ids=>outcomes[ids[0]]+outcomes[ids[1]]+outcomes[ids[2]]+outcomes[ids[3]]+outcomes[ids[4]]+outcomes[ids[5]]+outcomes[ids[6]]+outcomes[ids[7]]+outcomes[ids[8]];
   for(let n=0;n<scenarios;n++) {
     sampleScores(players,scenarioRandom,outcomes,rotations);
+    for (let i=0;i<players.length;i++) playerScores[i][n]=outcomes[i];
     for(let i=0;i<field.length;i++) opponents[i]=score(field[i]);
     opponents.sort();
     const max=opponents.at(-1);
@@ -289,6 +291,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   const ownershipForecast=players.map((p,i)=>({id:p.id,name:p.name,salary:p.salary,
     role:p.confirmedStarter===true ? "Confirmed starter" : p.confirmedStarter===false ? "Confirmed bench" :
       p.starter===true ? "Recent starter" : p.starter===false ? "Recent bench" : "Role unknown",
+    p90:p.points>0 && !unavailable(p.status) ? playerScores[i].sort()[Math.ceil(.9*scenarios)-1]/10 : null,
     estimate:counts[i]/field.length,input:Number.isFinite(p.ownership)?p.ownership:null}));
   const covered = new Uint8Array(scenarios);
   for (const lineup of result.lineups) {

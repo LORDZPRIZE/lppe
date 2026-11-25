@@ -1,4 +1,4 @@
-import {enteredNBAIds,reconcileNBAEntries,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
+import {enteredNBAIds,reconcileNBAEntries,reviewPlayerCeilings,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
 import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
 import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
@@ -1244,6 +1244,22 @@ byId("fdContestReview").addEventListener("submit",async event => {
       if (!matchedForecast) output.append(" No matching pre-lock ownership forecast was saved for this export.");
       const paired=pairHeldOut(rows,replay);
       if (paired) {
+        const snapshot=records.map(record=>record.initialTournament).find(build=>build?.capturedAt===paired.tournament.capturedAt &&
+          build.lockAt===paired.tournament.lockAt && build.slate===paired.tournament.slate);
+        const ceilings=reviewPlayerCeilings(rows,snapshot);
+        if (ceilings) {
+          const panel=document.createElement("details"),title=document.createElement("summary");
+          title.textContent="Player ceiling accuracy · first pre-lock build";
+          const explanation=document.createElement("p");
+          explanation.textContent="Share scoring above the simulated 90th percentile. Long-run reference: about 10%. Missing or conflicting results: "+ceilings.missing+".";
+          panel.append(title,explanation);
+          for (const group of ceilings.groups) {
+            const note=document.createElement("p");
+            note.textContent=group.label+" · "+group.above+" of "+group.total+" ("+percent.format(group.above/group.total)+")";
+            panel.append(note);
+          }
+          output.append(panel);
+        }
         const history=JSON.parse(localStorage.getItem("lppe-fd-top20-benchmark-v1") || "{}");
         const prior=history[paired.key];
         if (!prior || (prior.contest===paired.contest &&
@@ -1342,7 +1358,7 @@ function saveBuildHistory(baseline,ownershipForecast,comparison,news,newsCompari
       record.tournament = {...snapshot,ownershipForecast,comparison};
       record.projection = {...snapshot,settings:{...snapshot.settings,fdObjective:"projection"},lineups:serialize(baseline)};
       if (!record.initialTournament) {
-        record.initialTournament=snapshot;
+        record.initialTournament={...snapshot,ownershipForecast};
         record.initialBaseline=record.projection;
       }
     }

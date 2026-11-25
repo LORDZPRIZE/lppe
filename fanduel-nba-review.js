@@ -25,6 +25,33 @@ export function ownershipReview(rows,snapshot) {
     players:players.sort((a,b)=>Math.abs(b.delta)-Math.abs(a.delta))} : null;
 }
 
+export function reviewPlayerCeilings(rows,snapshot) {
+  if (!Array.isArray(snapshot?.ownershipForecast) || !(Date.parse(snapshot.capturedAt)<Date.parse(snapshot.lockAt))) return null;
+  const actual=new Map();
+  for (const row of rows) {
+    const id=row.player?.match(/\((\d+-\d+)\)$/)?.[1];
+    const raw=String(row.fpts??"").trim();
+    const value=Number(raw);
+    if (!id || !raw || !Number.isFinite(value)) continue;
+    if (actual.has(id) && actual.get(id)!==value) actual.set(id,null);
+    else actual.set(id,value);
+  }
+  const groups=new Map();
+  let missing=0;
+  for (const p of snapshot.ownershipForecast) {
+    if (!Number.isFinite(p.p90)) continue;
+    if (!Number.isFinite(actual.get(p.id))) {missing++;continue;}
+    const band=p.salary<5000?"Under $5k":p.salary<8000?"$5k–$7.9k":"$8k+";
+    for (const label of ["All matched players",band,p.role || "Role unknown"]) {
+      const group=groups.get(label) || {label,above:0,total:0};
+      group.total++;
+      if (actual.get(p.id)>p.p90) group.above++;
+      groups.set(label,group);
+    }
+  }
+  return groups.size ? {groups:[...groups.values()],missing} : null;
+}
+
 export function lateSwapLineup(pool,ids,games,reports,now,priorLocks=[]) {
   if (ids.length!==9 || new Set(ids).size!==9) throw new Error("Each entry needs nine distinct IDs in FanDuel slot order.");
   const starts=new Map();
