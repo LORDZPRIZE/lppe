@@ -1302,7 +1302,7 @@ byId("fdContestReview").addEventListener("submit",async event => {
           " lineups · best "+item.best.toFixed(1)+(item.hits === null ? "" : " · "+item.hits+" reached the top-20 score")+" · paper best rank "+item.bestRank+" · "+item.gapToFirst.toFixed(1)+" points from first"+(item.net===null ? "" : " · estimated net "+dollars.format(item.net));
         output.append(note);
       }
-      if (!replay.length) output.append(" No saved pre-lock lineups fully matched this export by FanDuel player ID.");
+      if (!replay.length) output.append(" No saved pre-lock lineup could be scored. Check that the standings include one consistent point total for every player ID in the lineup.");
     } catch { output.append(" Saved build history is unavailable."); }
   } catch (error) {
     output.textContent = error.message;

@@ -1,4 +1,4 @@
-import {csvRecords,buildLineups,matchName,profiles,teamCode,unavailable} from "./fanduel-optimizer.js";
+import {contestPlayerScores,csvRecords,buildLineups,matchName,profiles,teamCode,unavailable} from "./fanduel-optimizer.js";
 
 function easternLockLabel(lockAt) {
   const date=new Date(lockAt);
@@ -44,15 +44,7 @@ export function ownershipReview(rows,snapshot) {
 
 export function reviewPlayerCeilings(rows,snapshot) {
   if (!Array.isArray(snapshot?.ownershipForecast) || !(Date.parse(snapshot.capturedAt)<Date.parse(snapshot.lockAt))) return null;
-  const actual=new Map();
-  for (const row of rows) {
-    const id=row.player?.match(/\((\d+-\d+)\)$/)?.[1];
-    const raw=String(row.fpts??"").trim();
-    const value=Number(raw);
-    if (!id || !raw || !Number.isFinite(value)) continue;
-    if (actual.has(id) && actual.get(id)!==value) actual.set(id,null);
-    else actual.set(id,value);
-  }
+  const actual=contestPlayerScores(rows);
   const groups=new Map();
   let missing=0;
   for (const p of snapshot.ownershipForecast) {

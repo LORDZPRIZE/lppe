@@ -609,6 +609,19 @@ export function reviewCSV(lineups,sport = "NBA") {
   return rows.map(row => row.map(escape).join(",")).join("\r\n");
 }
 
+export function contestPlayerScores(rows) {
+  const actual=new Map();
+  for (const row of rows) {
+    const id=row.player?.match(/\((\d+-\d+)\)$/)?.[1];
+    const raw=String(row.fpts??"").trim();
+    const value=Number(raw);
+    if (!id || !raw || !Number.isFinite(value)) continue;
+    if (actual.has(id) && actual.get(id)!==value) actual.set(id,null);
+    else actual.set(id,value);
+  }
+  return actual;
+}
+
 export function scoreSavedBuilds(rows,records,cutoff) {
   const field = rows.filter(row=>row.entryid && row.points && Number.isFinite(Number(row.points))).map(row=>Number(row.points)).sort((a,b)=>b-a);
   const payouts = new Map();
@@ -621,18 +634,14 @@ export function scoreSavedBuilds(rows,records,cutoff) {
     }
   }
   const fee = csvNumber(rows.find(row=>row.contestinfo==="Entry Fee")?.contestvalue);
-  const actuals = new Map();
-  for (const row of rows) {
-    const id = row.player?.match(/\((\d+-\d+)\)$/)?.[1];
-    if (id && row.fpts && Number.isFinite(Number(row.fpts))) actuals.set(id,Number(row.fpts));
-  }
+  const actuals = contestPlayerScores(rows);
   const results = [];
   for (const [recordIndex,record] of records.entries()) {
     for (const [version,build] of Object.entries(record)) {
       if (version === "latest" && build.capturedAt === record.first?.capturedAt) continue;
       if (!(Date.parse(build.capturedAt) < Date.parse(build.lockAt))) continue;
       const scores = build.lineups.filter(players => players.length &&
-        players.every(player => actuals.has(player.id))).map(players =>
+        players.every(player => Number.isFinite(actuals.get(player.id)))).map(players =>
           players.reduce((total,player) => total+actuals.get(player.id),0));
       if (!scores.length) continue;
       const rounded = scores.map(value=>Math.round(value*100)/100);

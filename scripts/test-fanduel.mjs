@@ -468,6 +468,13 @@ test("replays a portable NBA build without an entered username and rejects incom
   assert.equal(choose([{initialTournament:early},{initialBaseline:early}]),null);
   assert.equal(choose([{initialTournament:early,initialBaseline:{...early,requested:2}}]),null);
   assert.equal(choose([pair(modern({lockAt:"2026-11-25T01:00Z"})),pair(late)]).projection.capturedAt,late.capturedAt);
+  const extraScore=fpts=>({player:"Player ("+players[0].id+")",fpts});
+  const score=extra=>scoreSavedBuilds(extra,read(build),field.cutoff);
+  assert.equal(score([...rows,extraScore("5.00")])[0].best,45);
+  assert.equal(score([...rows,extraScore("999"),extraScore("5")]).length,0);
+  assert.equal(score([extraScore("999"),...rows]).length,0);
+  assert.equal(score([{...rows[0],fpts:" "},...rows.slice(1)]).length,0);
+  assert.equal(score([{...rows[0],fpts:0},...rows.slice(1)])[0].best,40);
   const emptySeat={...rows[100],points:"null",lineup:"",won:"$0.00",rank:"101"};
   assert.ok(pairHeldOut([...rows.slice(0,-1),emptySeat],replay));
   for (const invalid of [{lineup:"PG Player"}, {won:"$1.00"}, {rank:"100"}]) {
