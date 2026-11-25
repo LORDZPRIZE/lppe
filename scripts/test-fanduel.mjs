@@ -467,3 +467,13 @@ test("NBA team minutes cover regulation and overtime, preserve user exclusions a
   players[2].minutes=undefined;
   assert.deepEqual(teamRotations(players),[]);
 });
+
+test("review export counts distinct player sets independent of slot order and counts sources once per player",async()=>{
+  const {summarizeReviewExport}=await import("../fanduel-optimizer.js");
+  const pick=(id,source)=>({player:{id,source}});
+  const a=pick("1","Projection CSV"), b=pick("2","FanDuel FPPG"), c=pick("3",null);
+  const summary=summarizeReviewExport([{picks:[a,b]},{picks:[b,a]},{picks:[a,c]}]);
+  assert.equal(summary.distinct,2);
+  assert.equal(summary.players,3);
+  assert.deepEqual([...summary.sources],[["Projection CSV",1],["FanDuel FPPG",1],["Unknown source",1]]);
+});

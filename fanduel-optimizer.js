@@ -540,6 +540,21 @@ export function buildLineups(players, count, difference, searchLimit = 160000, s
   return {lineups,limited,restriction};
 }
 
+export function summarizeReviewExport(lineups) {
+  const rosters=new Set();
+  const players=new Map();
+  for (const {picks} of lineups) {
+    rosters.add(JSON.stringify(picks.map(({player})=>String(player.id)).sort()));
+    for (const {player} of picks) players.set(player.id,player);
+  }
+  const sources=new Map();
+  for (const player of players.values()) {
+    const source=player.source || "Unknown source";
+    sources.set(source,(sources.get(source) || 0)+1);
+  }
+  return {distinct:rosters.size,players:players.size,sources};
+}
+
 export function reviewCSV(lineups,sport = "NBA") {
   const {roster} = rosterProfile(sport);
   const escape = value => {

@@ -1,6 +1,6 @@
 import {enteredNBAIds,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
 import { addRotations } from "./fanduel-nba-tournament.js";
-import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
@@ -221,6 +221,7 @@ function clearLineups() {
   build.disabled = false;
   lineups = [];
   exportButton.disabled = true;
+  byId("fdExportCheck").replaceChildren();
   byId("fdResults").replaceChildren();
   byId("fdResultsPanel").hidden = true;
 }
@@ -765,6 +766,27 @@ function renderLineups(result,requested,highCeiling) {
     portfolio.append(summary,overlap,list);
     output.append(portfolio);
   }
+  const preflight=byId("fdExportCheck");
+  preflight.replaceChildren();
+  if (lineups.length) {
+    const audit=summarizeReviewExport(lineups);
+    const duplicates=lineups.length-audit.distinct;
+    const heading=document.createElement("strong");
+    heading.textContent="Review CSV · "+audit.distinct+" distinct rosters across "+lineups.length+" lineups";
+    const details=document.createElement("p");
+    details.textContent=(duplicates ? duplicates+" repeated "+(duplicates===1?"entry. ":"entries. ") : "")+
+      "Inputs for "+audit.players+" distinct players:";
+    const sources=document.createElement("ul");
+    for (const [source,count] of audit.sources) {
+      const item=document.createElement("li");
+      const timestamp=source==="Daily Fantasy Fuel" ? Date.parse(loadedLiveSlate?.projectionUpdatedAt) : NaN;
+      const freshness=Number.isFinite(timestamp) ? "updated "+new Date(timestamp).toLocaleString() :
+        source==="FanDuel FPPG" ? "historical average; as-of time unknown" : "update time unknown";
+      item.textContent=source+" · "+count+" · "+freshness;
+      sources.append(item);
+    }
+    preflight.append(heading,details,sources);
+  }
   exportButton.disabled = !lineups.length;
 }
 
@@ -992,7 +1014,7 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
     clearLineups();
     clearRemoval();
     slateLockAt = data.lockAt;
-    loadedLiveSlate = {id:previousId,updatedAt:data.updatedAt,date:data.date,name:data.label+" · "+data.date,baseline,projectionText};
+    loadedLiveSlate = {id:previousId,projectionUpdatedAt:data.projectionCoverage?.updatedAt ?? (data.poolType==="public preview" ? data.updatedAt : null),updatedAt:data.updatedAt,date:data.date,name:data.label+" · "+data.date,baseline,projectionText};
     loadedSalaryFile = loadedSlateKey = undefined;
     importedSlateName = undefined;
     players = selectedPlayers;
