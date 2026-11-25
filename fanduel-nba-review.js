@@ -1,27 +1,44 @@
 import {csvRecords,buildLineups,matchName,profiles,teamCode,unavailable} from "./fanduel-optimizer.js";
 
+function easternLockLabel(lockAt) {
+  const date=new Date(lockAt);
+  const format=options=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",...options}).format(date);
+  return format({year:"numeric",month:"2-digit",day:"2-digit"})+" "+format({hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"})+" ET";
+}
+
 export function ownershipReview(rows,snapshot) {
-  if (!snapshot?.ownershipForecast || !(Date.parse(snapshot.capturedAt)<Date.parse(snapshot.lockAt))) return null;
+  if (!Array.isArray(snapshot?.ownershipForecast) || !(Date.parse(snapshot.capturedAt)<Date.parse(snapshot.lockAt))) return null;
+  const start=rows.find(row=>row.contestinfo==="Start Time")?.contestvalue;
+  if (start && start!==easternLockLabel(snapshot.lockAt)) return null;
   const actual=new Map();
   for (const row of rows) {
     const id=row.player?.match(/\((\d+-\d+)\)$/)?.[1];
-    const pct=row.drafted?.match(/^(\d+(?:\.\d+)?)%$/);
-    if (id && pct && Number(pct[1])<=100) actual.set(id,Number(pct[1]));
+    const pct=row.drafted?.trim().match(/^(\d+(?:\.\d+)?)%$/);
+    if (!id || !pct || Number(pct[1])>100) continue;
+    const value=Number(pct[1]);
+    if (!actual.has(id)) actual.set(id,value);
+    else if (actual.get(id)!==value) actual.set(id,null);
   }
   const groups=new Map();
   const players=[];
+  const forecasts=new Map();
   for (const p of snapshot.ownershipForecast) {
-    if (!actual.has(p.id) || !Number.isFinite(p.estimate)) continue;
-    const observed=actual.get(p.id), predicted=100*p.estimate;
+    if (!p?.id) continue;
+    forecasts.set(p.id,forecasts.has(p.id) ? null : p);
+  }
+  for (const [id,p] of forecasts) {
+    if (!p || !Number.isFinite(actual.get(id)) || !Number.isFinite(p.estimate) || p.estimate<0 || p.estimate>1) continue;
+    const observed=actual.get(id), predicted=100*p.estimate;
     const delta=predicted-observed;
-    const tier=p.salary<5000?"Under $5k":p.salary<8000?"$5k–$7.9k":"$8k+";
-    for (const name of ["All matched players",tier,p.role]) {
-      const group=groups.get(name)||{name,count:0,total:0};
-      group.count++;group.total+=Math.abs(delta);groups.set(name,group);
+    const tier=!Number.isFinite(p.salary) ? "Salary unknown" : p.salary<5000?"Under $5k":p.salary<8000?"$5k–$7.9k":"$8k+";
+    for (const name of new Set(["All matched players",tier,p.role || "Role unknown"])) {
+      const group=groups.get(name)||{name,count:0,total:0,signed:0};
+      group.count++;group.total+=Math.abs(delta);group.signed+=delta;groups.set(name,group);
     }
     players.push({name:p.name,predicted,observed,delta});
   }
-  return players.length ? {groups:[...groups.values()].map(g=>({...g,mae:g.total/g.count})),
+  return players.length ? {forecastCount:forecasts.size,lockMatched:Boolean(start),
+    groups:[...groups.values()].map(g=>({...g,mae:g.total/g.count,bias:g.signed/g.count})),
     players:players.sort((a,b)=>Math.abs(b.delta)-Math.abs(a.delta))} : null;
 }
 
@@ -169,9 +186,7 @@ export function pairHeldOut(rows,replay) {
     item.scored===tournament.total && item.total===item.scored);
   if(!projection || !(Date.parse(tournament.capturedAt)<Date.parse(tournament.lockAt)))return null;
   const info=Object.fromEntries(rows.filter(r=>r.contestinfo).map(r=>[r.contestinfo,r.contestvalue]));
-  const date=new Date(tournament.lockAt);
-  const format=options=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",...options}).format(date);
-  const eastern=format({year:"numeric",month:"2-digit",day:"2-digit"})+" "+format({hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"})+" ET";
+  const eastern=easternLockLabel(tournament.lockAt);
   const entries=rows.filter(r=>r.entryid);
   if (new Set(entries.map(r=>r.entryid)).size!==entries.length) return null;
   const emptySeats=entries.filter(row=>row.points==="null");

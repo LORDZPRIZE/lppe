@@ -595,3 +595,20 @@ test("requesting both a listing and a selected salary pool fails before provider
   assert.equal(response.status,400);
   assert.match((await response.json()).error,/one slate ID/);
 });
+
+test("ownership diagnostics measure coverage and signed error without counting conflicting IDs",async()=>{
+  const {ownershipReview}=await import("../fanduel-nba-review.js");
+  const rows=[{contestinfo:"Start Time",contestvalue:"2026-11-24 19:00:00 ET"},
+    ...["10","20","40","10"].map((value,i)=>({player:"P ("+["1-1","1-2","1-2","1-2"][i]+")",drafted:value+"%"})),
+    {player:"P (1-3)",drafted:"50%"},{player:"P (1-4)",drafted:"0%"}];
+  const forecast=[.3,.5,.4,.7,.8,.1].map((estimate,i)=>({id:["1-1","1-2","1-3","1-4","1-4","1-5"][i],estimate}));
+  const snapshot={lockAt:"2026-11-25T00:00Z",capturedAt:"2026-11-24T22:00Z",ownershipForecast:forecast};
+  const result=ownershipReview(rows,snapshot);
+  assert.equal(result.lockMatched,true);
+  assert.equal(result.forecastCount,5);
+  assert.equal(result.groups[0].count,2);
+  assert.equal(result.groups[0].mae,15);
+  assert.equal(result.groups[0].bias,5);
+  assert.equal(ownershipReview(rows,{...snapshot,lockAt:"2026-11-25T01:00Z"}),null);
+  assert.equal(ownershipReview(rows.slice(1),snapshot).lockMatched,false);
+});

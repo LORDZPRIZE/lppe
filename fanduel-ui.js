@@ -1245,11 +1245,15 @@ byId("fdContestReview").addEventListener("submit",async event => {
         if (!review) continue;
         matchedForecast=true;
         const panel=document.createElement("details"),title=document.createElement("summary");
-        title.textContent="Ownership forecast accuracy · "+review.players.length+" matched players";
+        title.textContent="Ownership forecast accuracy · "+review.players.length+" of "+review.forecastCount+" player IDs scored";
         panel.append(title);
+        const coverage=document.createElement("p");
+        coverage.textContent=(review.lockMatched ? "Contest start matches the saved lock." : "Contest start unknown in this export.")+
+          " Positive bias means LPPE expected higher ownership than the field showed.";
+        panel.append(coverage);
         for (const group of review.groups) {
           const note=document.createElement("p");
-          note.textContent=group.name+" · "+group.mae.toFixed(1)+" percentage points mean absolute error ("+group.count+" players)";
+          note.textContent=group.name+" · "+group.mae.toFixed(1)+" pp mean absolute error · "+(group.bias>0?"+":"")+group.bias.toFixed(1)+" pp bias ("+group.count+" players)";
           panel.append(note);
         }
         const list=document.createElement("ul");
