@@ -169,7 +169,7 @@ function comparePortfolios(players,index,field,portfolios,rotations) {
   const random=generator(83713);
   const outcomes=new Int32Array(players.length);
   const mapped=portfolios.map(portfolio=>portfolio.map(lineup=>[...lineup.ids].map(id=>index.get(id))));
-  const hits=[0,0], scenarios=512;
+  const hits=[0,0], firsts=[0,0], scenarios=512;
   const score=indices=>indices.reduce((sum,i)=>sum+outcomes[i],0);
   for(let n=0;n<scenarios;n++) {
     sampleScores(players,random,outcomes,rotations);
@@ -181,9 +181,13 @@ function comparePortfolios(players,index,field,portfolios,rotations) {
       if (value>best[1]) above[1]++;
       if (above[0]>=20 && above[1]>=20) break;
     }
-    hits.forEach((_,i)=>{ if(above[i]<20) hits[i]++; });
+    for (const [i,higherScores] of above.entries()) {
+      if (higherScores===0) firsts[i]++;
+      if (higherScores<20) hits[i]++;
+    }
   }
-  return {scenarios,tournamentHits:hits[0],projectionHits:hits[1]};
+  return {scenarios,tournamentHits:hits[0],projectionHits:hits[1],
+    tournamentFirsts:firsts[0],projectionFirsts:firsts[1]};
 }
 
 export function buildNBATournament(raw,count,difference,limit,options={}) {

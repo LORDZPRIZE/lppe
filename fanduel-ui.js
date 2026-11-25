@@ -596,8 +596,6 @@ function renderLineups(result,requested,highCeiling) {
     status.textContent += " Teams with enough rotation data for shared minutes: "+result.simulation.balancedTeams+".";
   }
   const comparison=result.simulation?.comparison;
-  if (comparison) status.textContent += " Separate simulation check · at least one top-20 finish: tournament "+
-    comparison.tournamentHits+"/"+comparison.scenarios+" · projected points "+comparison.projectionHits+"/"+comparison.scenarios+".";
   if (result.restriction) status.textContent += " " + result.restriction;
   if (result.exactFirst) status.textContent += " Top lineup maximizes projected points under your current rules.";
   refine.hidden = !result.limited || depth.value === "deep" || mode.value !== "gpp";
@@ -610,6 +608,35 @@ function renderLineups(result,requested,highCeiling) {
     status.textContent += " " + summary;
   }
   const output = byId("fdResults");
+  if (comparison) {
+    const panel=document.createElement("section");
+    const heading=document.createElement("h3");
+    heading.textContent="Tournament vs. projected points";
+    const table=document.createElement("table");
+    table.createCaption().textContent="Best finish per portfolio across "+comparison.scenarios+" separate simulated contests. Ties count.";
+    const headers=table.createTHead().insertRow();
+    for (const label of ["Portfolio","First","Top 20"]) {
+      const cell=document.createElement("th");
+      cell.scope="col";
+      cell.textContent=label;
+      headers.append(cell);
+    }
+    const body=table.createTBody();
+    for (const [label,firsts,hits] of [
+      ["Tournament",comparison.tournamentFirsts,comparison.tournamentHits],
+      ["Projected points",comparison.projectionFirsts,comparison.projectionHits]
+    ]) {
+      const row=body.insertRow();
+      const name=document.createElement("th");
+      name.scope="row";
+      name.textContent=label;
+      row.append(name);
+      row.insertCell().textContent=firsts??"Unavailable";
+      row.insertCell().textContent=hits;
+    }
+    panel.append(heading,table);
+    output.append(panel);
+  }
   if (result.highestProjected) {
     const best = result.highestProjected;
     const panel = document.createElement("details");

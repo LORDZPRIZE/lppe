@@ -365,7 +365,19 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
     3,2,18000,{fieldSize:20,exposure:80,target:"top20"});
   assert.equal(result.simulation.target,"first");
   assert.equal(small.simulation.target,"top20");
-  assert.deepEqual(small.simulation.comparison,{scenarios:512,tournamentHits:512,projectionHits:512});
+  assert.equal(small.simulation.comparison.tournamentHits,512);
+  assert.equal(small.simulation.comparison.projectionHits,512);
+  for (const sample of [comparison,small.simulation.comparison]) {
+    for (const mode of ["tournament","projection"]) {
+      const firsts=sample[mode+"Firsts"];
+      assert.ok(Number.isInteger(firsts) && firsts>=0 && firsts<=sample[mode+"Hits"]);
+    }
+  }
+  // Every eligible lineup has exactly the same players, hence every simulated contest ties.
+  const fixed=[...result.lineups[0].ids].map(id=>({...joined.find(p=>p.id===id),selection:"available",maxExposure:100}));
+  const tied=buildNBATournament(fixed,1,1,18000,{fieldSize:3}).simulation.comparison;
+  assert.equal(tied.tournamentFirsts,tied.scenarios);
+  assert.equal(tied.projectionFirsts,tied.scenarios);
   assert.equal(small.ownershipForecast.filter(p=>p.input!==null).length,8);
   assert.ok(result.highestProjected.ids.has("p0") && !result.highestProjected.ids.has("p1"));
   assert.ok(result.lineups.every(lineup => lineup.points<=result.highestProjected.points+1e-8));
