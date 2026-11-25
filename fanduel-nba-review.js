@@ -72,6 +72,28 @@ export function lateSwapLineup(pool,ids,games,reports,now,priorLocks=[]) {
     activeTeams,salary:result.salary,expiresAt:Math.min(...pool.players.filter(p=>!closed(p)).map(p=>Math.min(starts.get(p.team).start,p.gameStart||Infinity)))};
 }
 
+export function reconcileNBAEntries(planned,entered) {
+  const rosterKey=ids=>JSON.stringify([...ids].sort());
+  const remaining=new Map();
+  for (const [i,ids] of planned.entries()) {
+    const key=rosterKey(ids);
+    const positions=remaining.get(key) || [];
+    positions.push(i+1);
+    remaining.set(key,positions);
+  }
+  const seen=new Set(),extra=[],repeated=[];
+  for (const [i,ids] of entered.entries()) {
+    const key=rosterKey(ids);
+    if (seen.has(key)) repeated.push(i+1);
+    seen.add(key);
+    const copies=remaining.get(key);
+    if (copies?.length) copies.shift();
+    else extra.push(i+1);
+  }
+  const missing=[...remaining.values()].flat().sort((a,b)=>a-b);
+  return {matched:entered.length-extra.length,missing,extra,repeated,distinct:seen.size};
+}
+
 export function enteredNBAIds(text) {
   const [header,...rows]=csvRecords(text);
   const labels=header?.map(h=>h.trim().toUpperCase())||[];

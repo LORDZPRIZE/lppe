@@ -256,6 +256,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <p>For a late-swap eligible contest, paste the nine FanDuel player IDs in the exact order of your entered lineup. Use one lineup per line. LPPE checks public game and injury updates every five minutes while open.</p>
   <label>Import entered NBA lineups <input id="fdSwapFile" type="file" accept=".csv,text/csv"></label>
   <label>PG, SG, SF, PF, C, G/F, F/C, UTIL, UTIL <textarea id="fdEnteredIds" rows="3"></textarea></label>
+  <p id="fdEntryCheck" role="status"></p>
   <button id="fdSwap" type="button">Track late swaps</button>
   <button id="fdStopSwap" type="button" hidden>Stop tracking</button>
   <p id="fdSwapStatus" role="status"></p><div id="fdSwapResults"></div>

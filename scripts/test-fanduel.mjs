@@ -517,3 +517,14 @@ test("NBA import, tournament build and review export preserve matched projection
   const revised=applyPlayerProjections(players,"ID,Projection,Projection Updated At\n123-1,31,2099-01-01T10:00:00Z");
   assert.equal(revised.players[1].projectionUpdatedAt,null);
 });
+
+test("FanDuel entered CSV reconciliation consumes roster copies across reordered slots",async()=>{
+  const {enteredNBAIds,reconcileNBAEntries}=await import("../fanduel-nba-review.js");
+  const ids=n=>Array.from({length:9},(_,i)=>"123-"+(n+i));
+  const a=ids(1),b=ids(2),c=ids(3);
+  const csv=["Entry ID,PG,SG,SF,PF,C,G/F,F/C,UTIL,UTIL",
+    ...[a,[...a].reverse(),c].map((roster,i)=>[i+1,...roster].join(","))].join("\n");
+  const entries=enteredNBAIds(csv);
+  assert.deepEqual(reconcileNBAEntries([a,b],entries),{matched:1,missing:[2],extra:[2,3],repeated:[2],distinct:2});
+  assert.equal(reconcileNBAEntries([a,a,c],entries).matched,3);
+});

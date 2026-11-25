@@ -1,4 +1,4 @@
-import {enteredNBAIds,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
+import {enteredNBAIds,reconcileNBAEntries,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
 import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
 import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
@@ -221,6 +221,7 @@ function clearLineups() {
   build.disabled = false;
   lineups = [];
   exportButton.disabled = true;
+  byId("fdEntryCheck").textContent="";
   byId("fdExportCheck").replaceChildren();
   byId("fdResults").replaceChildren();
   byId("fdResultsPanel").hidden = true;
@@ -795,6 +796,7 @@ function renderLineups(result,requested,highCeiling) {
     }
   }
   exportButton.disabled = !lineups.length;
+  showEntryCheck();
 }
 
 function buildCurrentLineups(news=null) {
@@ -1426,6 +1428,25 @@ async function refreshNBAContext(slate,initial,changes=[]) {
   } finally { slate.checking=false; }
 }
 
+function showEntryCheck() {
+  const output=byId("fdEntryCheck");
+  output.textContent="";
+  const raw=byId("fdEnteredIds").value.trim();
+  if (!raw || sport.value!=="NBA" || !lineups.length) return;
+  const entries=raw.split(/\r?\n/).map(row=>row.trim().split(/[\s,]+/));
+  const planned=lineups.map(l=>l.picks.map(p=>String(p.player.id)));
+  const known=new Set(players.map(p=>String(p.id)));
+  if (entries.some(ids=>ids.length!==9 || new Set(ids).size!==9 || ids.some(id=>!known.has(id)))) {
+    output.textContent="Entry comparison unavailable. Check that each row has nine distinct IDs from this slate.";
+    return;
+  }
+  const result=reconcileNBAEntries(planned,entries);
+  const notes=[result.matched+" of "+planned.length+" planned rosters matched · "+result.distinct+" distinct rosters in "+entries.length+" supplied entries."];
+  if (result.missing.length) notes.push("Missing build lineup numbers: "+result.missing.join(", ")+".");
+  if (result.extra.length) notes.push("Extra or different entry rows: "+result.extra.join(", ")+".");
+  if (result.repeated.length) notes.push("Repeated roster on entry rows: "+result.repeated.join(", ")+".");
+  output.textContent=notes.join(" ");
+}
 let swapTracker;
 let swapExpiry;
 let stoppedDraftSlate;
@@ -1514,7 +1535,7 @@ byId("fdSwap").addEventListener("click",()=>{
   byId("fdStopSwap").hidden=false;refreshSwaps();
 });
 byId("fdStopSwap").addEventListener("click",()=>{stoppedDraftSlate=slateLockAt;stopSwap();swapStatus.textContent="Tracking stopped.";});
-byId("fdEnteredIds").addEventListener("input",()=>{if(swapTracker){stopSwap();swapStatus.textContent="Restart tracking to use the edited entries.";}});
+byId("fdEnteredIds").addEventListener("input",()=>{showEntryCheck();if(swapTracker){stopSwap();swapStatus.textContent="Restart tracking to use the edited entries.";}});
 sport.addEventListener("change",()=>{stopSwap();swapStatus.textContent="";});
 setInterval(refreshSwaps,300000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)refreshSwaps();});
@@ -1523,9 +1544,12 @@ byId("fdSwapFile").addEventListener("change",async event=>{
   const file=event.target.files[0];
   if(!file)return;
   stopSwap();
+  byId("fdEnteredIds").value="";
+  showEntryCheck();
   try {
     const entries=enteredNBAIds(await file.text());
     byId("fdEnteredIds").value=entries.map(ids=>ids.join(", ")).join("\n");
+    showEntryCheck();
     byId("fdSwap").click();
   } catch(error) { swapStatus.textContent=error.message; }
 });
