@@ -109,11 +109,16 @@ export function normalizeProviderPlayers(data,slate,sport = "NBA") {
         row.fppg ?? row.fantasy_points_per_game ?? "",status,row.game_id ?? row.game ?? ""].map(csvCell).join(",");
     })].join("\n");
   const {players,skipped} = importPlayers(csv,"",sport);
+  if (sport === "NBA" && (players.length !== Number(slate.players) || skipped)) {
+    return {error:"NBA salary pool incomplete: "+players.length+" distinct usable player IDs for "+
+      slate.players+" listed players. Refresh the slate or import its FanDuel player-list CSV."};
+  }
   if (players.filter(player => Number.isFinite(player.points) && player.selection !== "exclude").length < profile.roster.length) {
     return {error:"The supplied salary slate has too few eligible players with FPPG."};
   }
   return {date:easternDay(Date.parse(slate.starts_at)),updatedAt:slate.players_read_at || null,
     lockAt:Date.parse(slate.starts_at),gameCount:slate.games,players,skipped,
+    ...(sport === "NBA" ? {listedPlayerCount:Number(slate.players)} : {}),
     provider:"FanDuelAPI.com",poolType:"salary feed",label:slate.label || "FanDuel " + profile.name + " Classic"};
 }
 
@@ -311,6 +316,8 @@ async function cachedPool(cache,key) {
   const response = await cache.match(key);
   if (!response) return null;
   const pool = await response.json();
+  if (key.url.includes("/NBA/") && pool.poolType === "salary feed" &&
+      pool.listedPlayerCount !== pool.players?.length) return null;
   return pool.lockAt > Date.now() ? pool : null;
 }
 
@@ -327,6 +334,7 @@ export async function onRequestGet({request,env}) {
   const sport = searchParams.get("sport")?.toUpperCase() || "NBA";
   const list = searchParams.get("list") === "1";
   const slateId = searchParams.get("slate");
+  if (list && slateId !== null) return reply({error:"Request the slate list or one slate ID at a time."},400);
   if (slateId !== null && !/^[a-z0-9_-]{1,128}$/i.test(slateId)) return reply({error:"Invalid slate selection."},400);
   if (!Object.hasOwn(profiles,sport)) return reply({error:"Unsupported FanDuel Classic sport."},400);
   const configured = Boolean(env.FANDUEL_API_KEY);

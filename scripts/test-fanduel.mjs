@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { automaticSlateChoice, liveRefreshSeconds, applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
-import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, onRequestGet } from "../functions/api/nba/fanduel.js";
+import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, normalizeProviderPlayers, onRequestGet } from "../functions/api/nba/fanduel.js";
 import { buildNFLTournament, rankNFLTournament } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
@@ -306,6 +306,16 @@ test("refreshing NBA projections reuses the longer-lived salary cache", async co
   assert.equal((await reply()).status,200);
   assert.equal(providerCalls.length,2);
   assert.equal(publicCalls.length,6);
+  // Older response and salary caches predate the provider count check.
+  for (const [key,response] of responses) {
+    if (!key.includes("/provider/") && !key.includes("/nba-salaries/")) continue;
+    const legacy = await response.clone().json();
+    delete legacy.listedPlayerCount;
+    responses.set(key,Response.json(legacy));
+  }
+  const refreshed = await (await reply()).json();
+  assert.equal(refreshed.listedPlayerCount,10);
+  assert.equal(providerCalls.length,3);
 });
 
 test("matches NFL schedule aliases and supports projections on a multi-day slate", () => {
@@ -563,4 +573,25 @@ test("one-button NBA loading requires one identifiable Main on the current conte
   }
   assert.match(choose([main,{...main,id:"second"}]).message,/Multiple/);
   assert.equal(automaticSlateChoice([all,main],"NFL","",now).slate,all);
+});
+
+test("NBA salary delivery reconciles distinct normalized players to the provider count", () => {
+  const rows = Array.from({length:11},(_,i) => ({
+    id:String(i),name:"Player "+i,team:"BOS",position:"PG",salary:5000,fppg:i === 10 ? null : 25
+  }));
+  const slate = {players:11,starts_at:"2026-11-26T00:00Z",games:2};
+  const valid = normalizeProviderPlayers(rows,slate);
+  assert.equal(valid.listedPlayerCount,11);
+  assert.equal(valid.players.length,11);
+  assert.equal(valid.updatedAt,null);
+  for (const badRow of [rows[0],{...rows[10],salary:0},{...rows[10],id:""}]) {
+    assert.match(normalizeProviderPlayers([...rows.slice(0,10),badRow],slate).error,/10 distinct.*11 listed/);
+  }
+  assert.match(normalizeProviderPlayers(rows,{...slate,players:10}).error,/11 distinct.*10 listed/);
+});
+
+test("requesting both a listing and a selected salary pool fails before provider access", async () => {
+  const response = await onRequestGet({request:new Request("https://example.com/api/nba/fanduel?list=1&slate=main"),env:{}});
+  assert.equal(response.status,400);
+  assert.match((await response.json()).error,/one slate ID/);
 });

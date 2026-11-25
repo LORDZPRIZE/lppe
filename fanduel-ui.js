@@ -77,7 +77,17 @@ function startAutomaticSession() {
     }
     liveSlate.value = saved.id;
     liveSlate.disabled = false;
-    loadPublicPool(false,saved.data);
+    const needsCount = sport.value === "NBA" && saved.data.poolType === "salary feed" &&
+      saved.data.listedPlayerCount !== saved.data.players.length;
+    if (needsCount) {
+      if (saved.retryCountAfter > now) {
+        byId("fdStatus").textContent = "Saved NBA pool size is unverified. Tap Load slate and build to refresh, or import the contest player list.";
+        autoLoad.disabled = false;
+        return;
+      }
+      writeSession({...saved,retryCountAfter:now+30*60000});
+    }
+    loadPublicPool(false,needsCount ? null : saved.data);
     return;
   }
   if (saved?.resumeAt > now) {
@@ -1053,12 +1063,15 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
     const updated = data.updatedAt ? " · updated "+new Date(data.updatedAt).toLocaleString() : "";
     const coverage = data.projectionCoverage;
     const injuries = data.injuryCoverage;
+    const countSummary = sport.value === "NBA" && data.poolType === "salary feed" &&
+      Number.isInteger(data.listedPlayerCount) ? " Player IDs matched the provider count ("+
+        players.length+"/"+data.listedPlayerCount+")." : "";
     const estimateSummary = coverage ?
       " Daily Fantasy Fuel projections matched "+coverage.matched+" of "+coverage.eligible+
       " available players (updated "+new Date(coverage.updatedAt).toLocaleTimeString()+"). Other players use FanDuel FPPG when available." :
       data.poolType === "salary feed" ? " Uses historical FPPG." : " Uses the public preview, which may omit players.";
     byId("fdStatus").textContent = data.label+" · "+data.date+" · "+players.length+" players across "+data.gameCount+
-      " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+estimateSummary+
+      " games · "+data.provider+updated+". First listed game: "+new Date(data.lockAt).toLocaleString()+"."+countSummary+estimateSummary+
       (injuries ? " ESPN injury updates excluded "+injuries.excluded+" additional players." : "")+
       (removedLocks.length ? " Unlocked after refresh: "+removedLocks.join(", ")+".": "");
     byId("fdStatus").textContent += " Using this snapshot until lock. Load slate and build refreshes salary and projection data.";
