@@ -179,9 +179,9 @@ function comparePortfolios(players,index,field,portfolios,rotations) {
       const value=score(roster);
       if (value>best[0]) above[0]++;
       if (value>best[1]) above[1]++;
-      if (above[0]>=100 && above[1]>=100) break;
+      if (above[0]>=20 && above[1]>=20) break;
     }
-    hits.forEach((_,i)=>{ if(above[i]<100) hits[i]++; });
+    hits.forEach((_,i)=>{ if(above[i]<20) hits[i]++; });
   }
   return {scenarios,tournamentHits:hits[0],projectionHits:hits[1]};
 }
@@ -224,7 +224,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     field=opponentField(players,size,generator(67211));
   }
   if (field.length<size) throw new Error("Insufficient eligible players to model the requested NBA field.");
-  const top100Target = options.target !== "first";
+  const top20Target = options.target === "top20";
   const counts = new Uint32Array(players.length);
   const freq=new Map();
   for(const lineup of field) {
@@ -237,7 +237,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   const items=[...candidates.values()].map(lineup=>{
     const first=new Float64Array(scenarios);
     shares.set(lineup.ids,first);
-    return {lineup,indices:[...lineup.ids].map(id=>index.get(id)),first,hits:new Uint8Array(scenarios),scores:[],wins:0,top:0,top100:0};
+    return {lineup,indices:[...lineup.ids].map(id=>index.get(id)),first,hits:new Uint8Array(scenarios),scores:[],wins:0,top:0,top20:0};
   });
   const outcomes=new Int32Array(players.length), opponents=new Int32Array(field.length);
   const scenarioRandom=generator(78602);
@@ -250,18 +250,18 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     let tied=1;
     for(let i=opponents.length-2;i>=0 && opponents[i]===max;i--) tied++;
     const top=opponents[Math.max(0,field.length-Math.max(1,Math.floor(entries*.1)))];
-    const cutoff100=field.length<100 ? -Infinity : opponents[field.length-100];
+    const cutoff20=field.length<20 ? -Infinity : opponents[field.length-20];
     for(const item of items) {
       const value=score(item.indices);
       item.scores.push(value/10);
       if(value>=top)item.top++;
       const share=value>max?1:value===max?1/(1+tied):0;
-      const hit=Number(value>=cutoff100);
-      item.hits[n]=hit; item.top100+=hit; item.first[n]=top100Target ? hit : share; item.wins+=share;
+      const hit=Number(value>=cutoff20);
+      item.hits[n]=hit; item.top20+=hit; item.first[n]=top20Target ? hit : share; item.wins+=share;
     }
   }
-  const ranked=items.map(({lineup,scores,wins,top,top100})=>({...lineup,tournament:{
-    win:wins/scenarios,top100:top100/scenarios,top:top/scenarios,duplicates:freq.get(key(lineup.ids))||0,
+  const ranked=items.map(({lineup,scores,wins,top,top20})=>({...lineup,tournament:{
+    win:wins/scenarios,top20:top20/scenarios,top:top/scenarios,duplicates:freq.get(key(lineup.ids))||0,
     ceiling:scores.sort((a,b)=>a-b)[Math.ceil(.9*scenarios)-1]
   }})).sort((a,b)=>b.tournament.win-a.tournament.win||b.tournament.top-a.tournament.top||b.points-a.points);
   const limits=new Map(players.map(p=>[p.id,p.selection==="lock"?count:Math.floor(count*Math.min(options.exposure??100,p.maxExposure??100)/100)]));
@@ -283,7 +283,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     item.hits.forEach((hit,i)=>{ if(hit)covered[i]=1; });
   }
   result.simulation.balancedTeams=rotations.length;
-  result.simulation.target=top100Target ? "top100" : "first";
+  result.simulation.target=top20Target ? "top20" : "first";
   result.simulation.coverage=covered.reduce((sum,v)=>sum+v,0)/scenarios;
   if (result.lineups.length && result.lineups.length===baseline.lineups.length) {
     const testField=opponentField(players,entries-result.lineups.length,generator(92481),factors);

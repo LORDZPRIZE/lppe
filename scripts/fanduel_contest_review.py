@@ -15,7 +15,7 @@ def analyze(path,username):
    name=re.sub(r'\s*\(\d+/\d+\)\s*$','',row.get('EntryName','')).strip()
    picks=[{'slot':slot,'name':player,'id':pid} for slot,player,pid in P.findall(row.get('Lineup') or '')]
    rank=int(row['Rank']) if row.get('Rank','').isdigit() else None
-   if rank is not None and rank<=100:
+   if rank is not None and rank<=20:
     for p in picks:top[p['id']]+=1
    if name.casefold()==username.casefold():
     user.append({'rank':rank,'score':num(row.get('Points')),'gross_winnings':num(row.get('Won')) or 0,'picks':picks})
@@ -26,7 +26,7 @@ def analyze(path,username):
  players=[]
  for pid,n in exposure.most_common():
   s=stats.get(pid,{})
-  players.append({'name':s.get('name') or next(p['name'] for e in user for p in e['picks'] if p['id']==pid),'appearances':n,'exposure_pct':round(n*100/len(user),1),'actual_fpts':s.get('actual_fpts'),'salary':s.get('salary'),'field_ownership_pct':s.get('ownership_pct'),'top100_appearances':top[pid]})
+  players.append({'name':s.get('name') or next(p['name'] for e in user for p in e['picks'] if p['id']==pid),'appearances':n,'exposure_pct':round(n*100/len(user),1),'actual_fpts':s.get('actual_fpts'),'salary':s.get('salary'),'field_ownership_pct':s.get('ownership_pct'),'top20_appearances':top[pid]})
  scores=[e['score'] for e in user if e['score'] is not None]
  return {'platform':'FanDuel','source':Path(path).name,'username':username,'contest_entries':entries,'user_entries':len(user),'mean_user_score':round(statistics.mean(scores),2) if scores else None,'gross_winnings':round(sum(e['gross_winnings'] for e in user),2),'entry_fee_verified':False,'user_lineups':sorted(user,key=lambda e:e['rank'] or 999999),'player_exposure':players,'warning':'Hindsight-only contest audit; do not use final scores, field ranks or winning rosters as pre-lock features.'}
 if __name__=='__main__':

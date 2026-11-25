@@ -360,9 +360,11 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
   for (const hits of [comparison.tournamentHits,comparison.projectionHits]) {
     assert.ok(Number.isInteger(hits) && hits>=0 && hits<=comparison.scenarios);
   }
-  // With fewer than 100 opponents both portfolios must always reach the target.
+  // With fewer than 20 opponents both portfolios must always reach the target.
   const small=buildNBATournament(joined.map((p,i)=>i<8 ? {...p,ownership:.2} : p),
-    3,2,18000,{fieldSize:99,exposure:80});
+    3,2,18000,{fieldSize:20,exposure:80,target:"top20"});
+  assert.equal(result.simulation.target,"first");
+  assert.equal(small.simulation.target,"top20");
   assert.deepEqual(small.simulation.comparison,{scenarios:512,tournamentHits:512,projectionHits:512});
   assert.equal(small.ownershipForecast.filter(p=>p.input!==null).length,8);
   assert.ok(result.highestProjected.ids.has("p0") && !result.highestProjected.ids.has("p1"));
@@ -417,12 +419,14 @@ test("replays a portable NBA build without an entered username and rejects incom
   Object.entries({"Start Time":"2026-11-24 19:00:00 ET","Contest Name":"Example",Slate:"Main","Seats Filled":"101"})
     .forEach(([contestinfo,contestvalue],i)=>Object.assign(rows[i],{contestinfo,contestvalue}));
   const field=reviewContest(rows);
-  assert.equal(field.cutoff,45);
+  assert.equal(field.cutoff,125);
+  assert.equal(field.winningScore,144);
+  assert.equal(reviewContest(rows.slice(0,19)).cutoff,null);
   assert.equal(field.best,null);
   assert.equal(reviewContest(rows,"absent").userEntries,0);
   const replay=scoreSavedBuilds(rows,read(build),field.cutoff);
   assert.equal(pairHeldOut(rows,replay).tournament.bestRank,100);
-  assert.equal(pairHeldOut(rows,replay).projection.hits,1);
+  assert.equal(pairHeldOut(rows,replay).projection.hits,0);
   assert.equal(pairHeldOut(rows.slice(0,-1),replay),null);
   assert.equal(pairHeldOut([...rows.slice(0,-1),rows[99]],replay),null);
   assert.equal(pairHeldOut([...rows.slice(0,-1),{...rows[100],points:""}],replay),null);

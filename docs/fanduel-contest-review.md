@@ -8,4 +8,4 @@ Run:
 python3 scripts/fanduel_contest_review.py leaderboard_136799-281589257.csv --username Stayonthesidelinez --output review.json
 ```
 
-The leaderboard provides gross payouts but does not itself establish contest entry fees or net ROI. Player outcomes and top-100 lineup appearances are hindsight only. Historical results must not be used as pre-lock inputs. The source file is FanDuel, regardless of older local report labels.
+The leaderboard provides gross payouts but does not itself establish contest entry fees or net ROI. Player outcomes and top-20 lineup appearances are hindsight only. Historical results must not be used as pre-lock inputs. The source file is FanDuel, regardless of older local report labels.

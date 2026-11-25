@@ -79,8 +79,10 @@ export function reviewContest(source, username = "") {
   let entries = 0;
   let userEntries = 0;
   let cutoff = Infinity;
+  let winningScore = null;
+  let wins = 0;
   let best = -Infinity;
-  let top100Entries = 0;
+  let top20Entries = 0;
   const handle = username.trim().toLowerCase();
   for (const row of rows) {
     if (!row.entryid) continue;
@@ -88,19 +90,21 @@ export function reviewContest(source, username = "") {
     const rank = Number(row.rank);
     if (!Number.isInteger(rank) || rank < 1) throw new Error("An entry has no valid finishing rank.");
     const score = row.points ? Number(row.points) : NaN;
-    if (rank <= 100) {
-      if (!Number.isFinite(score)) throw new Error("A top-100 entry is missing its score.");
+    if (rank <= 20) {
+      if (!Number.isFinite(score)) throw new Error("A top-20 entry is missing its score.");
       cutoff = Math.min(cutoff,score);
+      if (rank===1) winningScore=score;
     }
     if (handle && row.entryname.replace(/\s*\(\d+\/\d+\)$/, "").trim().toLowerCase() === handle) {
       userEntries++;
       if (Number.isFinite(score)) best = Math.max(best,score);
-      if (rank <= 100) top100Entries++;
+      if (rank <= 20) top20Entries++;
+      if (rank===1) wins++;
     }
   }
   if (!entries) throw new Error("No contest entries found in this leaderboard.");
   if (userEntries && !Number.isFinite(best)) throw new Error("No scored entries found for that username.");
-  return {entries,userEntries,best:userEntries ? best : null,cutoff:entries >= 100 && Number.isFinite(cutoff) ? cutoff : null,top100Entries};
+  return {entries,userEntries,best:userEntries ? best : null,winningScore,wins,cutoff:entries >= 20 && Number.isFinite(cutoff) ? cutoff : null,top20Entries};
 }
 
 const csvNumber = value => value?.trim() ? Number(value.replace(/[$,]/g, "")) : NaN;

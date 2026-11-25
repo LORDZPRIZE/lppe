@@ -89,7 +89,7 @@ export function enteredNBAIds(text) {
 export function readNBAArchive(text) {
   const records=JSON.parse(text);
   if (!Array.isArray(records)) throw new Error("Choose a downloaded LPPE NBA build history JSON.");
-  const versions=["first","latest","tournament","projection","initialTop100","initialComparison"];
+  const versions=["first","latest","tournament","projection","initialTournament","initialBaseline","initialTop100","initialComparison"];
   const valid=[];
   for (const record of records) {
     const accepted={};
@@ -112,9 +112,10 @@ export function readNBAArchive(text) {
 }
 
 export function pairHeldOut(rows,replay) {
-  const tournament=replay.find(item=>item.version==="initialTop100" && item.scored===item.total &&
+  const tournament=replay.find(item=>item.version==="initialTournament" && item.scored===item.total &&
+    item.total===item.requested && item.hits!==null) || replay.find(item=>item.version==="initialTop100" && item.scored===item.total &&
     item.total===item.requested && item.hits!==null);
-  const projection=tournament && replay.find(item=>item.version==="initialComparison" &&
+  const projection=tournament && replay.find(item=>item.version===(tournament.version==="initialTournament"?"initialBaseline":"initialComparison") &&
     item.capturedAt===tournament.capturedAt && item.lockAt===tournament.lockAt && item.slate===tournament.slate &&
     item.scored===tournament.total && item.total===item.scored);
   if(!projection || !(Date.parse(tournament.capturedAt)<Date.parse(tournament.lockAt)))return null;
