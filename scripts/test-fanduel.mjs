@@ -362,9 +362,9 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
   }
   // With fewer than 20 opponents both portfolios must always reach the target.
   const small=buildNBATournament(joined.map((p,i)=>i<8 ? {...p,ownership:.2} : p),
-    3,2,18000,{fieldSize:20,exposure:80,target:"top20"});
-  assert.equal(result.simulation.target,"first");
-  assert.equal(small.simulation.target,"top20");
+    3,2,18000,{fieldSize:20,exposure:80,target:"first"});
+  assert.equal(result.simulation.target,"top20");
+  assert.equal(small.simulation.target,"first");
   assert.equal(small.simulation.comparison.tournamentHits,512);
   assert.equal(small.simulation.comparison.projectionHits,512);
   for (const sample of [comparison,small.simulation.comparison]) {

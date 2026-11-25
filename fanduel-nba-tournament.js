@@ -228,7 +228,7 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
     field=opponentField(players,size,generator(67211));
   }
   if (field.length<size) throw new Error("Insufficient eligible players to model the requested NBA field.");
-  const top20Target = options.target === "top20";
+  const top20Target = options.target !== "first";
   const counts = new Uint32Array(players.length);
   const freq=new Map();
   for(const lineup of field) {

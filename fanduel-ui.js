@@ -156,7 +156,7 @@ byId("fdResumeSlate").addEventListener("click",() => {
   sport.value = saved.sport;
   applySport();
   for (const control of slateSettings) {
-    if (Object.hasOwn(saved.settings,control.id)) control.value = control.id==="fdTarget" && saved.settings.fdTarget==="top100" ? "first" : saved.settings[control.id];
+    if (Object.hasOwn(saved.settings,control.id)) control.value = control.id==="fdTarget" && saved.settings.fdTarget==="top100" ? "top20" : saved.settings[control.id];
   }
   slateLockAt = null;
   loadedLiveSlate = undefined;
