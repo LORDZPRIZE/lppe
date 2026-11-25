@@ -292,6 +292,12 @@ export function buildNBATournament(raw,count,difference,limit,options={}) {
   if (result.lineups.length && result.lineups.length===baseline.lineups.length) {
     const testField=opponentField(players,entries-result.lineups.length,generator(92481),factors);
     if (testField.length===entries-result.lineups.length) {
+      const original=options.originalIds;
+      if (Array.isArray(original) && original.length===result.lineups.length &&
+          original.every(ids=>Array.isArray(ids) && ids.length===9 && new Set(ids).size===9 && ids.every(id=>index.has(id)))) {
+        result.simulation.newsComparison=comparePortfolios(players,index,testField,
+          [result.lineups,original.map(ids=>({ids}))],rotations);
+      }
       result.simulation.comparison=comparePortfolios(players,index,testField,[result.lineups,baseline.lineups],rotations);
     }
   }

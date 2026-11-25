@@ -1,5 +1,5 @@
 import {enteredNBAIds,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
-import { addRotations } from "./fanduel-nba-tournament.js";
+import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
 import { matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
@@ -790,7 +790,8 @@ function renderLineups(result,requested,highCeiling) {
   exportButton.disabled = !lineups.length;
 }
 
-function buildCurrentLineups() {
+function buildCurrentLineups(news=null) {
+  news=news?.original ? news : null;
   if (slateLockAt && slateLockAt <= Date.now()) {
     clearLineups();
     byId("fdStatus").textContent = "The automatically loaded slate has reached its first game start. Load another available pool or import a different contest.";
@@ -800,6 +801,7 @@ function buildCurrentLineups() {
   const candidates = poolForBuild();
   const {warnings} = checkSlate(candidates,profiles[sport.value],sport.value);
   if (warnings.length) {
+    clearLineups();
     byId("fdResultsPanel").hidden = false;
     byId("fdBuildStatus").textContent = warnings.join(" ");
     return;
@@ -828,6 +830,7 @@ function buildCurrentLineups() {
   optimizer = activeWorker;
   const options = {target:byId("fdTarget").value,fieldSize:Number(byId("fdFieldSize").value),exactFirst:objective.value === "projection",
     exposure:gpp ? exposure.valueAsNumber : 100,stack:byId("fdFootballStack").hidden ? 0 : Number(stack.value)};
+  if (news && tournament && sport.value==="NBA") options.originalIds=news.original.lineups.map(roster=>roster.map(p=>p.id));
   buildProgress = {lineups:[],limited:false,requested,highCeiling,tournament,exactFirst:options.exactFirst};
   byId("fdCancel").hidden = false;
   activeWorker.addEventListener("message",({data}) => {
@@ -848,7 +851,8 @@ function buildCurrentLineups() {
     } else if (data.error) byId("fdBuildStatus").textContent = data.error;
     else {
       renderLineups(data,requested,highCeiling);
-      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline,data.ownershipForecast,data.simulation?.comparison);
+      if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline,data.ownershipForecast,data.simulation?.comparison,news,data.simulation?.newsComparison);
+      if (news) showNewsComparison(news,data.simulation?.newsComparison);
     }
   });
   activeWorker.addEventListener("error",() => {
@@ -1249,19 +1253,52 @@ automatic.addEventListener("change",() => {
   startAutomaticSession();
 });
 setInterval(startAutomaticSession,60000);
-setInterval(async () => {
+async function checkNBAChanges() {
   const slate=loadedLiveSlate;
   if (!slate || sport.value!=="NBA" || !automatic.checked || document.hidden || autoRequest || optimizer ||
       objective.value==="ceiling" || Date.now()>=slateLockAt) return;
-  if (await refreshNBAContext(slate,false) && loadedLiveSlate===slate && !autoRequest && !optimizer && Date.now()<slateLockAt) {
+  const original=lineups.length ? slate.lastSnapshot : null;
+  const changes=[];
+  const before=nbaRoleProjections(players).map(p=>({id:p.id,minutes:p.minutes}));
+  if (await refreshNBAContext(slate,false,changes) && loadedLiveSlate===slate && !autoRequest && Date.now()<slateLockAt) {
     renderPlayers();
-    buildCurrentLineups();
+    const previous=new Map(before.map(p=>[p.id,p.minutes]));
+    const teams=new Set(changes.map(c=>c.team));
+    const minutes=nbaRoleProjections(players).filter(p=>teams.has(p.team) && !unavailable(p.status) &&
+      Number.isFinite(previous.get(p.id)) && Number.isFinite(p.minutes) &&
+      Math.abs(p.minutes-previous.get(p.id))>=0.1).map(p=>p.name+" "+previous.get(p.id).toFixed(1)+" → "+p.minutes.toFixed(1));
+    buildCurrentLineups(changes.length && original ? {original,changes,minutes} : null);
   }
-},300000);
+}
+setInterval(checkNBAChanges,300000);
+document.addEventListener("visibilitychange",checkNBAChanges);
+function showNewsComparison(news,comparison) {
+  const panel=document.createElement("section");
+  const title=document.createElement("h3");
+  title.textContent="Automatic NBA news rebuild";
+  panel.append(title);
+  const add=text=>{const p=document.createElement("p");p.textContent=text;panel.append(p)};
+  for (const c of news.changes) {
+    const affected=news.original.lineups.flatMap((roster,i)=>roster.some(p=>p.id===c.id)?[i+1]:[]);
+    add(c.name+" · "+c.status+" · ESPN "+c.timeLabel+" "+new Date(c.at).toLocaleString()+
+      " · original lineups containing player: "+(affected.join(", ")||"none")+(c.locked?" · unavailable manual lock released":""));
+  }
+  add("Estimated teammate minutes: "+(news.minutes.join("; ")||"no measurable change with available rotation data"));
+  const usage=rosters=>{const counts=new Map();for(const roster of rosters)for(const p of roster)counts.set(p.id,(counts.get(p.id)||0)+1);return counts};
+  const current=lineups.map(l=>l.picks.map(p=>p.player));
+  const old=usage(news.original.lineups),next=usage(current);
+  const names=new Map([...news.original.lineups.flat(),...current.flat()].map(p=>[p.id,p.name]));
+  const max=(counts,n)=>n ? Math.round(100*Math.max(0,...counts.values())/n)+"%" : "unavailable";
+  add("Maximum player exposure: original "+max(old,news.original.lineups.length)+" · rebuilt "+max(next,current.length));
+  add("Player appearances (original → rebuilt): "+([...names].filter(([id])=>old.get(id)!==next.get(id)).map(([id,name])=>name+" "+(old.get(id)||0)+" → "+(next.get(id)||0)).join("; ")||"unchanged"));
+  add(comparison ? "Same "+comparison.scenarios+" simulated contests, including ties. Original → rebuilt: first "+comparison.projectionFirsts+" → "+comparison.tournamentFirsts+"; top 20 "+comparison.projectionHits+" → "+comparison.tournamentHits+"." :
+    "A matched tournament simulation is unavailable for these builds.");
+  byId("fdResults").prepend(panel);
+}
 document.addEventListener("visibilitychange",startAutomaticSession);
 
 const historyPrefix = "lppe-fd-build-v1/";
-function saveBuildHistory(baseline,ownershipForecast,comparison) {
+function saveBuildHistory(baseline,ownershipForecast,comparison,news,newsComparison) {
   const now = Date.now();
   if (now >= slateLockAt) return;
   const key = historyPrefix+JSON.stringify([sport.value,loadedLiveSlate.id,slateLockAt]);
@@ -1272,9 +1309,14 @@ function saveBuildHistory(baseline,ownershipForecast,comparison) {
     lockAt:new Date(slateLockAt).toISOString(),requested:Number(count.value),
     settings:Object.fromEntries(slateSettings.map(control => [control.id,control.value])),
     lineups:serialize(lineups)};
+  loadedLiveSlate.lastSnapshot=snapshot;
   try {
     const existing = JSON.parse(localStorage.getItem(key));
     const record = {...existing,first:existing?.first || snapshot,latest:snapshot};
+    if (news) {
+      record["newsBefore_"+now]=news.original;
+      record["newsAfter_"+now]={...snapshot,news:news.changes,minuteChanges:news.minutes,comparison:newsComparison};
+    }
     if (baseline?.length) {
       record.tournament = {...snapshot,ownershipForecast,comparison};
       record.projection = {...snapshot,settings:{...snapshot.settings,fdObjective:"projection"},lineups:serialize(baseline)};
@@ -1309,7 +1351,7 @@ byId("fdBuildHistory").addEventListener("click",() => {
   } catch { byId("fdHistoryStatus").textContent = "Saved builds could not be downloaded."; }
 });
 
-async function refreshNBAContext(slate,initial) {
+async function refreshNBAContext(slate,initial,changes=[]) {
   if (slate.checking) return false;
   slate.checking=true;
   const read = async path => {
@@ -1336,7 +1378,10 @@ async function refreshNBAContext(slate,initial) {
       if (teammates.filter(p=>names.has(matchName(p.name))).length!==5) continue;
       for (const p of teammates) {
         const starting=names.has(matchName(p.name));
-        if (p.confirmedStarter!==starting) { p.confirmedStarter=starting;changed=true; }
+        if (p.confirmedStarter!==starting) {
+          if (!initial && (starting || p.confirmedStarter===true)) changes.push({id:p.id,name:p.name,team:p.team,status:starting?"confirmed starter":"confirmed bench",at:Date.now(),timeLabel:"observed"});
+          p.confirmedStarter=starting;changed=true;
+        }
       }
     }
     let excluded=0;
@@ -1355,11 +1400,13 @@ async function refreshNBAContext(slate,initial) {
       if (!report || ids.indexOf(ids[i])!==ids.lastIndexOf(ids[i]) ||
           report.when<=(p.newsAt??(Date.parse(slate.updatedAt)||0))) continue;
       const returnDay=String(report.returnDate||"").slice(0,10);
-      if (report.status==="Out" && /^\d{4}-\d{2}-\d{2}$/.test(returnDay) && returnDay>slate.date && !unavailable(p.status)) {
+      if (report.status==="Out" && ((/^\d{4}-\d{2}-\d{2}$/.test(returnDay) && returnDay>slate.date) || (!returnDay && new Date(report.when).toLocaleDateString("en-CA",{timeZone:"America/New_York"})===slate.date)) && !unavailable(p.status)) {
+        changes.push({id:p.id,name:p.name,team:p.team,status:"ruled out",at:report.when,timeLabel:"reported",locked:p.selection==="lock"});
         p.priorStatus=p.status;
         p.priorSelection=p.selection==="lock"?"available":p.selection;
         p.status="Out";p.selection="exclude";p.newsAt=report.when;changed=true;excluded++;
       } else if (p.newsAt && /^(active|available)$/i.test(report.status)) {
+        changes.push({id:p.id,name:p.name,team:p.team,status:"available",at:report.when,timeLabel:"reported"});
         p.status=p.priorStatus;p.selection=p.priorSelection;p.newsAt=report.when;changed=true;
       }
     }
@@ -1372,6 +1419,7 @@ async function refreshNBAContext(slate,initial) {
 
 let swapTracker;
 let swapExpiry;
+let stoppedDraftSlate;
 const swapStatus=byId("fdSwapStatus");
 function stopSwap() {
   clearTimeout(swapExpiry);
@@ -1381,6 +1429,14 @@ function stopSwap() {
   byId("fdSwapResults").replaceChildren();
 }
 async function refreshSwaps() {
+  if (!swapTracker && automatic.checked && !document.hidden && sport.value==="NBA" && loadedLiveSlate &&
+      slateLockAt && Date.now()>=slateLockAt && Date.now()-slateLockAt<12*3600000 &&
+      stoppedDraftSlate!==slateLockAt && loadedLiveSlate.lastSnapshot && lineups.length && lineups.length<=20) {
+    const pool={date:loadedLiveSlate.date,updatedAt:loadedLiveSlate.updatedAt,players:players.map(p=>({...p}))};
+    const entries=lineups.map(l=>[...l.picks].sort((a,b)=>a.slot-b.slot).map(p=>p.player.id));
+    swapTracker={pool,entries,lockedTeams:new Set(),busy:false,draft:true};
+    byId("fdStopSwap").hidden=false;
+  }
   const tracker=swapTracker;
   if (!tracker || tracker.busy || document.hidden) return;
   tracker.busy=true;
@@ -1411,7 +1467,7 @@ async function refreshSwaps() {
     for(const swap of data.swaps) for(const team of swap.activeTeams)tracker.lockedTeams.add(team);
     const until=Math.min(...data.swaps.map(s=>s.expiresAt));
     if (!Number.isFinite(until)) {
-      stopSwap();swapStatus.textContent="All games are locked.";return;
+      stoppedDraftSlate=slateLockAt;stopSwap();swapStatus.textContent="All games are locked.";return;
     }
     if(until<=Date.now()) {swapStatus.textContent="A game just locked. Rechecking.";return;}
     for(const [i,swap] of data.swaps.entries()) {
@@ -1427,7 +1483,8 @@ async function refreshSwaps() {
       }
       card.append(summary,list);output.append(card);
     }
-    swapStatus.textContent="Checked "+new Date().toLocaleTimeString()+". Apply desired swaps in FanDuel and update the tracked IDs after changing an entry.";
+    swapStatus.textContent=(tracker.draft ? "Tracking the last LPPE build. " : "Tracking your supplied entries. ")+
+      "Checked "+new Date().toLocaleTimeString()+". Apply desired swaps in FanDuel and import actual entries to track them.";
     swapExpiry=setTimeout(()=>{output.replaceChildren();refreshSwaps();},Math.max(1,until-Date.now()));
   } catch(error) {
     if(tracker===swapTracker)swapStatus.textContent=error.message;
@@ -1437,8 +1494,9 @@ async function refreshSwaps() {
 }
 byId("fdSwap").addEventListener("click",()=>{
   stopSwap();
-  const pool=readSession()?.data;
+  let pool=readSession()?.data;
   if(sport.value!=="NBA" || !pool?.players?.length) {swapStatus.textContent="Load the matching live NBA slate first.";return;}
+  if (loadedLiveSlate && pool.lockAt===slateLockAt && readSession()?.id===loadedLiveSlate.id) pool={...pool,players:players.map(p=>({...p}))};
   const entries=byId("fdEnteredIds").value.trim().split(/\r?\n/).map(line=>line.trim().split(/[\s,]+/));
   if(entries.length>20 || entries.some(ids=>ids.length!==9 || new Set(ids).size!==9 || ids.some(id=>!pool.players.some(p=>p.id===id)))) {
     swapStatus.textContent="Enter 1–20 lineups with nine distinct player IDs from this slate on each line.";return;
@@ -1446,11 +1504,11 @@ byId("fdSwap").addEventListener("click",()=>{
   swapTracker={pool,entries,lockedTeams:new Set(),busy:false};
   byId("fdStopSwap").hidden=false;refreshSwaps();
 });
-byId("fdStopSwap").addEventListener("click",()=>{stopSwap();swapStatus.textContent="Tracking stopped.";});
+byId("fdStopSwap").addEventListener("click",()=>{stoppedDraftSlate=slateLockAt;stopSwap();swapStatus.textContent="Tracking stopped.";});
 byId("fdEnteredIds").addEventListener("input",()=>{if(swapTracker){stopSwap();swapStatus.textContent="Restart tracking to use the edited entries.";}});
 sport.addEventListener("change",()=>{stopSwap();swapStatus.textContent="";});
 setInterval(refreshSwaps,300000);
-document.addEventListener("visibilitychange",()=>{if(swapTracker&&!document.hidden)refreshSwaps();});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)refreshSwaps();});
 
 byId("fdSwapFile").addEventListener("change",async event=>{
   const file=event.target.files[0];

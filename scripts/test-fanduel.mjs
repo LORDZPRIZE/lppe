@@ -375,7 +375,11 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
   }
   // Every eligible lineup has exactly the same players, hence every simulated contest ties.
   const fixed=[...result.lineups[0].ids].map(id=>({...joined.find(p=>p.id===id),selection:"available",maxExposure:100}));
-  const tied=buildNBATournament(fixed,1,1,18000,{fieldSize:3}).simulation.comparison;
+  const originalIds=[fixed.map(p=>p.id)];
+  const simulations=buildNBATournament(fixed,1,1,18000,{fieldSize:3,originalIds}).simulation;
+  assert.deepEqual(simulations.newsComparison,simulations.comparison);
+  assert.equal(buildNBATournament(fixed,1,1,18000,{fieldSize:3,originalIds:[["missing"]]}).simulation.newsComparison,undefined);
+  const tied=simulations.comparison;
   assert.equal(tied.tournamentFirsts,tied.scenarios);
   assert.equal(tied.projectionFirsts,tied.scenarios);
   assert.equal(small.ownershipForecast.filter(p=>p.input!==null).length,8);
@@ -430,6 +434,7 @@ test("replays a portable NBA build without an entered username and rejects incom
     ...(i<9 ? {player:"Player ("+players[i].id+")",fpts:"5"} : {})}));
   Object.entries({"Start Time":"2026-11-24 19:00:00 ET","Contest Name":"Example",Slate:"Main","Seats Filled":"101"})
     .forEach(([contestinfo,contestvalue],i)=>Object.assign(rows[i],{contestinfo,contestvalue}));
+  assert.deepEqual(Object.keys(readNBAArchive(JSON.stringify([{newsBefore_123:build,newsAfter_123:build}]))[0]),["newsBefore_123","newsAfter_123"]);
   const field=reviewContest(rows);
   assert.equal(field.cutoff,125);
   assert.equal(field.winningScore,144);

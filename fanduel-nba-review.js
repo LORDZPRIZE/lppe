@@ -93,7 +93,7 @@ export function readNBAArchive(text) {
   const valid=[];
   for (const record of records) {
     const accepted={};
-    for (const version of versions) {
+    for (const version of [...versions,...Object.keys(record || {}).filter(k=>/^news(Before|After)_\d+$/.test(k))]) {
       const build=record?.[version];
       if (!build || build.sport!=="NBA") continue;
       const legal=Array.isArray(build.lineups) && build.lineups.length>0 && build.lineups.every(lineup=>
