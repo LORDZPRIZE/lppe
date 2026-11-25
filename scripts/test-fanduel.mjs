@@ -356,7 +356,11 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
   assert.equal(result.lineups.length,3);
   assert.equal(result.simulation.opponents,197);
   const comparison=result.simulation.comparison;
-  assert.equal(comparison.scenarios,512);
+  assert.equal(comparison.scenarios,2048);
+  assert.equal(comparison.batches.length,4);
+  for(const metric of ["scenarios","tournamentHits","projectionHits","tournamentFirsts","projectionFirsts"]) {
+    assert.equal(comparison[metric],comparison.batches.reduce((sum,b)=>sum+b[metric],0));
+  }
   for (const hits of [comparison.tournamentHits,comparison.projectionHits]) {
     assert.ok(Number.isInteger(hits) && hits>=0 && hits<=comparison.scenarios);
   }
@@ -365,8 +369,8 @@ test("NBA simulation honors locks, caps and uniqueness and saves a projection co
     3,2,18000,{fieldSize:20,exposure:80,target:"first"});
   assert.equal(result.simulation.target,"top20");
   assert.equal(small.simulation.target,"first");
-  assert.equal(small.simulation.comparison.tournamentHits,512);
-  assert.equal(small.simulation.comparison.projectionHits,512);
+  assert.equal(small.simulation.comparison.tournamentHits,2048);
+  assert.equal(small.simulation.comparison.projectionHits,2048);
   for (const sample of [comparison,small.simulation.comparison]) {
     for (const mode of ["tournament","projection"]) {
       const firsts=sample[mode+"Firsts"];

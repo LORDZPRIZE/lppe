@@ -637,6 +637,16 @@ function renderLineups(result,requested,highCeiling) {
       row.insertCell().textContent=hits;
     }
     panel.append(heading,table);
+    if (comparison.batches?.length) {
+      const batches=comparison.batches;
+      const ahead=batches.filter(b=>b.tournamentHits>b.projectionHits).length;
+      const tied=batches.filter(b=>b.tournamentHits===b.projectionHits).length;
+      const summary=document.createElement("p");
+      summary.textContent="Top-20 comparison across "+batches.length+" batches of "+batches[0].scenarios+
+        " simulated slates against the same field: tournament ahead in "+ahead+", tied in "+tied+
+        ", behind in "+(batches.length-ahead-tied)+".";
+      panel.append(summary);
+    }
     output.append(panel);
   }
   if (result.highestProjected) {

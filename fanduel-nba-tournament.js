@@ -165,10 +165,9 @@ function ownershipFit(players) {
   return best;
 }
 
-function comparePortfolios(players,index,field,portfolios,rotations) {
-  const random=generator(83713);
+function comparisonBatch(players,field,mapped,rotations,seed) {
+  const random=generator(seed);
   const outcomes=new Int32Array(players.length);
-  const mapped=portfolios.map(portfolio=>portfolio.map(lineup=>[...lineup.ids].map(id=>index.get(id))));
   const hits=[0,0], firsts=[0,0], scenarios=512;
   const score=indices=>indices.reduce((sum,i)=>sum+outcomes[i],0);
   for(let n=0;n<scenarios;n++) {
@@ -188,6 +187,16 @@ function comparePortfolios(players,index,field,portfolios,rotations) {
   }
   return {scenarios,tournamentHits:hits[0],projectionHits:hits[1],
     tournamentFirsts:firsts[0],projectionFirsts:firsts[1]};
+}
+
+function comparePortfolios(players,index,field,portfolios,rotations) {
+  const mapped=portfolios.map(portfolio=>portfolio.map(lineup=>[...lineup.ids].map(id=>index.get(id))));
+  const batches=[83713,591811,419431,793099].map(seed=>comparisonBatch(players,field,mapped,rotations,seed));
+  const total={scenarios:0,tournamentHits:0,projectionHits:0,tournamentFirsts:0,projectionFirsts:0};
+  for (const batch of batches) {
+    for (const key of Object.keys(total)) total[key]+=batch[key];
+  }
+  return {...total,batches};
 }
 
 export function buildNBATournament(raw,count,difference,limit,options={}) {
