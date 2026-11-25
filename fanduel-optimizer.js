@@ -152,11 +152,25 @@ const readOwnership = row => {
 };
 const readCeiling = row => csvNumber(row.ceiling || row.ceilingfpts || row.projectedceiling);
 
+// A projection date needs an explicit timezone. A file or game date is not a projection update.
+function projectionTime(row) {
+  const value=(row.projectionupdatedat || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return null;
+  const time=Date.parse(value);
+  const day=value.slice(0,10);
+  const midnight=Date.parse(day+"T00:00:00Z");
+  if (!Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0,10)!==day ||
+      !Number.isFinite(time) || time>Date.now()) return null;
+  return new Date(time).toISOString();
+}
+
 export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{selectedSlate,date} = {}) {
   if (!projectionCSV.trim()) return {players,matched:0};
   const gameDates = new Set([date,...players.map(player => player.gameDate)].filter(Boolean));
   const byId = new Map();
   const byName = new Map();
+  const timeById = new Map();
+  const timeByName = new Map();
   const ceilingById = new Map();
   const ceilingByName = new Map();
   const ownershipById = new Map();
@@ -179,6 +193,9 @@ export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{sele
     recordNameVariant(projectionVariants,displayName,team);
     addProjection(byId,row.id || row.playerid,projected);
     if (name && team) addProjection(byName,name + ":" + team,projected);
+    const updated=projectionTime(row);
+    addProjection(timeById,row.id || row.playerid,updated);
+    if (name && team) addProjection(timeByName,name+":"+team,updated);
     const ownership = readOwnership(row);
     if (ownership !== undefined) {
       addProjection(ownershipById,row.id || row.playerid,ownership);
@@ -209,8 +226,10 @@ export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{sele
       variants.values().next().value : undefined;
     const points = byId.get(id) ?? byName.get(uniqueName) ?? byName.get(alternate);
     if (points == null) return player;
+    const updated=byId.get(id)!=null ? timeById.get(id) :
+      timeByName.get(byName.get(uniqueName)!=null ? uniqueName : alternate);
     matchedCount++;
-    return {...player,points,source:"Projection CSV",
+    return {...player,points,source:"Projection CSV",projectionUpdatedAt:updated ?? null,
       ceiling:ceilingById.get(id) ?? ceilingByName.get(uniqueName) ?? ceilingByName.get(alternate) ?? player.ceiling,
       ownership:ownershipById.get(id) ?? ownershipByName.get(uniqueName) ?? ownershipByName.get(alternate) ?? player.ownership};
   });
@@ -253,6 +272,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       if (existing.team !== team || existing.salary !== salary || existing.name !== name) {
         throw new Error("Conflicting rows share a FanDuel player ID. Use a single slate CSV.");
       }
+      if (existing.projectionUpdatedAt!==projectionTime(row)) existing.projectionUpdatedAt=null;
       existing.positions = [...new Set([...existing.positions, ...positions])];
       if (unavailable(status)) {
         existing.status = status;
@@ -263,7 +283,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       continue;
     }
     const game = (row.game || row.gameid || row.matchup || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
-    players.set(id,{id,name,positions,salary,team,points,confirmedStarter:/^(1|true|yes)$/i.test(row.starter) ? true : /^(0|false|no)$/i.test(row.starter) ? false : undefined,ceiling:readCeiling(row),ownership:readOwnership(row),source,status,game,
+    players.set(id,{id,name,positions,salary,team,points,confirmedStarter:/^(1|true|yes)$/i.test(row.starter) ? true : /^(0|false|no)$/i.test(row.starter) ? false : undefined,ceiling:readCeiling(row),ownership:readOwnership(row),source,projectionUpdatedAt:Number.isFinite(provided) ? projectionTime(row) : null,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
   if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
@@ -548,11 +568,17 @@ export function summarizeReviewExport(lineups) {
     for (const {player} of picks) players.set(player.id,player);
   }
   const sources=new Map();
+  const datedBySource=new Map();
   for (const player of players.values()) {
     const source=player.source || "Unknown source";
+    if (player.projectionUpdatedAt && Number.isFinite(Date.parse(player.projectionUpdatedAt))) {
+      const dates=datedBySource.get(source) || [];
+      dates.push(Date.parse(player.projectionUpdatedAt));
+      datedBySource.set(source,dates);
+    }
     sources.set(source,(sources.get(source) || 0)+1);
   }
-  return {distinct:rosters.size,players:players.size,sources};
+  return {distinct:rosters.size,players:players.size,sources,datedBySource};
 }
 
 export function reviewCSV(lineups,sport = "NBA") {
@@ -561,10 +587,10 @@ export function reviewCSV(lineups,sport = "NBA") {
     const text = String(value);
     return '"' + (/^[=+@\-\t\r]/.test(text) ? "'" : "") + text.replaceAll('"','""') + '"';
   };
-  const rows = [["Lineup","Slot","Player ID","Player","Team","Salary","Projected FPTS","Projection source"]];
+  const rows = [["Lineup","Slot","Player ID","Player","Team","Salary","Projected FPTS","Projection source","Projection updated at (UTC)"]];
   for (const [index,lineup] of lineups.entries()) {
     for (const {slot,player} of lineup.picks) {
-      rows.push([index+1,roster[slot][0],player.id,player.name,player.team,player.salary,player.points,player.source]);
+      rows.push([index+1,roster[slot][0],player.id,player.name,player.team,player.salary,player.points,player.source,player.projectionUpdatedAt || ""]);
     }
   }
   return rows.map(row => row.map(escape).join(",")).join("\r\n");

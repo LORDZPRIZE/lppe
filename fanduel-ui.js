@@ -779,13 +779,20 @@ function renderLineups(result,requested,highCeiling) {
     const sources=document.createElement("ul");
     for (const [source,count] of audit.sources) {
       const item=document.createElement("li");
-      const timestamp=source==="Daily Fantasy Fuel" ? Date.parse(loadedLiveSlate?.projectionUpdatedAt) : NaN;
-      const freshness=Number.isFinite(timestamp) ? "updated "+new Date(timestamp).toLocaleString() :
+      const dates=audit.datedBySource.get(source) || [];
+      const oldest=dates.length ? Math.min(...dates) : null;
+      const freshness=dates.length ? "oldest update "+new Date(oldest).toLocaleString()+
+        (dates.length<count ? " · "+(count-dates.length)+" update times unknown" : "") :
         source==="FanDuel FPPG" ? "historical average; as-of time unknown" : "update time unknown";
       item.textContent=source+" · "+count+" · "+freshness;
       sources.append(item);
     }
     preflight.append(heading,details,sources);
+    if ([...audit.sources].some(([source,count])=>source==="Projection CSV" && (audit.datedBySource.get(source)?.length || 0)<count)) {
+      const hint=document.createElement("p");
+      hint.textContent="To track freshness, include Projection Updated At in your projection CSV with an ISO timestamp such as 2026-11-25T08:00:00-08:00.";
+      preflight.append(hint);
+    }
   }
   exportButton.disabled = !lineups.length;
 }
@@ -899,8 +906,8 @@ build.addEventListener("click",event => {
 function updateLiveProjections(text) {
   const slate = loadedLiveSlate;
   const baseline = players.map(player => {
-    const {points,ceiling,ownership,source} = slate.baseline.get(player.id);
-    return {...player,points,ceiling,ownership,source};
+    const {points,ceiling,ownership,source,projectionUpdatedAt} = slate.baseline.get(player.id);
+    return {...player,points,ceiling,ownership,source,projectionUpdatedAt};
   });
   const result = applyPlayerProjections(baseline,text,sport.value,{date:slate.date});
   players = result.players;
@@ -989,8 +996,10 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
     }
     const sameSlate = loadedLiveSlate?.id === previousId;
     const priorSelections = new Map(sameSlate ? players.map(player => [player.id,player]) : []);
-    const baseline = new Map(data.players.map(player => [player.id,player]));
-    let selectedPlayers = data.players.map(player => ({...player}));
+    const publishedAt=data.projectionCoverage?.updatedAt ?? (data.poolType==="public preview" ? data.updatedAt : null);
+    let selectedPlayers=data.players.map(player=>({...player,projectionUpdatedAt:
+      player.source==="Daily Fantasy Fuel" && Number.isFinite(Date.parse(publishedAt)) ? new Date(publishedAt).toISOString() : null}));
+    const baseline=new Map(selectedPlayers.map(player=>[player.id,{...player}]));
     let projectionText = sameSlate ? loadedLiveSlate.projectionText : "";
     liveProjectionStatus.textContent = "";
     if (projectionText) {
@@ -1018,7 +1027,7 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
     clearLineups();
     clearRemoval();
     slateLockAt = data.lockAt;
-    loadedLiveSlate = {id:previousId,projectionUpdatedAt:data.projectionCoverage?.updatedAt ?? (data.poolType==="public preview" ? data.updatedAt : null),updatedAt:data.updatedAt,date:data.date,name:data.label+" · "+data.date,baseline,projectionText};
+    loadedLiveSlate = {id:previousId,updatedAt:data.updatedAt,date:data.date,name:data.label+" · "+data.date,baseline,projectionText};
     loadedSalaryFile = loadedSlateKey = undefined;
     importedSlateName = undefined;
     players = selectedPlayers;
@@ -1303,7 +1312,7 @@ function saveBuildHistory(baseline,ownershipForecast,comparison,news,newsCompari
   if (now >= slateLockAt) return;
   const key = historyPrefix+JSON.stringify([sport.value,loadedLiveSlate.id,slateLockAt]);
   const serialize = portfolio => portfolio.map(lineup => lineup.picks.map(({player}) => ({
-    id:player.id,name:player.name,team:player.team,points:player.points,source:player.source,salary:player.salary,
+    id:player.id,name:player.name,team:player.team,points:player.points,source:player.source,projectionUpdatedAt:player.projectionUpdatedAt,salary:player.salary,
     ceiling:player.ceiling,ownership:player.ownership,minutes:player.minutes,starter:player.starter})));
   const snapshot = {capturedAt:new Date(now).toISOString(),sport:sport.value,slate:loadedLiveSlate.name,
     lockAt:new Date(slateLockAt).toISOString(),requested:Number(count.value),

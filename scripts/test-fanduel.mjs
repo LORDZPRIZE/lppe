@@ -226,7 +226,7 @@ test("custom live projections preserve salary, selection and fallback estimates"
   ].join("\n");
   const result = applyPlayerProjections(baseline,csv,"NFL",{date:"2026-11-22"});
   assert.equal(result.matched,1);
-  assert.deepEqual(result.players[0],{...baseline[0],source:"Projection CSV",points:0,ceiling:12,ownership:0.125});
+  assert.deepEqual(result.players[0],{...baseline[0],source:"Projection CSV",projectionUpdatedAt:null,points:0,ceiling:12,ownership:0.125});
   assert.deepEqual(result.players.slice(1),baseline.slice(1));
   assert.equal(baseline[0].points,11);
   assert.throws(() => applyPlayerProjections(baseline,csv,"NFL",{date:"2026-11-24"}),/Projection CSV/);
@@ -486,4 +486,34 @@ test("review export counts distinct player sets independent of slot order and co
   assert.equal(summary.distinct,2);
   assert.equal(summary.players,3);
   assert.deepEqual([...summary.sources],[["Projection CSV",1],["FanDuel FPPG",1],["Unknown source",1]]);
+});
+
+test("NBA import, tournament build and review export preserve matched projection times",async()=>{
+  const {buildNBATournament}=await import("../fanduel-nba-tournament.js");
+  const {parseCSV,reviewCSV,summarizeReviewExport}=await import("../fanduel-optimizer.js");
+  const salary=["ID,Name,Position,Salary,Team,FPPG"];
+  const custom=["ID,Projection,Projection Updated At"];
+  for(let i=0;i<30;i++){
+    salary.push(["123-"+i,"Player "+i,["PG","SG","SF","PF","C"][i%5],4800,["BOS","NYK","DEN","LAL"][i%4],25].join(","));
+    custom.push(["123-"+i,30,i%2 ? "2025-01-01T09:30:00-08:00" : "2025-01-01"].join(","));
+  }
+  const {players}=importPlayers(salary.join("\n"),custom.join("\n"),"NBA");
+  const utc="2025-01-01T17:30:00.000Z";
+  assert.equal(players[0].projectionUpdatedAt,null);
+  assert.equal(players[1].projectionUpdatedAt,utc);
+  const {lineups}=buildNBATournament(players,2,1,18000,{fieldSize:30});
+  const audit=summarizeReviewExport(lineups);
+  assert.equal(audit.distinct,2);
+  assert.equal(audit.sources.get("Projection CSV"),audit.players);
+  const rows=parseCSV(reviewCSV(lineups));
+  assert.equal(rows.length,18);
+  const known=new Set();
+  for(const row of rows){
+    const expected=players.find(p=>p.id===row.playerid).projectionUpdatedAt;
+    assert.equal(row.projectionupdatedatutc,expected || "");
+    if(expected)known.add(row.playerid);
+  }
+  assert.equal(audit.datedBySource.get("Projection CSV").length,known.size);
+  const revised=applyPlayerProjections(players,"ID,Projection,Projection Updated At\n123-1,31,2099-01-01T10:00:00Z");
+  assert.equal(revised.players[1].projectionUpdatedAt,null);
 });
