@@ -237,11 +237,11 @@ function clearLineups() {
   byId("fdResultsPanel").hidden = true;
 }
 
-const mandatoryInjuryHold = status => unavailable(String(status||"").trim()) || /^(PUP|NFI|RESERVE[ /-].*|PHYSICALLY UNABLE TO PERFORM|INJURED[ -]RESERVE)$/i.test(String(status||"").trim());
+const mandatoryInjuryHold = status => unavailable(String(status||"").trim()) || /^(PUP|NFI|RESERVE[ /-].*|PHYSICALLY UNABLE TO PERFORM|INJURED[ -]RESERVE)$/i.test(String(status||"").trim()) || /\b(injured reserve|out for season|ruled out|inactive|suspended|doubtful|questionable|non-football injury)\b/i.test(String(status||""));
 let nflInjuryHolds = new Set();
 function poolForBuild() {
   return players.map(player => mandatoryInjuryHold(player.status) ||
-    (sport.value==="NFL" && (nflInjuryHolds.has(player.id) || /^(jalen hurts|tyquan thornton)$/i.test(player.name.trim()))) ||
+    (sport.value==="NFL" && (nflInjuryHolds.has(player.id) || /^(jalen hurts|tyquan thornton|joshua palmer|josh palmer)$/i.test(player.name.trim()))) ||
     ((sport.value==="NFL" || avoidQuestionable.checked) && uncertainAvailability(player.status)) ?
     {...player,selection:"exclude"} : player);
 }
