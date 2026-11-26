@@ -629,3 +629,43 @@ test("ownership diagnostics measure coverage and signed error without counting c
   assert.equal(ownershipReview(rows,{...snapshot,lockAt:"2026-11-25T01:00Z"}),null);
   assert.equal(ownershipReview(rows.slice(1),snapshot).lockMatched,false);
 });
+
+test("saved Main lookup uses only the cached exact-ID pre-lock pool", async context => {
+  const {onRequestGet:lookup} = await import("../functions/api/nba/saved-main.js");
+  const cache = new Map();
+  context.mock.method(globalThis,"fetch",async input => {
+    const url = new URL(input);
+    if (url.pathname.endsWith("/slates")) return Response.json({data:[{
+      id:"provider123",label:"Main",sport:"NBA",started:false,starts_at:start,salary_cap:60000,games:2,players:12
+    }]});
+    if (url.pathname.endsWith("/players")) return Response.json({data:Array.from({length:12},(_,index) => ({
+      id:"123-"+index,name:"Player "+index,team:teams[index%4],position:"PG",salary:5000,fppg:22
+    }))});
+    if (url.pathname.endsWith("/scoreboard")) return Response.json({events:[teams.slice(0,2),teams.slice(2)].map(pair => ({
+      date:start,status:{type:{state:"pre"}},competitions:[{competitors:pair.map(abbreviation=>({team:{abbreviation}}))}]
+    }))});
+    return new Response("",{status:503});
+  });
+  globalThis.caches = {default:{
+    async match(key) { return cache.get(key.url)?.clone(); },
+    async put(key,response) { cache.set(key.url,response); }
+  }};
+  context.after(() => { delete globalThis.caches; });
+  const start = new Date(Date.now()+7200000).toISOString();
+  const teams = ["BOS","DEN","ORL","MIA"];
+  const load = await onRequestGet({request:new Request("https://example.com/api/nba/fanduel?slate=provider123"),
+    env:{FANDUEL_API_KEY:"fd_fixture"}});
+  const pool = await load.json();
+  assert.equal(load.status,200);
+  const calls = fetch.mock.callCount();
+  const get = date => lookup({request:new Request("https://example.com/api/nba/saved-main?date="+date)});
+  const saved = await (await get(pool.date)).json();
+  assert.equal(saved.slateId,"123");
+  assert.equal(saved.providerSlateId,"provider123");
+  assert.deepEqual(saved.players,pool.players);
+  assert.equal((await get("2026-02-30")).status,400);
+  assert.equal((await get("2000-01-01")).status,404);
+  context.mock.method(Date,"now",()=>Date.parse(start));
+  assert.equal((await get(pool.date)).status,404);
+  assert.equal(fetch.mock.callCount(),calls);
+});
