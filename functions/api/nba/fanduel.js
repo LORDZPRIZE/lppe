@@ -349,10 +349,12 @@ export async function onRequestGet({request,env}) {
       if (ready) return reply(ready);
     }
     let slate;
+    let mainCandidates;
     let read;
     if (configured) {
       read = providerReader(env);
       const slates = await listProviderSlates(cache,cacheKey("slates"),read,sport);
+      mainCandidates = slates.filter(item => /^(?:NBA )?Main(?: Slate)?$/i.test((item.label || "").trim()));
       if (list) return reply({slates:slates.map(item => ({
         id:String(item.id),label:item.label || "FanDuel " + profiles[sport].name + " Classic",
         lockAt:Date.parse(item.starts_at),games:item.games
@@ -397,6 +399,15 @@ export async function onRequestGet({request,env}) {
     if (injuries) data = applyNBAInjuryReport(data,injuries,Date.now());
     if (projections) data = addNBAProjections(data,projections,Date.now());
     if (data.lockAt <= Date.now()) return reply({error:"The salary slate has already locked."},404);
+    if (isLiveNBA && mainCandidates.includes(slate) &&
+        mainCandidates.filter(item => easternDay(Date.parse(item.starts_at)) === data.date).length === 1 &&
+        data.players.every(player => Number.isFinite(player.gameStart) && player.gameStart >= data.lockAt &&
+          /^\d+-\d+$/.test(player.id)) &&
+        new Set(data.players.map(player => player.id.split("-")[0])).size === 1) {
+      const snapshot = {...data,slateId:data.players[0].id.split("-")[0],providerSlateId:String(slate.id),
+        cachedAt:new Date().toISOString()};
+      await storePool(cache,cacheKey("saved-main/"+data.date),snapshot,86400);
+    }
     await storePool(cache,key,data,isLiveNBA ? 120 : liveRefreshSeconds(data.lockAt));
     return reply(data);
   } catch (error) {
