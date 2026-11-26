@@ -616,8 +616,8 @@ export function contestPlayerScores(rows) {
     const raw=String(row.fpts??"").trim();
     const value=Number(raw);
     if (!id || !raw || !Number.isFinite(value)) continue;
-    if (actual.has(id) && actual.get(id)!==value) actual.set(id,null);
-    else actual.set(id,value);
+    if (!actual.has(id)) actual.set(id,value);
+    else if (actual.get(id)!==value) actual.set(id,null);
   }
   return actual;
 }
