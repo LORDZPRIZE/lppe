@@ -1209,11 +1209,11 @@ exportButton.addEventListener("click",() => {
 });
 
 byId("fdSpreadFive").addEventListener("click",() => {
-  count.value = "5";
+  count.value = "20";
   exposure.value = "80";
   difference.value = "3";
   applyMode();
-  byId("fdBuildStatus").textContent = "Ready to build five lineups with at least three different players per pair and a four-lineup cap per unlocked player.";
+  byId("fdBuildStatus").textContent = "Ready to build 20 lineups with at least three different players per pair and a 16-lineup cap per unlocked player.";
 });
 
 byId("fdContestReview").addEventListener("submit",async event => {
