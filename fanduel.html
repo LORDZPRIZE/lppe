@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#10111a">
 <title>FanDuel Classic Optimizer | LPPE</title>
 <style>
 :root {
@@ -147,26 +148,120 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
 #fdResults .lineup-card + details:not(.lineup-card) { background: #211a31; }
 .checkbox-label { display: inline-flex; align-items: center; gap: .5rem; padding: .65rem 0; }
 .checkbox-label input { width: auto; min-height: 0; padding: 0; }
+
+:root {
+  background: #10111a;
+  --surface: #191b29;
+  --field: #12141f;
+  --border: #35394d;
+  --muted: #b8bed0;
+  --accent: #d9fb89;
+}
+header {
+  background: radial-gradient(ellipse at 82% -20%, #4d3a87 0%, transparent 62%), #171827;
+  border-bottom: 1px solid var(--border);
+}
+.header-inner, main, .workspace-nav > div { max-width: 1360px; }
+.header-inner { padding-block: 12px 25px; }
+h1 { font-size: clamp(1.85rem, 5vw, 3.55rem); max-width: none; margin: .15em 0; }
+h1 span { display: inline; }
+.back-link { font-size: .85rem; }
+.workspace-nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #10111a;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-nav > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 18px;
+  margin: auto;
+  padding: 0 clamp(14px, 4vw, 40px);
+}
+.workspace-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #e0e3f0;
+  text-decoration: none;
+  font-size: .875rem;
+  font-weight: 650;
+}
+.workspace-nav a:hover, .workspace-nav a:focus-visible { color: var(--accent); }
+body:has(#fdResultsPanel[hidden]) .workspace-nav a[href="#fdResultsPanel"],
+body:has(#fdPool[hidden]) .workspace-nav a[href="#fdPool"] { display: none; }
+main { display: grid; gap: 14px; align-items: start; padding-top: 16px; }
+main > section { min-width: 0; margin: 0; border-radius: 16px; scroll-margin-top: 96px; }
+#fdResultsPanel { margin: 0; padding: clamp(14px, 3vw, 28px); }
+.lineup-card { scroll-margin-top: 96px; }
+.slate-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.slate-controls > :first-child, .slate-controls > .live-slate-label,
+.slate-controls > .primary, .slate-controls > .checkbox-label { grid-column: 1 / -1; }
+.slate-controls input[type=number] { width: 100%; }
+.slate-controls .checkbox-label { font-weight: 500; padding: 0; }
+#fdAutoLoad { min-height: 50px; }
+#fdRefreshSlates { justify-self: start; grid-column: 1 / -1; }
+#fdStatus, #fdRemoval, thead, tfoot { background: #222539; }
+tbody tr:nth-child(even), #fdResults .lineup-card + details:not(.lineup-card) { background: #202334; }
+#fdNewsStatus:empty, #fdBuildStatus:empty, #fdExportCheck:empty { display: none; }
+#fdStatus, #fdNewsStatus, #fdBuildStatus { overflow-wrap: anywhere; }
+.player-toolbar { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.player-toolbar label { flex: 1 1 150px; }
+.player-toolbar label:first-child { flex-grow: 2; }
+textarea {
+  width: 100%;
+  margin-block: 4px 8px;
+  padding: 10px 12px;
+  color: inherit;
+  background: var(--field);
+  border: 1px solid #665981;
+  border-radius: 10px;
+  font: inherit;
+  resize: vertical;
+}
+@media (min-width: 900px) {
+  main:has(#fdResultsPanel:not([hidden])) { grid-template-columns: minmax(340px, 2fr) minmax(0, 3fr); }
+  #fdPool, #fdLateSwap, #fdReview { grid-column: 1 / -1; }
+  main:has(#fdResultsPanel[hidden]) #fdSlatePanel .slate-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  main:has(#fdResultsPanel[hidden]) #fdSlatePanel .slate-controls > label:first-child { grid-column: auto; }
+}
+@media (max-width: 480px) {
+  .slate-controls > label:not(.checkbox-label) { grid-column: 1 / -1; }
+  .workspace-nav > div { gap: 0 13px; }
+  .workspace-nav a { font-size: .8rem; }
+  #fdBuild, #fdSpreadFive { flex: 1 0 100%; }
+}
 </style>
 </head>
 <body>
 <header>
  <div class="header-inner">
- <a class="back-link" href="/">← LPPE PrizePicks dashboard</a>
+  <a class="back-link" href="/">← LPPE PrizePicks</a>
  <h1>FanDuel <span>Lineup Optimizer</span></h1>
  <p class="muted" id="fdRules">$60,000 cap · PG, SG, SF, PF, C, G/F, F/C and two UTIL slots</p>
  </div>
 </header>
+<nav class="workspace-nav" aria-label="Optimizer sections">
+ <div>
+  <a href="#fdSlatePanel">Slate</a>
+  <a href="#fdResultsPanel">Lineups</a>
+  <a href="#fdPool">Players</a>
+  <a href="#fdLateSwap">Late swap</a>
+  <a href="#fdReview">Review</a>
+ </div>
+</nav>
 <main>
- <section aria-labelledby="fdImportHeading">
+ <section id="fdSlatePanel" aria-labelledby="fdImportHeading">
   <h2 id="fdImportHeading">FanDuel slate</h2>
   <div class="controls slate-controls">
    <label>Sport <select id="fdSport"><option value="NBA">NBA</option><option value="NFL">NFL</option><option value="MLB">MLB</option><option value="CFB">College football</option></select></label>
+   <label class="live-slate-label">Live contest slate <select id="fdLiveSlate" disabled><option value="">Looking for slates…</option></select></label>
+   <button type="button" id="fdAutoLoad" class="primary" disabled>Load slate and build</button>
    <label>Optimize for <select id="fdObjective"><option value="projection">Projected points</option><option value="ceiling">High Ceiling</option><option value="tournament" selected>Tournament simulation</option></select></label>
    <label id="fdTargetLabel">NBA portfolio target <select id="fdTarget"><option value="top20">At least one top-20 lineup</option><option value="first">First-place share</option></select></label>
    <label id="fdFieldLabel">NBA contest entries <input id="fdFieldSize" type="number" value="19841" min="2" max="50000" required></label>
-   <label>Live contest slate <select id="fdLiveSlate" disabled><option value="">Looking for slates…</option></select></label>
-   <button type="button" id="fdAutoLoad" class="primary" disabled>Load slate and build</button>
    <label class="checkbox-label"><input type="checkbox" id="fdAutomatic" checked> Auto-build and refresh NBA news before lock</label>
    <button type="button" id="fdRefreshSlates">Refresh slates</button>
   </div>
@@ -180,12 +275,6 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <div class="controls" id="fdRemoval" hidden>
    <span id="fdRemovalStatus" role="status"></span>
    <button id="fdUndoRemoval" type="button">Undo removal</button>
-  </div>
-  <div id="fdResultsPanel" hidden role="region" aria-labelledby="fdResultsHeading">
-   <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdRefine" hidden>Search deeper</button><button type="button" id="fdCancel" hidden>Cancel build</button><button type="button" id="fdExport" disabled>Download review CSV</button></div>
-   <div id="fdExportCheck"></div>
-   <p id="fdBuildStatus" role="status"></p>
-   <div id="fdResults"></div>
   </div>
   <details id="fdManualImport"><summary>Upload a FanDuel CSV or Daily Fantasy Fuel cheatsheet</summary>
   <form id="fdImport" class="controls">
@@ -202,6 +291,12 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <p class="muted">Automatic loading uses the configured FanDuel salary provider. For NBA, LPPE can also check <a href="https://www.dailyfantasyfuel.com/nba/projections/fanduel/">Daily Fantasy Fuel</a>. Compare the games, salaries and player availability with your FanDuel contest.</p>
    <p class="muted">High Ceiling uses the <strong>Ceiling</strong> column in your salary or projections CSV. Players need a ceiling estimate to qualify for this mode.</p>
   </details>
+ </section>
+ <section id="fdResultsPanel" hidden aria-labelledby="fdResultsHeading">
+  <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdRefine" hidden>Search deeper</button><button type="button" id="fdCancel" hidden>Cancel build</button><button type="button" id="fdExport" disabled>Download review CSV</button></div>
+  <p id="fdBuildStatus" role="status"></p>
+  <div id="fdExportCheck"></div>
+  <div id="fdResults"></div>
  </section>
  <section id="fdPool" hidden aria-labelledby="fdPoolHeading">
   <h2 id="fdPoolHeading">Player pool</h2>
@@ -235,7 +330,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
    <button type="button" id="fdSaveSlate">Save slate on this device</button>
    <span class="muted" id="fdSaveStatus" role="status"></span>
   </div>
-  <div class="controls">
+  <div class="controls player-toolbar">
    <label>Find a player or team <input id="fdSearch" type="search" placeholder="Player or team"></label>
    <label>Position <select id="fdPositionFilter"></select></label>
    <label>Selection <select id="fdSelectionFilter"><option value="">All players</option><option value="available">Available</option><option value="lock">Locked</option><option value="exclude">Excluded</option></select></label>
@@ -251,7 +346,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <div class="tablewrap"><table><thead><tr><th>Player</th><th class="player-detail">Position</th><th class="player-detail">Team</th><th>Salary</th><th>FPTS</th><th class="player-detail">Source</th><th class="player-detail">Injury status</th><th>Selection</th></tr></thead>
    <tbody id="fdPlayers"></tbody></table></div>
  </section>
- <section>
+ <section id="fdLateSwap">
   <h2>NBA late swap</h2>
   <p>For a late-swap eligible contest, paste the nine FanDuel player IDs in the exact order of your entered lineup. Use one lineup per line. LPPE checks public game and injury updates every five minutes while open.</p>
   <label>Import entered NBA lineups <input id="fdSwapFile" type="file" accept=".csv,text/csv"></label>
@@ -261,7 +356,7 @@ button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shad
   <button id="fdStopSwap" type="button" hidden>Stop tracking</button>
   <p id="fdSwapStatus" role="status"></p><div id="fdSwapResults"></div>
  </section>
- <section aria-labelledby="fdReviewTitle">
+ <section id="fdReview" aria-labelledby="fdReviewTitle">
   <h2 id="fdReviewTitle">Review a finished contest</h2>
   <button type="button" id="fdBuildHistory">Download saved pre-lock builds</button>
   <p id="fdHistoryStatus" role="status"></p>
