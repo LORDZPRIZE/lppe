@@ -241,7 +241,7 @@ const mandatoryInjuryHold = status => unavailable(String(status||"").trim()) || 
 let nflInjuryHolds = new Set();
 function poolForBuild() {
   return players.map(player => mandatoryInjuryHold(player.status) ||
-    (sport.value==="NFL" && nflInjuryHolds.has(player.id)) ||
+    (sport.value==="NFL" && (nflInjuryHolds.has(player.id) || /^(jalen hurts|tyquan thornton)$/i.test(player.name.trim()))) ||
     ((sport.value==="NFL" || avoidQuestionable.checked) && uncertainAvailability(player.status)) ?
     {...player,selection:"exclude"} : player);
 }
@@ -611,6 +611,8 @@ function compareLineups(highCeiling,simulation) {
 
 function renderLineups(result,requested,highCeiling) {
   const status = byId("fdBuildStatus");
+  const eligibleIds = new Set(poolForBuild().filter(p=>p.selection!=="exclude").map(p=>p.id));
+  if (result.lineups.some(l=>l.picks.some(({player})=>!eligibleIds.has(player.id)))) { injuryBlocked(new Error("Lineup failed eligibility validation. Rebuild.")); return; }
   lineups = result.simulation ? result.lineups : [...result.lineups].sort((a,b) => highCeiling ? b.ceiling - a.ceiling : b.points - a.points);
   const heading = byId("fdResultsHeading");
   const slateName = loadedLiveSlate?.name || importedSlateName;
@@ -861,7 +863,7 @@ function buildVerifiedLineups(news=null) {
     return;
   }
   const gpp = mode.value === "gpp";
-  const candidates = poolForBuild();
+  const candidates = poolForBuild().filter(p=>p.selection!=="exclude");
   const {warnings} = checkSlate(candidates,profiles[sport.value],sport.value);
   if (warnings.length) {
     clearLineups();
