@@ -82,12 +82,14 @@ export function normalizePublicSlate({rows,updatedAt},events,now) {
 
 function eligibleProviderSlates(data,now,sport) {
   const profile = profiles[sport];
+  // NBA Main can be posted two calendar days ahead across an off-day.
+  const lastDay = easternDay(now+(sport === "NBA" ? 2 : 1)*86400000);
   return data.filter(slate => {
     const starts = Date.parse(slate.starts_at);
     return (slate.sport === sport || (sport === "CFB" && slate.sport === "NCAAF")) &&
       slate.started === false && slate.salary_cap === profile.salaryCap &&
       slate.games >= 2 && slate.players >= profile.roster.length && /^[a-z0-9_-]+$/i.test(String(slate.id)) &&
-      starts > now && easternDay(starts) <= easternDay(now+86400000) &&
+      starts > now && easternDay(starts) <= lastDay &&
       !/single|showdown|quarter|half|tiers|mvp|express|super\s*flex|snake draft|\b(?:test|dnp|dummy|qtr)\b/i.test(slate.label || "");
   }).sort((a,b) => easternDay(Date.parse(a.starts_at)).localeCompare(easternDay(Date.parse(b.starts_at))) ||
     Number(/main/i.test(b.label))-Number(/main/i.test(a.label)) ||
@@ -144,7 +146,7 @@ function providerReader(env) {
 
 async function listProviderSlates(cache,key,read,sport) {
   const cached = await cache.match(key);
-  if (cached) {
+  if (cached && (sport !== "NBA" || cached.headers.get("X-LPPE-Slate-List") === "nba-two-days")) {
     const slates = await cached.json();
     const upcoming = slates.filter(slate => Date.parse(slate.starts_at) > Date.now());
     if (!slates.length || upcoming.length) return upcoming;
@@ -155,7 +157,9 @@ async function listProviderSlates(cache,key,read,sport) {
   let slates = await fetchSlates(sport);
   if (!slates.length && sport === "CFB") slates = await fetchSlates("NCAAF");
   const ttl = slates.length ? 1800 : 600;
-  try { await cache.put(key,Response.json(slates,{headers:{"Cache-Control":"public, max-age="+ttl}})); } catch {}
+  const headers = {"Cache-Control":"public, max-age="+ttl};
+  if (sport === "NBA") headers["X-LPPE-Slate-List"] = "nba-two-days";
+  try { await cache.put(key,Response.json(slates,{headers})); } catch {}
   return slates;
 }
 
@@ -355,7 +359,7 @@ export async function onRequestGet({request,env}) {
       read = providerReader(env);
       const slates = await listProviderSlates(cache,cacheKey("slates"),read,sport);
       mainCandidates = slates.filter(item => /^(?:NBA )?Main(?: Slate)?$/i.test((item.label || "").trim()));
-      if (list) return reply({slates:slates.map(item => ({
+      if (list) return reply({...(sport === "NBA" ? {throughDate:easternDay(Date.now()+2*86400000)} : {}),slates:slates.map(item => ({
         id:String(item.id),label:item.label || "FanDuel " + profiles[sport].name + " Classic",
         lockAt:Date.parse(item.starts_at),games:item.games
       }))});
