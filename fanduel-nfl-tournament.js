@@ -151,6 +151,17 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
     const capped = new Set([...lead.ids].filter(id => limits.get(id) === 1));
     if (capped.size) collectCandidates(pool.filter(player => !capped.has(player.id)),minimum);
   }
+  // Give each eligible quarterback a separate candidate search for two-entry GPPs.
+  // Preserve explicit locks and the user's minimum stack setting.
+  if (count === 2 && !pool.some(player => player.selection === "lock" && player.positions.includes("QB"))) {
+    const quarterbacks = pool.filter(player => player.positions.includes("QB") &&
+      player.selection !== "exclude" && !unavailable(player.status) && Number.isFinite(player.points))
+      .sort((a,b) => b.points-a.points).slice(0,8);
+    for (const qb of quarterbacks) {
+      const qbPool = pool.filter(player => !player.positions.includes("QB") || player.id === qb.id);
+      collectCandidates(qbPool,Math.max(1,stack));
+    }
+  }
   // Generate alternative roster cores for multi-entry GPP portfolios. The original
   // projection-first search can return near-identical candidates, leaving exposure
   // constraints impossible to satisfy even when other valid rosters exist.
