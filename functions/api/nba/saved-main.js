@@ -57,11 +57,12 @@ async function recoverMain(read,date) {
 // Recovery only uses cached salaries and a public schedule.
 export async function onRequestGet({request}) {
   const date = new URL(request.url).searchParams.get("date") || "";
-  const reply = (body,status) => Response.json(body,{status,headers:{"Cache-Control":"no-store"}});
+  const reply = (body,status,source = "unavailable") => Response.json(body,{status,
+    headers:{"Cache-Control":"no-store","X-LPPE-Slate-Source":source}});
   const parsed = Date.parse(date+"T00:00:00Z");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed) ||
       new Date(parsed).toISOString().slice(0,10) !== date) {
-    return reply({error:"Provide a valid NBA Main slate date (YYYY-MM-DD)."},400);
+    return reply({error:"Provide a valid NBA Main slate date (YYYY-MM-DD)."},400,"invalid-date");
   }
   const read = async suffix => {
     const key = new Request(new URL("/lppe-internal/fanduel-v9/NBA/"+suffix,request.url));
@@ -71,9 +72,9 @@ export async function onRequestGet({request}) {
   const snapshot = await read("saved-main/"+date);
   const slateId = verifiedMain(snapshot,date,Date.now());
   if (slateId && slateId === snapshot.slateId) {
-    return reply(snapshot,200);
+    return reply(snapshot,200,"saved-main");
   }
   const recovered = await recoverMain(read,date).catch(() => null);
-  if (recovered && recovered.lockAt > Date.now()) return reply(recovered,200);
+  if (recovered && recovered.lockAt > Date.now()) return reply(recovered,200,"recovered-main");
   return reply({error:"No saved pre-lock NBA Main pool is available here for this date."},404);
 }
