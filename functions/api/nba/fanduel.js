@@ -336,6 +336,30 @@ async function storePool(cache,key,pool,maxAge) {
 export async function onRequestGet({request,env}) {
   const {searchParams} = new URL(request.url);
   const sport = searchParams.get("sport")?.toUpperCase() || "NBA";
+  if (searchParams.get("availability") === "1" && sport === "NFL") {
+    try {
+      const response = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries",{signal:AbortSignal.timeout(8000),cache:"no-store"});
+      if (!response.ok) throw new Error("Injury feed unavailable");
+      const data = await response.json();
+      if (!Array.isArray(data.injuries) || !data.injuries.length) throw new Error("Invalid injury feed");
+      const teams = new Set(), reports = [];
+      for (const group of data.injuries) {
+        if (!Array.isArray(group.injuries)) throw new Error("Invalid injury group");
+        const team = teamCode(group.team?.abbreviation || group.injuries[0]?.athlete?.team?.abbreviation,"NFL");
+        if (team) teams.add(team);
+        for (const entry of group.injuries) {
+          const name = entry.athlete?.displayName;
+          const code = teamCode(entry.athlete?.team?.abbreviation || team,"NFL");
+          if (!name || !code || !entry.status) throw new Error("Incomplete injury record");
+          teams.add(code);
+          reports.push({name,team:code,status:entry.status});
+        }
+      }
+      return reply({checkedAt:new Date().toISOString(),source:"ESPN",teams:[...teams],reports});
+    } catch {
+      return reply({error:"NFL injury feed could not be verified."},503);
+    }
+  }
   const list = searchParams.get("list") === "1";
   const slateId = searchParams.get("slate");
   if (list && slateId !== null) return reply({error:"Request the slate list or one slate ID at a time."},400);
