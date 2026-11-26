@@ -237,10 +237,32 @@ function clearLineups() {
   byId("fdResultsPanel").hidden = true;
 }
 
+const mandatoryInjuryHold = status => unavailable(String(status||"").trim()) || /^(PUP|NFI|RESERVE[ /-].*|PHYSICALLY UNABLE TO PERFORM|INJURED[ -]RESERVE)$/i.test(String(status||"").trim());
+let nflInjuryHolds = new Set();
 function poolForBuild() {
-  if (!avoidQuestionable.checked) return players;
-  return players.map(player => player.selection === "available" && uncertainAvailability(player.status) ?
+  return players.map(player => mandatoryInjuryHold(player.status) ||
+    (sport.value==="NFL" && nflInjuryHolds.has(player.id)) ||
+    ((sport.value==="NFL" || avoidQuestionable.checked) && uncertainAvailability(player.status)) ?
     {...player,selection:"exclude"} : player);
+}
+async function verifyNFLInjuries() {
+  const pool = players;
+  const response = await fetch("/api/nba/fanduel?sport=NFL&availability=1",{cache:"no-store",signal:AbortSignal.timeout(12000)});
+  if (!response.ok) throw new Error("NFL injury feed unavailable.");
+  const data = await response.json();
+  const age = Date.now()-Date.parse(data.checkedAt);
+  if (!(age>=-30000 && age<300000) || !Array.isArray(data.reports) || !Array.isArray(data.teams)) throw new Error("NFL injury feed is stale or incomplete.");
+  if (pool!==players || sport.value!=="NFL") throw new Error("Player pool changed; retry.");
+  const teams = new Set(data.teams);
+  if (pool.some(p=>p.selection!=="exclude" && Number.isFinite(p.points) && !teams.has(teamCode(p.team,"NFL")))) throw new Error("NFL injury coverage is missing a slate team.");
+  const held = new Set(data.reports.filter(r=>mandatoryInjuryHold(r.status)||uncertainAvailability(r.status)||/^(injured|reserve|non-football injury)$/i.test(r.status)).map(r=>teamCode(r.team,"NFL")+":"+matchName(r.name)));
+  nflInjuryHolds = new Set(pool.filter(p=>held.has(teamCode(p.team,"NFL")+":"+matchName(p.name))).map(p=>p.id));
+  byId("fdNewsStatus").textContent="NFL injury feed checked "+new Date().toLocaleTimeString()+" · "+nflInjuryHolds.size+" players held out.";
+}
+function injuryBlocked(error) {
+  clearLineups();
+  byId("fdResultsPanel").hidden=false;
+  byId("fdBuildStatus").textContent="Build/export blocked: "+error.message;
 }
 
 function checkSlate(pool, profile, selectedSport) {
@@ -819,7 +841,19 @@ function renderLineups(result,requested,highCeiling) {
   showEntryCheck();
 }
 
-function buildCurrentLineups(news=null) {
+async function buildCurrentLineups(news=null) {
+  if (sport.value==="NFL") {
+    clearLineups();
+    build.disabled=true;
+    byId("fdResultsPanel").hidden=false;
+    byId("fdBuildStatus").textContent="Checking current NFL injuries…";
+    try { await verifyNFLInjuries(); }
+    catch(error) { injuryBlocked(error); return; }
+    finally { build.disabled=false; }
+  }
+  return buildVerifiedLineups(news);
+}
+function buildVerifiedLineups(news=null) {
   news=news?.original ? news : null;
   if (slateLockAt && slateLockAt <= Date.now()) {
     clearLineups();
@@ -1199,7 +1233,17 @@ avoidQuestionable.addEventListener("change",() => {
   clearLineups();
   renderSlateCheck();
 });
-exportButton.addEventListener("click",() => {
+exportButton.addEventListener("click",async () => {
+  if (sport.value==="NFL") {
+    exportButton.disabled=true;
+    try {
+      await verifyNFLInjuries();
+      const eligible = new Set(poolForBuild().filter(p=>p.selection!=="exclude").map(p=>p.id));
+      if (lineups.some(l=>l.picks.some(({player})=>!eligible.has(player.id)))) throw new Error("A lineup contains a player now held out. Rebuild.");
+    } catch(error) { injuryBlocked(error); return; }
+    finally { exportButton.disabled=!lineups.length; }
+  }
+  if (!lineups.length) return;
   const url = URL.createObjectURL(new Blob([reviewCSV(lineups,sport.value)],{type:"text/csv;charset=utf-8"}));
   const download = document.createElement("a");
   download.href = url;
@@ -1603,3 +1647,12 @@ byId("fdSwapFile").addEventListener("change",async event=>{
     byId("fdSwap").click();
   } catch(error) { swapStatus.textContent=error.message; }
 });
+
+setInterval(async () => {
+  if (sport.value!=="NFL" || document.hidden || !lineups.length || optimizer) return;
+  try {
+    await verifyNFLInjuries();
+    const eligible = new Set(poolForBuild().filter(p=>p.selection!=="exclude").map(p=>p.id));
+    if (lineups.some(l=>l.picks.some(({player})=>!eligible.has(player.id)))) injuryBlocked(new Error("Injury status changed. Rebuild lineups."));
+  } catch(error) { injuryBlocked(error); }
+},300000);
