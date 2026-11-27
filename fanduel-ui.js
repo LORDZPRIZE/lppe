@@ -1280,6 +1280,41 @@ byId("fdContestReview").addEventListener("submit",async event => {
         " entries in the top 20. Best score: "+result.best.toFixed(2)+"."+
         (result.cutoff===null ? "" : " Points short: "+Math.max(0,result.cutoff-result.best).toFixed(2)+"."));
     } else if (username) output.append(" No entries matched "+username+".");
+    // Historical audit only: never feed realized results into pre-lock projections.
+    const field=rows.filter(row=>row.entryid);
+    const handle=username.toLowerCase();
+    const own=field.filter(row=>handle && row.entryname.replace(/\s*\(\d+\/\d+\)$/,"").trim().toLowerCase()===handle);
+    const top=field.filter(row=>Number(row.rank)<=100);
+    const roster=row=>[...new Set(Array.from((row.lineup||"").matchAll(/\((\d+-\d+)\)/g),m=>m[1]))].sort();
+    const money=v=>v?.trim()?Number(v.replace(/[$,]/g,"")):NaN;
+    const panel=document.createElement("details"), heading=document.createElement("summary");
+    heading.textContent="Historical GPP audit · top 100 ranks";
+    panel.open=true;panel.append(heading);
+    const note=value=>{const p=document.createElement("p");p.textContent=value;panel.append(p);};
+    const valid=group=>group.filter(row=>roster(row).length>0);
+    const a=valid(top),b=valid(own);
+    note("Roster coverage: "+a.length+"/"+top.length+" top-ranked entries; "+b.length+"/"+own.length+" personal entries. Ties at rank 100 included. Historical results are not forecasts.");
+    if(b.length){
+      const unique=new Set(b.map(row=>roster(row).join("|"))).size;
+      note(unique+" distinct rosters; "+(b.length-unique)+" repeated entries beyond first copy.");
+    }
+    const fee=money(rows.find(row=>row.contestinfo==="Entry Fee")?.contestvalue);
+    if(own.length && own.every(row=>Number.isFinite(money(row.won)))){
+      const won=own.reduce((sum,row)=>sum+money(row.won),0);
+      note("Cash rate: "+percent.format(own.filter(row=>money(row.won)>0).length/own.length)+"; payouts $"+won.toFixed(2)+(fee>0?" · entry cost $"+(fee*own.length).toFixed(2)+" · ROI "+percent.format(won/(fee*own.length)-1):""));
+    }
+    const counts=group=>{const map=new Map();for(const row of group)for(const id of roster(row))map.set(id,(map.get(id)||0)+1);return map;};
+    const ac=counts(a),bc=counts(b),meta=new Map();
+    for(const row of rows){const id=(row.player||"").match(/\((\d+-\d+)\)$/)?.[1];if(id)meta.set(id,row);}
+    const table=document.createElement("table"),head=table.createTHead().insertRow();
+    for(const label of ["Player","Top exposure","Your exposure","Field ownership","Actual FPTS/$1k"]){const th=document.createElement("th");th.textContent=label;head.append(th);}
+    const body=table.createTBody();
+    for(const [id,n] of [...ac].sort((x,y)=>y[1]-x[1]).slice(0,25)){
+      const m=meta.get(id),salary=money(m?.salary),pts=money(m?.fpts);
+      const tr=body.insertRow();
+      for(const value of [m?.player?.replace(/\s*\(\d+-\d+\)$/,"")||id,percent.format(n/a.length),b.length?percent.format((bc.get(id)||0)/b.length):"—",m?.drafted||"—",salary>0&&Number.isFinite(pts)?(pts*1000/salary).toFixed(2)+"x":"—"])tr.insertCell().textContent=value;
+    }
+    const wrap=document.createElement("div");wrap.className="tablewrap";wrap.append(table);panel.append(wrap);output.append(panel);
     const archive=byId("fdReplayArchive").files[0];
     const imported=archive ? readNBAArchive(await archive.text()) : null;
     try {
