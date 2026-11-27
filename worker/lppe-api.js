@@ -1,3 +1,4 @@
+import {refreshDFS,SPORTS} from "./dfs-intelligence.js";
 // LPPE Cloudflare Worker — deploy this separately to lppe-api after configuring secrets.
 // THE_ODDS_API_KEY: Cloudflare Worker secret (never store a key in GitHub).
 // The Odds API: https://the-odds-api.com/sports/nba-odds.html
@@ -253,6 +254,10 @@ async function prizePicksLines(env) {
 
 export default {
   async scheduled(controller,env) {
+    if(env.DFS_ARCHIVE) {
+      const sport=SPORTS[Math.floor(controller.scheduledTime/900000)%SPORTS.length];
+      try { await refreshDFS(env,[sport]); } catch { console.log("DFS archive refresh failed"); }
+    }
     const scheduledAt = new Date(controller.scheduledTime).toISOString();
     const log = (outcome,details = {}) => console.log(JSON.stringify({
       event:"prizepicks_refresh",scheduledAt,outcome,...details
@@ -313,6 +318,11 @@ export default {
     const path = new URL(request.url).pathname;
     if (path === "/" || path === "/health") return json({
       app:"LPPE",status:"online",version:"0.6",message:"LPPE API is running"});
+    if (path === "/api/dfs/status") {
+      if(!env.DFS_ARCHIVE) return json({configured:false,reason:"missing_storage",sports:SPORTS});
+      const statuses=await Promise.all(SPORTS.flatMap(sport=>["injuries","results"].map(async kind=>await env.DFS_ARCHIVE.get("dfs/status/"+kind+"/"+sport,"json") || {sport,kind,status:"not_checked"})));
+      return json({configured:true,statuses});
+    }
     if (path === "/api/props") return json({sport:"NBA",live:false,
       source:"not_connected",count:0,props:[],
       message:"No independent projections are connected. Do not infer probabilities from odds."});

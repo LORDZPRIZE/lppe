@@ -1,7 +1,7 @@
 name: LPPE optimizer checks
 on:
   push:
-    branches: [main]
+    branches: [main, lppe-autonomous-dfs]
   workflow_dispatch:
 jobs:
   optimizer:
@@ -21,3 +21,6 @@ jobs:
           node --experimental-default-type=module -e "import('./fanduel-optimizer.js').then(()=>import('./fanduel-nfl-tournament.js')).then(()=>console.log('Optimizer modules load'))"
       - name: Check Python historical audit syntax
         run: python3 -c "import ast,pathlib; ast.parse(pathlib.Path('scripts/fanduel_contest_review.py').read_text())"
+
+      - name: DFS ingestion regression tests
+        run: node --experimental-default-type=module --test worker/dfs-intelligence.test.mjs
