@@ -1291,7 +1291,7 @@ byId("fdContestReview").addEventListener("submit",async event => {
     heading.textContent="Historical GPP audit · top 100 ranks";
     panel.open=true;panel.append(heading);
     const note=value=>{const p=document.createElement("p");p.textContent=value;panel.append(p);};
-    const valid=group=>group.filter(row=>roster(row).length>0);
+    const valid=group=>group.filter(row=>roster(row).length===9);
     const a=valid(top),b=valid(own);
     note("Roster coverage: "+a.length+"/"+top.length+" top-ranked entries; "+b.length+"/"+own.length+" personal entries. Ties at rank 100 included. Historical results are not forecasts.");
     if(b.length){
@@ -1307,13 +1307,14 @@ byId("fdContestReview").addEventListener("submit",async event => {
     const ac=counts(a),bc=counts(b),meta=new Map();
     for(const row of rows){const id=(row.player||"").match(/\((\d+-\d+)\)$/)?.[1];if(id)meta.set(id,row);}
     const table=document.createElement("table"),head=table.createTHead().insertRow();
-    for(const label of ["Player","Top exposure","Your exposure","Field ownership","Actual FPTS/$1k"]){const th=document.createElement("th");th.textContent=label;head.append(th);}
+    for(const label of ["Player","Top exposure","Your exposure","Field ownership","Top vs field (pp)","Actual FPTS/$1k"]){const th=document.createElement("th");th.textContent=label;head.append(th);}
     const body=table.createTBody();
     for(const [id,n] of [...ac].sort((x,y)=>y[1]-x[1]).slice(0,25)){
       const m=meta.get(id),salary=money(m?.salary),pts=money(m?.fpts);
       const tr=body.insertRow();
-      for(const value of [m?.player?.replace(/\s*\(\d+-\d+\)$/,"")||id,percent.format(n/a.length),b.length?percent.format((bc.get(id)||0)/b.length):"—",m?.drafted||"—",salary>0&&Number.isFinite(pts)?(pts*1000/salary).toFixed(2)+"x":"—"])tr.insertCell().textContent=value;
+      for(const value of [m?.player?.replace(/\s*\(\d+-\d+\)$/,"")||id,percent.format(n/a.length),b.length?percent.format((bc.get(id)||0)/b.length):"—",m?.drafted||"—",m?.drafted && Number.isFinite(parseFloat(m.drafted)) ? (100*n/a.length-parseFloat(m.drafted)).toFixed(1) : "—",salary>0&&Number.isFinite(pts)?(pts*1000/salary).toFixed(2)+"x":"—"])tr.insertCell().textContent=value;
     }
+    note("Complete nine-player rosters in field: "+valid(field).length+"/"+field.length+". Exposure uses complete rosters only; ownership uses the published field percentage.");
     const wrap=document.createElement("div");wrap.className="tablewrap";wrap.append(table);panel.append(wrap);output.append(panel);
     const archive=byId("fdReplayArchive").files[0];
     const imported=archive ? readNBAArchive(await archive.text()) : null;
