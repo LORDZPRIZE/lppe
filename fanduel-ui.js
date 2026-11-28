@@ -1,3 +1,4 @@
+import {readFanDuelEntries,fillFanDuelEntries} from "./fanduel-entry-export.js";
 import {makeCfbSnapshot,saveCfbSnapshot,readStoredCfbSnapshots} from "./fanduel-cfb-snapshot.js";
 import {enteredNBAIds,reconcileNBAEntries,reviewPlayerCeilings,ownershipReview,pairHeldOut,readNBAArchive,summarizeTop3Pairs} from "./fanduel-nba-review.js";
 import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
@@ -45,6 +46,14 @@ const objective = byId("fdObjective");
 const mode = byId("fdMode");
 const build = byId("fdBuild");
 const exportButton = byId("fdExport");
+const bulkPanel = byId("fdBulkExport");
+const bulkFile = byId("fdEntriesTemplate");
+const bulkContest = byId("fdExportContest");
+const bulkButton = byId("fdBulkDownload");
+const bulkStatus = byId("fdBulkExportStatus");
+const checkedLineups = new Set();
+let bulkTemplate;
+let bulkBusy = false;
 let players = [];
 let lineups = [];
 let optimizer;
@@ -235,6 +244,9 @@ function clearLineups() {
   refine.hidden = true;
   build.disabled = false;
   lineups = [];
+  checkedLineups.clear();
+  bulkPanel.hidden=true;
+  updateBulkExport();
   exportButton.disabled = true;
   byId("fdEntryCheck").textContent="";
   byId("fdExportCheck").replaceChildren();
@@ -731,6 +743,8 @@ function renderLineups(result,requested,highCeiling) {
     panel.append(title,list);
     output.append(panel);
   }
+  bulkPanel.hidden=!lineups.length;
+  updateBulkExport();
   if (lineups.length > 1) output.append(compareLineups(highCeiling,result.simulation));
   for (const [index,lineup] of lineups.entries()) {
     const details = document.createElement("details");
@@ -804,7 +818,22 @@ function renderLineups(result,requested,highCeiling) {
     totals.insertCell().textContent = total;
     wrapper.append(table);
     details.append(summary,wrapper);
-    output.append(details);
+    const card=document.createElement("div");
+    card.className="lineup-export-row";
+    const picker=document.createElement("label");
+    picker.className="lineup-export-check";
+    const checkbox=document.createElement("input");
+    checkbox.type="checkbox";
+    checkbox.setAttribute("aria-label","Select lineup "+(index+1)+" for FanDuel export");
+    checkbox.addEventListener("change",()=>{
+      if (checkbox.checked) checkedLineups.add(lineup);
+      else checkedLineups.delete(lineup);
+      if (checkedLineups.size) bulkPanel.open=true;
+      updateBulkExport();
+    });
+    picker.append(checkbox);
+    card.append(picker,details);
+    output.append(card);
   }
   if (lineups.length > 1) {
     const exposureByPlayer = new Map();
@@ -1198,6 +1227,10 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
   }
 }
 function applySport() {
+  if (bulkTemplate && bulkTemplate.sport!==sport.value) {
+    bulkFile.value="";
+    clearBulkTemplate();
+  }
   const profile = profiles[sport.value];
   byId("fdNflCsvSource").hidden = sport.value !== "NFL";
   byId("fdCfbCsvSource").hidden = sport.value !== "CFB";
@@ -1317,6 +1350,84 @@ avoidQuestionable.addEventListener("change",() => {
   clearLineups();
   renderSlateCheck();
 });
+function downloadCSV(csv,filename) {
+  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+  const download=document.createElement("a");
+  download.href=url;
+  download.download=filename;
+  download.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+function updateBulkExport() {
+  const contest=bulkTemplate?.contests.get(bulkContest.value);
+  const selected=checkedLineups.size;
+  bulkButton.disabled=bulkBusy || !contest || !selected || selected>contest.entries.length;
+  const empty=contest?.entries.filter(entry=>!entry.occupied).length ?? 0;
+  const replaced=Math.max(0,selected-empty);
+  bulkStatus.textContent=selected+" lineup"+(selected===1 ? "" : "s")+" checked."+
+    (contest ? " "+contest.entries.length+" entries in the selected contest." : "")+
+    (contest && selected>contest.entries.length ? " Check fewer lineups." :
+      contest && replaced ? " This export replaces "+replaced+" existing lineup"+(replaced===1 ? "." : "s.") : "");
+}
+
+function clearBulkTemplate() {
+  bulkTemplate=undefined;
+  bulkContest.replaceChildren(new Option("Choose a contest",""));
+  bulkContest.disabled=true;
+  updateBulkExport();
+}
+
+bulkFile.addEventListener("change",async()=>{
+  const file=bulkFile.files[0];
+  const selectedSport=sport.value;
+  clearBulkTemplate();
+  if (!file) return;
+  try {
+    const source=await file.text();
+    if (bulkFile.files[0]!==file || sport.value!==selectedSport) return;
+    bulkTemplate=readFanDuelEntries(source,selectedSport);
+    for (const [id,contest] of bulkTemplate.contests) {
+      bulkContest.add(new Option(contest.name+" · "+contest.entries.length+" entries",id));
+    }
+    if (bulkTemplate.contests.size===1) bulkContest.selectedIndex=1;
+    bulkContest.disabled=false;
+    updateBulkExport();
+  } catch (error) {
+    if (bulkFile.files[0]===file && sport.value===selectedSport) bulkStatus.textContent=error.message;
+  }
+});
+bulkContest.addEventListener("change",updateBulkExport);
+bulkButton.addEventListener("click",async()=>{
+  const selected=lineups.filter(lineup=>checkedLineups.has(lineup));
+  const built=lineups;
+  const template=bulkTemplate;
+  const contestId=bulkContest.value;
+  bulkBusy=true;
+  updateBulkExport();
+  let message;
+  try {
+    if (Number.isFinite(slateLockAt) && slateLockAt<=Date.now()) throw new Error("This slate has locked.");
+    const result=fillFanDuelEntries(template,contestId,selected);
+    if (template.sport==="NFL") await verifyNFLInjuries();
+    if (built!==lineups || template!==bulkTemplate || contestId!==bulkContest.value ||
+        selected.length!==checkedLineups.size || selected.some(lineup=>!checkedLineups.has(lineup))) return;
+    if (Number.isFinite(slateLockAt) && slateLockAt<=Date.now()) throw new Error("This slate has locked.");
+    const eligible=new Set(poolForBuild().filter(player=>player.selection!=="exclude").map(player=>player.id));
+    if (selected.some(lineup=>lineup.picks.some(({player})=>!eligible.has(player.id)))) {
+      throw new Error("A checked lineup contains a player now held out. Rebuild before exporting.");
+    }
+    downloadCSV(result.csv,"fanduel-"+contestId+"-lppe-entries.csv");
+    message="Downloaded "+result.count+" "+(result.count===1 ? "entry" : "entries")+". Upload the file in FanDuel → Upcoming → CSV Edit.";
+  } catch (error) {
+    if (built===lineups && template===bulkTemplate && contestId===bulkContest.value) message=error.message;
+  } finally {
+    bulkBusy=false;
+    updateBulkExport();
+    if (message) bulkStatus.textContent=message;
+  }
+});
+
 exportButton.addEventListener("click",async () => {
   if (sport.value==="NFL") {
     exportButton.disabled=true;
@@ -1328,12 +1439,7 @@ exportButton.addEventListener("click",async () => {
     finally { exportButton.disabled=!lineups.length; }
   }
   if (!lineups.length) return;
-  const url = URL.createObjectURL(new Blob([reviewCSV(lineups,sport.value)],{type:"text/csv;charset=utf-8"}));
-  const download = document.createElement("a");
-  download.href = url;
-  download.download = "fanduel-"+sport.value.toLowerCase()+"-lineups-review.csv";
-  download.click();
-  setTimeout(() => URL.revokeObjectURL(url),1000);
+  downloadCSV(reviewCSV(lineups,sport.value),"fanduel-"+sport.value.toLowerCase()+"-lineups-review.csv");
 });
 
 byId("fdSpreadFive").addEventListener("click",() => {

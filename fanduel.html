@@ -134,6 +134,9 @@ main > section { box-shadow: 0 12px 32px #07050e55; }
 button.primary { background: linear-gradient(110deg, #ecffa6, #bce954); box-shadow: 0 4px 16px #c7f36226; }
 #fdResults .lineup-card { padding: 0 12px 10px; }
 #fdResults .lineup-card[open] { border-color: #76649b; }
+#fdResults .lineup-export-row { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 8px; }
+.lineup-export-check { display: grid; place-items: center; min-width: 42px; min-height: 46px; }
+.lineup-export-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .lineup-card summary { list-style: none; }
 .lineup-card summary::-webkit-details-marker { display: none; }
 .lineup-card summary::marker { content: ""; }
@@ -297,6 +300,16 @@ textarea {
   <div class="results-toolbar"><h2 id="fdResultsHeading">Lineups</h2><button type="button" id="fdRefine" hidden>Search deeper</button><button type="button" id="fdCancel" hidden>Cancel build</button><button type="button" id="fdExport" disabled>Download review CSV</button></div>
   <p id="fdBuildStatus" role="status"></p>
   <div id="fdExportCheck"></div>
+  <details id="fdBulkExport" hidden>
+   <summary>Export checked lineups to FanDuel</summary>
+   <p class="muted">Check the lineups below and choose the same slate's entries template from FanDuel → Upcoming → CSV Edit.</p>
+   <div class="controls">
+    <label>FanDuel entries template <input id="fdEntriesTemplate" type="file" accept=".csv,text/csv"></label>
+    <label>Contest <select id="fdExportContest" disabled><option value="">Choose a contest</option></select></label>
+    <button type="button" id="fdBulkDownload" disabled>Download selected for FanDuel</button>
+   </div>
+   <p id="fdBulkExportStatus" role="status"></p>
+  </details>
   <div id="fdResults"></div>
  </section>
  <section id="fdPool" hidden aria-labelledby="fdPoolHeading">
