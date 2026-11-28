@@ -1,0 +1,51 @@
+name: Read Cloudflare Worker build diagnostics
+on:
+  push:
+    branches: [lppe-worker-build-diagnostics]
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read native Worker build status
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node --input-type=module <<'JS'
+          const base = 'https://api.cloudflare.com/client/v4/accounts/'+process.env.CLOUDFLARE_ACCOUNT_ID+'/builds/builds/';
+          const id = 'e63199d5-960b-48c0-87ff-66c384048c67';
+          const headers = {Authorization:'Bearer '+process.env.CLOUDFLARE_API_TOKEN};
+          if (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID) throw Error('Deploy credentials unavailable');
+          for (const suffix of ['', '/logs']) {
+            const res=await fetch(base+id+suffix,{headers,signal:AbortSignal.timeout(10000)});
+            const data=await res.json();
+            console.log({status:res.status,operation:suffix?'logs':'metadata',codes:data.errors?.map(e=>e.code)});
+            if (!res.ok || !data.result) continue;
+            if (!suffix) {
+              const meta=data.result.build_trigger_metadata ?? data.result.build?.build_trigger_metadata ?? {};
+              const cwd=meta.root_directory;
+              const command=String(meta.deploy_command ?? '');
+              console.log({cwd:/^[-/.a-z0-9_]{0,100}$/i.test(cwd ?? '') ? cwd ?? null : 'other',
+                explicitLegacyConfig:command.includes('worker/wrangler.toml'),wrangler:command.includes('wrangler'),
+                buildCommandConfigured:Boolean(meta.build_command)});
+            } else {
+              const lines=JSON.stringify(data.result);
+              for(const [key,pattern] of Object.entries({
+                missingEntry:/Missing entry.point/i, legacyPath:/worker[/\\]+wrangler[.]toml/i,
+                missingConfig:/could not (?:read|find).*wrangler|configuration file was not found/i,
+                auth:/Authentication error|invalid token|Unauthorized|not authorized/i,
+                cloudflareQuota:/quota|build minutes/i, npmInstall:/npm ERR|ERR_PNPM/i,
+                wrongName:/name mismatch|does not match/i,
+                importPath:/Could not resolve/i, previewConfig:/preview.*not configured/i,
+                missingRoot:/no such file or directory|invalid working directory/i,
+                cliArguments:/unknown argument|unknown option/i, compatibility:/compatibility date/i
+              })) if(pattern.test(lines)) console.log('Detected '+key);
+            }
+          }
+          JS
