@@ -133,11 +133,13 @@ export const teamCode = (raw,sport = "NBA") => {
   const team = raw?.trim().toUpperCase() || "";
   if (sport === "NBA") return {BRK:"BKN",GS:"GSW",NO:"NOP",NY:"NYK",PHO:"PHX",SA:"SAS",UTAH:"UTA",WSH:"WAS"}[team] || team;
   if (sport === "NFL") return {JAX:"JAC",WSH:"WAS"}[team] || team;
+  if (sport === "CFB") return {BAMA:"ALA",NCST:"NCSU",MIZZ:"MIZ",IND:"IU",VANDY:"VAN"}[team] || team;
   return team;
 };
 export function cfbGameKey(game,team,opponent) {
+  team=teamCode(team,"CFB");
   const raw = String(game ?? "").trim().toUpperCase();
-  const pair = raw.split(/\s*(?:@|\/|\bVS\.?\s+)\s*/);
+  const pair = raw.split(/\s*(?:@|\/|\bVS\.?\s+)\s*/).map(code=>teamCode(code,"CFB"));
   if (pair.length === 2 && pair.every(code=>/^[A-Z0-9]{2,8}$/.test(code))) {
     if (pair[0] === pair[1] || !pair.includes(team)) return "";
     return pair.sort().join("/");

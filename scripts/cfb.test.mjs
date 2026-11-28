@@ -6,7 +6,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {cfbGameKey,cfbMatchupIssue,importPlayers} from "../fanduel-optimizer.js";
 import {buildFootballTournament,compareNFLPortfolios} from "../fanduel-nfl-tournament.js";
-import {providerPool} from "../functions/api/nba/fanduel.js";
+import {attachSlateGames,providerPool} from "../functions/api/nba/fanduel.js";
 import {createContestSimulator} from "./nfl-contest-sim.mjs";
 
 function fixture() {
@@ -119,4 +119,22 @@ test("CFB benchmark derives cutoffs and ranks from a finalized exact-lock leader
     writeFileSync(path,JSON.stringify({sport:"CFB",count:1,slates:[{...slate,slateLabel:"Late"}]}));
     assert.match(spawnSync(process.execPath,args,{encoding:"utf8"}).stderr,/label and lock time/);
   } finally { rmSync(temp,{recursive:true,force:true}); }
+});
+
+test("CFB schedule joins known provider aliases without guessing excluded games or kickoff",()=>{
+  const {players}=fixture();
+  const lockAt=Date.parse("2026-11-28T17:00Z");
+  const event=(teams,start)=>({date:new Date(start).toISOString(),status:{type:{state:"pre"}},
+    competitions:[{competitors:teams.map(abbreviation=>({team:{abbreviation}}))}]});
+  const events=[event(["ALA","AUB"],lockAt),event(["MICH","OSU"],lockAt+10000),
+    event(["TEX","TAMU"],lockAt),event(["USC","UCLA"],lockAt+20000),event(["CIN","BYU"],lockAt)];
+  const pool={lockAt,gameCount:4,players:players.map(p=>({...p,team:p.team==="ALA" ? "BAMA" : p.team,game:""}))};
+  const matched=attachSlateGames(pool,events,lockAt-10,"CFB");
+  assert.equal(matched.matchupSource,"ESPN");
+  assert.equal(matched.players[0].team,"ALA");
+  assert.equal(cfbMatchupIssue(matched.players),null);
+  assert.equal(attachSlateGames(pool,events.slice(1),lockAt-10,"CFB"),pool);
+  assert.equal(attachSlateGames(pool,[...events,event(["TEX","TAMU"],lockAt+30000)],lockAt-10,"CFB"),pool);
+  assert.equal(attachSlateGames(pool,events,lockAt,"CFB"),pool);
+  assert.equal(cfbGameKey("BAMA@AUB","ALA"),"ALA/AUB");
 });
