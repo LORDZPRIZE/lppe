@@ -1,10 +1,10 @@
 import {enteredNBAIds,reconcileNBAEntries,reviewPlayerCeilings,ownershipReview,pairHeldOut,readNBAArchive,summarizeTop3Pairs} from "./fanduel-nba-review.js";
 import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
-import { automaticSlateChoice, matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
+import { automaticSlateChoice, cfbMatchupIssue, matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
-const targetLabel = target => ({top3:"top-3%",top20:"top-20",first:"first-place"})[target] ?? "first-place";
+const targetLabel = target => ({allTop10:"all-lineup top-10",top1:"top-1%",top3:"top-3%",top20:"top-20",first:"first-place"})[target] ?? "first-place";
 const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const importForm = byId("fdImport");
 const autoLoad = byId("fdAutoLoad");
@@ -107,7 +107,8 @@ let inspectedSalary;
 let importedSlateName;
 const savedSlateKey = "lppe-fanduel-import-v1";
 const savedSlateLifetime = 48 * 60 * 60 * 1000;
-const tournamentTargets = {NBA:"top20",NFL:"first"};
+const tournamentTargets = {NBA:"top20",NFL:"first",CFB:"allTop10"};
+const tournamentSports = ["NBA","NFL","CFB"];
 const slateSettings = [byId("fdTarget"),mode,objective,count,difference,exposure,stack,depth,byId("fdFieldSize")];
 
 function readSavedSlate() {
@@ -571,7 +572,10 @@ function compareLineups(highCeiling,simulation) {
   const table = document.createElement("table");
   const headings = ["Lineup","Projected FPTS","FPTS vs. Lineup 1","Salary left","Players changed"];
   if (highCeiling) headings.push("Ceiling FPTS");
-  if (simulation) headings.push("Modeled win share","Modeled top-3% share","Added "+targetLabel(simulation.target)+" coverage");
+  if (simulation) {
+    headings.push("Modeled win share",sport.value==="CFB" ? "Modeled top-1% share" : "Modeled top-3% share");
+    if (simulation.target!=="allTop10") headings.push("Added "+targetLabel(simulation.target)+" coverage");
+  }
   const header = table.createTHead().insertRow();
   for (const label of headings) {
     const cell = document.createElement("th");
@@ -601,7 +605,10 @@ function compareLineups(highCeiling,simulation) {
     const values = [lineup.points.toFixed(2),signed.format(lineup.points-top.points),
       dollars.format(profiles[sport.value].salaryCap-lineup.salary),changed];
     if (highCeiling) values.push(lineup.ceiling.toFixed(2));
-    if (simulation) values.push(percent.format(lineup.tournament.win),percent.format(lineup.tournament.top3),percent.format(lineup.tournament.addedWinCoverage));
+    if (simulation) {
+      values.push(percent.format(lineup.tournament.win),percent.format(sport.value==="CFB" ? lineup.tournament.top1 : lineup.tournament.top3));
+      if (simulation.target!=="allTop10") values.push(percent.format(lineup.tournament.addedWinCoverage));
+    }
     for (const value of values) row.insertCell().textContent = value;
   }
   const wrapper = document.createElement("div");
@@ -628,8 +635,21 @@ function renderLineups(result,requested,highCeiling) {
       (ownershipPlayers ? "Projected ownership influenced the field for "+ownershipPlayers+" of "+fieldPlayers+" eligible players." :
         "The field used projections and random variation. Import projected ownership to factor in expected popularity.");
   }
-  if (result.simulation && (sport.value==="NBA" || result.simulation.target==="top3")) {
+  if (result.simulation && (["NBA","CFB"].includes(sport.value) || result.simulation.target==="top3")) {
     status.textContent += " Experimental model. Shares describe simulated outcomes only.";
+  }
+  if (sport.value==="CFB" && result.simulation && result.simulation.opponents<result.simulation.requestedOpponents) {
+    status.textContent += " The model filled "+result.simulation.opponents+" of "+result.simulation.requestedOpponents+" requested opponents.";
+  }
+  if (result.simulation?.allTop10Coverage != null) {
+    const sim=result.simulation;
+    status.textContent += " All lineups finished in the top 10 in "+percent.format(sim.allTop10Coverage)+
+      " of modeled contests; at least one lineup tied or reached first in "+percent.format(sim.firstPointsCoverage)+
+      "; both happened in "+percent.format(sim.firstAndAllTop10Coverage)+".";
+  }
+  if (result.simulation?.top1Coverage != null) {
+    status.textContent += " At least one lineup reached the top 1% in "+percent.format(result.simulation.top1Coverage)+
+      " of selection scenarios (rank "+result.simulation.top1Places+" or better, ties included).";
   }
   if (result.simulation?.top3Coverage != null) {
     status.textContent += " At least one lineup reached the top 3% in "+percent.format(result.simulation.top3Coverage)+
@@ -738,6 +758,9 @@ function renderLineups(result,requested,highCeiling) {
     if (lineup.tournament?.top20 != null) meta.append(" · "+percent.format(lineup.tournament.top20)+" modeled top 20");
     if (lineup.tournament) {
       const {top,top3,win,ceiling,duplicates} = lineup.tournament;
+      if (sport.value==="CFB" && lineup.tournament.top1 != null) {
+        meta.append(" · "+percent.format(lineup.tournament.top1)+" modeled top-1% share");
+      }
       if (top3 != null) meta.append(" · "+percent.format(top3)+" modeled top-3% share");
       meta.append(" · "+percent.format(win)+" modeled win · "+percent.format(top)+" modeled top-10% · "+ceiling.toFixed(1)+" simulated 90th percentile · "+duplicates+" field duplicates");
     }
@@ -897,8 +920,19 @@ function buildVerifiedLineups(news=null) {
     build.disabled = false;
   };
   const highCeiling = objective.value === "ceiling";
-  const tournament = gpp && ["NBA","NFL"].includes(sport.value) && objective.value === "tournament";
+  const tournament = gpp && tournamentSports.includes(sport.value) && objective.value === "tournament";
   if (tournament && sport.value==="NBA" && !byId("fdFieldSize").reportValidity()) return finish();
+  if (tournament && sport.value==="CFB") {
+    if (byId("fdTarget").value==="allTop10" && requested>10) {
+      byId("fdBuildStatus").textContent="Choose up to 10 lineups for the all-top-10 target.";
+      return finish();
+    }
+    const issues=cfbMatchupIssue(candidates.filter(p=>Number.isFinite(p.points) && !unavailable(p.status)));
+    if (issues) {
+      byId("fdBuildStatus").textContent = issues;
+      return finish();
+    }
+  }
   if (tournament) byId("fdBuildStatus").textContent = "Building lineup candidates and simulating tournament outcomes…";
   if (highCeiling && !players.some(player => player.selection !== "exclude" && Number.isFinite(player.ceiling))) {
     byId("fdBuildStatus").textContent = "High Ceiling needs a numeric Ceiling column matched to players in this slate.";
@@ -1149,6 +1183,7 @@ async function loadPublicPool(listOnly = false,savedPool = null) {
 function applySport() {
   const profile = profiles[sport.value];
   byId("fdNflCsvSource").hidden = sport.value !== "NFL";
+  byId("fdCfbCsvSource").hidden = sport.value !== "CFB";
   byId("fdRules").textContent = dollars.format(profile.salaryCap)+" cap · "+profile.roster.map(([slot])=>slot).join(", ");
   byId("fdTeamRules").textContent = "Lock or exclude players before building. Use at least three teams and at most "+
     profile.maxTeam+" players per team"+(profile.maxHitters ? ", including at most "+profile.maxHitters+" hitters" : "")+
@@ -1190,6 +1225,7 @@ sport.addEventListener("change",() => {
   byId("fdPool").hidden = true;
   applySport();
   byId("fdTarget").value=tournamentTargets[sport.value] ?? "first";
+  if (sport.value==="CFB") objective.value="projection";
   applyMode();
   liveSlate.value = "";
   listedSlates = [];
@@ -1198,9 +1234,15 @@ sport.addEventListener("change",() => {
 function applyMode() {
   const cash = mode.value === "cash";
   const tournament = objective.querySelector('option[value="tournament"]');
-  tournament.disabled = tournament.hidden = cash || !["NBA","NFL"].includes(sport.value);
+  tournament.disabled = tournament.hidden = cash || !tournamentSports.includes(sport.value);
   byId("fdTargetLabel").hidden = tournament.disabled || objective.value!=="tournament";
   const target=byId("fdTarget");
+  const allTen=target.querySelector('option[value="allTop10"]');
+  allTen.disabled=allTen.hidden=sport.value!=="CFB";
+  if (allTen.disabled && target.value==="allTop10") target.value=tournamentTargets[sport.value] ?? "first";
+  const topOne=target.querySelector('option[value="top1"]');
+  topOne.disabled=topOne.hidden=sport.value!=="CFB";
+  if (topOne.disabled && target.value==="top1") target.value=tournamentTargets[sport.value] ?? "first";
   const nbaOnly=target.querySelector('option[value="top20"]');
   nbaOnly.disabled=nbaOnly.hidden=sport.value!=="NBA";
   if (nbaOnly.disabled && target.value==="top20") target.value="first";

@@ -260,7 +260,7 @@ textarea {
    <label class="live-slate-label">Live contest slate <select id="fdLiveSlate" disabled><option value="">Looking for slates…</option></select></label>
    <button type="button" id="fdAutoLoad" class="primary" disabled>Load slate and build</button>
    <label>Optimize for <select id="fdObjective"><option value="projection">Projected points</option><option value="ceiling">High Ceiling</option><option value="tournament" selected>Tournament simulation</option></select></label>
-   <label id="fdTargetLabel">Tournament portfolio target <select id="fdTarget"><option value="top20">At least one top-20 lineup</option><option value="first">First-place share</option><option value="top3">At least one top-3% lineup (experimental)</option></select></label>
+   <label id="fdTargetLabel">Tournament portfolio target <select id="fdTarget"><option value="top20">At least one top-20 lineup</option><option value="first">First-place share</option><option value="allTop10" hidden disabled>Every lineup in the top 10 (experimental)</option><option value="top1" hidden disabled>At least one top-1% lineup (experimental)</option><option value="top3">At least one top-3% lineup (experimental)</option></select></label>
    <label id="fdFieldLabel">NBA contest entries <input id="fdFieldSize" type="number" value="19841" min="2" max="50000" required></label>
    <label class="checkbox-label"><input type="checkbox" id="fdAutomatic" checked> Auto-build and refresh NBA news before lock</label>
    <button type="button" id="fdRefreshSlates">Refresh slates</button>
@@ -285,6 +285,7 @@ textarea {
    <button type="button" id="fdSalaryOnly" hidden>Use salary file alone</button>
   </form>
   <p class="muted" id="fdNflCsvSource" hidden>Find a downloadable <a href="https://www.dailyfantasyfuel.com/nfl/projections/fanduel/" target="_blank" rel="noopener">NFL FanDuel cheatsheet</a>. Choose the slate that matches your contest.</p>
+  <p class="muted" id="fdCfbCsvSource" hidden>For college football, use the FanDuel Classic player list for your exact contest. Tournament simulation needs matchup data from the salary CSV. Include <strong>Game</strong> or <strong>Opponent</strong> for each eligible player.</p>
   <p class="muted">Selecting a salary CSV loads the slate and builds in the selected mode. Selecting a projections CSV afterward rebuilds with the updated projections. A projections CSV can also include <strong>Ownership %</strong> for projected field usage. Enter 12.5 or 12.5% for 12.5%. For custom projections, include <strong>Projection</strong> and either <strong>ID</strong> or <strong>Name</strong> and <strong>Team</strong>. Without a custom projection, LPPE uses the salary file’s projection or historical FanDuel FPPG when available.</p>
   </details>
   <details><summary>Slate sources and optimization modes</summary>

@@ -15,8 +15,10 @@ function lowerBound(scores,target,includeEqual) {
   return start;
 }
 
-export function createContestSimulator(scenarioCSV,fieldCSV,players) {
-  const {roster,salaryCap,maxTeam} = profiles.NFL;
+export function createContestSimulator(scenarioCSV,fieldCSV,players,sport="NFL") {
+  if (!["NFL","CFB"].includes(sport)) throw new Error("Choose NFL or CFB contest simulation.");
+  const {roster,salaryCap,maxTeam} = profiles[sport];
+  const labels=["qb","rb1","rb2","wr1","wr2","wr3",...(sport==="CFB" ? ["sflex"] : ["te","flex","def"])];
   const playerById = new Map(players.map(player => [player.id,player]));
   if (playerById.size !== players.length) throw new Error("Duplicate salary roster player ID.");
   const scenarios = new Map();
@@ -45,9 +47,12 @@ export function createContestSimulator(scenarioCSV,fieldCSV,players) {
         picks.reduce((sum,player) => sum+player.salary,0) > salaryCap) {
       throw new Error("Team or salary rules violated in "+label+".");
     }
+    if (sport==="CFB" && (picks.some(player=>!player.game) || new Set(picks.map(player=>player.game)).size<2)) {
+      throw new Error("Two known college football matchups are required in "+label+".");
+    }
   }
   const field = parseCSV(fieldCSV).map((row,index) => {
-    const ids = ["qb","rb1","rb2","wr1","wr2","wr3","te","flex","def"].map(slot => row[slot]);
+    const ids = labels.map(slot => row[slot]);
     validate(ids,"field lineup "+(index+1));
     const key = rosterKey(ids);
     duplicates.set(key,(duplicates.get(key) || 0)+1);

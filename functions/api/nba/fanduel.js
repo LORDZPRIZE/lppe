@@ -105,17 +105,18 @@ export function selectProviderSlate(data,now,sport = "NBA") {
 
 export function normalizeProviderPlayers(data,slate,sport = "NBA") {
   const profile = profiles[sport];
-  const csv = ["ID,Name,Position,Team,Salary,FPPG,Injury Indicator,Game",
+  const csv = ["ID,Name,Position,Team,Salary,FPPG,Injury Indicator,Game,Opponent",
     ...data.map(row => {
-      const positions = row.roster_positions || row.positions || row.position || "";
+      const offered = row.roster_positions || row.positions || row.position || "";
+      const positions = sport==="CFB" ? [offered,row.position].flat().filter(Boolean) : offered;
       const status = row.injury_status || row.injury_indicator || row.status || "";
       return [row.id ?? row.player_id ?? "",row.name ?? row.player ?? "",
         Array.isArray(positions) ? positions.join("/") : positions,row.team ?? "",row.salary ?? "",
-        row.fppg ?? row.fantasy_points_per_game ?? "",status,row.game_id ?? row.game ?? ""].map(csvCell).join(",");
+        row.fppg ?? row.fantasy_points_per_game ?? "",status,row.game_id ?? row.game ?? "",row.opponent ?? row.opp ?? ""].map(csvCell).join(",");
     })].join("\n");
   const {players,skipped} = importPlayers(csv,"",sport);
-  if (sport === "NBA" && (players.length !== Number(slate.players) || skipped)) {
-    return {error:"NBA salary pool incomplete: "+players.length+" distinct usable player IDs for "+
+  if (["NBA","CFB"].includes(sport) && (players.length !== Number(slate.players) || skipped)) {
+    return {error:profile.name+" salary pool incomplete: "+players.length+" distinct usable player IDs for "+
       slate.players+" listed players. Refresh the slate or import its FanDuel player-list CSV."};
   }
   if (players.filter(player => Number.isFinite(player.points) && player.selection !== "exclude").length < profile.roster.length) {
@@ -166,15 +167,22 @@ async function listProviderSlates(cache,key,read,sport) {
   return slates;
 }
 
-async function providerPool(read,slate,sport) {
+export async function providerPool(read,slate,sport) {
+  const cap = sport==="CFB" ? 2400 : 800;
+  const count = Number(slate.players);
+  if (!Number.isSafeInteger(count) || count<profiles[sport].roster.length || count>cap) {
+    return {error:"The advertised salary pool size is outside the supported range. Import the complete contest CSV."};
+  }
   const rows = [];
-  while (rows.length < slate.players && rows.length < 800) {
-    const limit = Math.min(200,slate.players-rows.length);
+  while (rows.length < count) {
+    if (Date.parse(slate.starts_at) <= Date.now()) return {error:"The salary slate has already locked."};
+    const limit = Math.min(200,count-rows.length);
     const page = await read("/dfs/slates/"+encodeURIComponent(slate.id)+"/players?limit="+limit+"&offset="+rows.length);
-    if (!page.length) break;
+    if (!page.length || page.length>limit) break;
     rows.push(...page);
   }
-  if (rows.length < slate.players) return {error:"The salary provider returned an incomplete player pool."};
+  if (rows.length !== count) return {error:"The salary provider returned an incomplete player pool ("+
+    rows.length+" of "+count+" rows). Import the full salary CSV for this contest."};
   if (Date.parse(slate.starts_at) <= Date.now()) return {error:"The salary slate has already locked."};
   return normalizeProviderPlayers(rows,slate,sport);
 }
