@@ -2,9 +2,9 @@ import {createHash} from "node:crypto";
 import {wilsonInterval} from "../fanduel-contest-metrics.js";
 import {readFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
-import {buildLineups, importPlayers, parseCSV} from "../fanduel-optimizer.js";
+import {applyPlayerProjections, buildLineups, importPlayers, parseCSV} from "../fanduel-optimizer.js";
 
-import {buildNFLTournament} from "../fanduel-nfl-tournament.js";
+import {buildNFLTournament, compareNFLPortfolios} from "../fanduel-nfl-tournament.js";
 import {createContestSimulator} from "./nfl-contest-sim.mjs";
 
 const mean = values => values.reduce((sum,value) => sum+value,0)/values.length;
@@ -27,9 +27,15 @@ function benchmarkSlate(slate,root,count) {
   if (slate.holdout === true && (!timed || !slate.contestId?.trim() || !Number.isFinite(slate.topThreePercentScore))) {
     throw new Error("Holdout slates need a contest ID, pre-lock timestamps for each model input and a numeric top-3% cutoff.");
   }
-  const {players} = importPlayers(
-    readSlateFile("salary"),slate.projections ? readSlateFile("projections") : "","NFL"
-  );
+  const salary=readSlateFile("salary");
+  if (timed && parseCSV(salary).some(row=>row.projectionupdatedat &&
+      !(timestamp(row.projectionupdatedat)<=timestamp(slate.salaryCapturedAt)))) {
+    throw new Error("Salary snapshot contains a forecast updated after capture or without a verified time zone.");
+  }
+  const {players:salaryPlayers} = importPlayers(salary,"","NFL");
+  const {players} = slate.projections ? applyPlayerProjections(salaryPlayers,readSlateFile("projections"),"NFL",{
+    date:slate.date,asOf:timed ? timestamp(slate.projectionsCapturedAt) : undefined
+  }) : {players:salaryPlayers};
   const actuals = new Map();
   for (const row of parseCSV(readSlateFile("actuals"))) {
     if (!row.id || !row.actualfpts || !Number.isFinite(Number(row.actualfpts)) || actuals.has(row.id)) {
@@ -44,6 +50,7 @@ function benchmarkSlate(slate,root,count) {
     readSlateFile("scenarios"),readSlateFile("field"),players
   ) : null;
   const candidates = [];
+  let projectionPortfolio;
   const snapshots = [
     ["Projection",players,1,{}],
     ["High Ceiling",players.map(player => ({
@@ -59,6 +66,7 @@ function benchmarkSlate(slate,root,count) {
     if (lineups.length !== count) {
       return {strategy,built:lineups.length,limited,skipped:"Could not build the requested number of lineups."};
     }
+    if (strategy==="Projection") projectionPortfolio=lineups;
     candidates.push(...lineups);
     return summarize(strategy,lineups,limited);
   });
@@ -83,7 +91,14 @@ function benchmarkSlate(slate,root,count) {
       strategies.push(summarize("Top-3% external simulation selection",ranked.slice(0,count),strategies.some(result => result.limited)));
     }
   }
-  return {strategies,provenance:{contestId:slate.contestId ?? null,lockAt:slate.lockAt ?? null,
+  const seeds=slate.simulationSeeds ?? [];
+  if (!Array.isArray(seeds) || seeds.length>8 || new Set(seeds).size!==seeds.length ||
+      seeds.some(seed=>!Number.isInteger(seed) || seed<=0 || seed>0xffffffff)) {
+    throw new Error("Supply up to eight distinct, nonzero NFL validation seeds.");
+  }
+  const independentSimulation = projectionPortfolio && top3.lineups.length===count ?
+    seeds.map(seed=>compareNFLPortfolios(players,top3.lineups,projectionPortfolio,{seed})) : [];
+  return {strategies,independentSimulation,provenance:{contestId:slate.contestId ?? null,lockAt:slate.lockAt ?? null,
     holdout:slate.holdout === true,preLockTimestampsVerified:timed,sha256:hashes}};
 
   function summarize(strategy,lineups,limited) {

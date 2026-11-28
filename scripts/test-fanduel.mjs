@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { automaticSlateChoice, liveRefreshSeconds, applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
 import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, normalizeProviderPlayers, onRequestGet } from "../functions/api/nba/fanduel.js";
-import { buildNFLTournament, rankNFLTournament } from "../fanduel-nfl-tournament.js";
+import { buildNFLTournament, rankNFLTournament, compareNFLPortfolios } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
   const salary = [
@@ -753,4 +753,20 @@ test("NFL benchmark validates holdout chronology and produces paired top-3% resu
   } finally {
     rmSync(root,{recursive:true,force:true});
   }
+});
+
+test("NFL simulations validate budgets and compare equal portfolios on fresh shared scenarios",()=>{
+  const pool=sampleNFLPool();
+  const a=buildLineups(pool,1,1,160000,"NFL").lineups;
+  const b=buildLineups(pool,1,1,160000,"NFL",{stack:2}).lineups;
+  const options={seed:728,opponentCount:40,scenarioCount:128};
+  const result=compareNFLPortfolios(pool,a,b,options);
+  assert.equal(result.seed,728);
+  assert.equal(result.scenarios,128);
+  assert.equal(result.top3Places,Math.floor((result.opponents+1)*.03));
+  assert.equal(result.tournament-result.projection,result.improved-result.regressed);
+  assert.deepEqual(compareNFLPortfolios(pool,a,b,options),result);
+  assert.throws(()=>compareNFLPortfolios(pool,a,[],options),/equal, nonempty/);
+  assert.throws(()=>compareNFLPortfolios(pool,a,b,{...options,opponentCount:5}),/modeled opponents/);
+  assert.throws(()=>rankNFLTournament([...pool,pool[0]],a),/Duplicate NFL player ID/);
 });

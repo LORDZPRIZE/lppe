@@ -54,3 +54,28 @@ At the baseline, all 50 existing tests passed. The Pages site and the existing r
 - Validate actual results with the documented holdout commands in the [README](README.md). Fixture data verifies software behavior. Changes to lineup quality require real, matched holdout data.
 - Review the [Cloudflare Pages preview](https://lppe-product-roadmap.lppe.pages.dev/fanduel) from **lppe-product-roadmap**. Smoke-test the dashboard, optimizer, browser worker, and shared metric module against the released files. The standalone production Worker is outside the changed code.
 - To roll back this preview, revert the release commit on the roadmap branch and verify that Pages redeploys the restored files. Production promotion proceeds through review against **main**.
+
+## Production follow-up · 50 additional improvements
+
+The November 27 release was prepared on the roadmap branch for promotion through pull request review and CI. A Wrangler dry run on the previous checkout failed at the repository root because it detected Pages Functions and had no root Worker entry point. The same command now bundles **worker/lppe-api.js** through the root **wrangler.toml**. Production App and API smoke checks use **lppe.pages.dev/fanduel** and **lppe-api.lord-joseph.workers.dev/health**. Health reports the Worker runtime revision and, for tagged deploys, the Git commit tag.
+
+| Area | Delivered changes |
+| --- | --- |
+| 1–5 · Projection identity | Normalize compatibility Unicode, reject conflicting exact-ID name or team claims, protect known slate IDs from reassignment, reject explicit suffix conflicts, and require unique exact names for name fallback. |
+| 6–10 · Projection evidence | Match the individual player's game date, preserve salary game dates, quarantine duplicate IDs in joins, reject conflicting point estimates, and keep point estimates and ancillary data tied to one matched evidence group. |
+| 11–15 · Forecast provenance | Audit match paths and ambiguous joins, exclude future or unverifiable projection timestamps in historical runs, withhold inconsistent timestamps, withhold conflicting or below-mean ceilings, and reject conflicting salary snapshots for a repeated player ID. |
+| 16–20 · Live NBA data | Propagate the public forecast's observation time, reject late or locked overlays, reject same-team or out-of-slate matchup evidence, stop projecting unavailable players with stale selection flags, and quarantine ambiguous NBA rotation histories on either side of the name join. |
+| 21–25 · NBA model research | Drop suspect minutes and conflicting duplicate games, sort history before applying limits, fit role-specific minutes when there is support, shrink recency-weighted production rates toward observed pooled rates, and model integer pushes through a discrete probability distribution. |
+| 26–30 · NBA simulation | Expose a reproducible unsigned seed, preserve independent comparison seeds, carry search truncation across candidate generation, use collision-safe roster identifiers, and compute rank boundaries correctly for fields smaller than the top-tail place count. |
+| 31–35 · NFL simulation | Expose a reproducible unsigned seed, bound configurable opponent and scenario counts, validate available candidate projections and unique IDs, count opponent roster duplicates once, and compare equal portfolios on fresh shared fields and scoring scenarios. |
+| 36–40 · NBA prop backtest | Enforce complete, calendar-matched box-score inputs, deduplicate exact athlete/game observations, reject conflicting records, restrict pregame features to earlier calendar dates, and score paired integer and half-point forecasts with Brier score, log loss, and calibration bins. |
+| 41–45 · Historical reporting | Fingerprint NBA inputs, report paired coverage and equal-slate MAE improvement, report replayable NBA lineup IDs and any supplied top-3% score gap, audit archived salary and projection timestamps against capture, and expose optional independent NFL seed comparisons. |
+| 46–50 · Release reliability | Make Wrangler discover the Worker from Git's root, dry-run the pinned bundle in CI, test the full suite before the authenticated production fallback, tag fallback deployments and verify their runtime revision, and mark capped or incomplete NBA results responses as partial. |
+
+### Historical accuracy check
+
+Used complete public NBA game results for November 18–26, 2026. The holdout began November 24. On the eligible sample of 24 players and 192 player-market forecasts, the dashboard's raw forecast MAE was 4.027 versus 4.137 for the minutes-adjusted challenger. On 925 overlapping synthetic half-point trials, dashboard Brier score was 0.2253 versus 0.2302. On 541 overlapping synthetic integer trials, the scores were 0.2685 versus 0.2788. Lower is better. Keep the challenger in research. These trials use actual box-score outcomes, with synthetic lines from prior games. Use archived offers to validate actual prop probabilities and matched contest archives to measure real top-3% lift.
+
+### Production validation and rollback
+
+Run the full regression suite, build Pages Functions, and dry-run Wrangler from the repository root before promoting. Validate the GitHub Actions optimizer run, Cloudflare Pages production deployment, and Worker build status for the promoted commit. Check both live endpoints and compare changed production Pages assets against Git. Native Worker deployment and the authenticated fallback share the root Worker configuration. The fallback checks the tagged deployment's production health. Restore the prior known-good Pages deployment and Worker revision in Cloudflare if a rollback is necessary, then revert the production merge in Git after review.

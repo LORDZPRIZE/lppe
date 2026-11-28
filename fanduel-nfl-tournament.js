@@ -1,8 +1,6 @@
 import {percentilePlaces, placeShare} from "./fanduel-contest-metrics.js";
 import {buildLineups, unavailable} from "./fanduel-optimizer.js";
 
-const fieldSize = 100;
-const scenarioCount = 1024;
 const rosterKey = lineup => JSON.stringify([...lineup.ids].sort());
 
 function makeRandom(seed) {
@@ -12,13 +10,24 @@ function makeRandom(seed) {
   };
 }
 
-function simulateNFLTournament(players,lineups,{target = "first", portfolioSize = 1} = {}) {
-  const fieldRandom = makeRandom(21839);
-  const scenarioRandom = makeRandom(72203);
+function simulateNFLTournament(players,lineups,{target = "first", portfolioSize = 1,seed=0,
+    opponentCount=100,scenarioCount=1024} = {}) {
+  if (!Number.isInteger(seed) || seed<0 || seed>0xffffffff) throw new Error("NFL scenario seed must be an unsigned 32-bit integer.");
+  if (!Number.isInteger(opponentCount) || opponentCount<34 || opponentCount>1000 ||
+      !Number.isInteger(scenarioCount) || scenarioCount<128 || scenarioCount>4096) {
+    throw new Error("Use 34–1000 modeled opponents and 128–4096 scenarios.");
+  }
+  const fieldRandom = makeRandom((21839 ^ seed)>>>0);
+  const scenarioRandom = makeRandom((72203 ^ seed)>>>0);
   const normal = random => Math.sqrt(-2*Math.log(random()))*Math.cos(2*Math.PI*random());
   const projected = players.filter(player => Number.isFinite(player.points))
     .sort((a,b) => a.id.localeCompare(b.id,"en"));
   const pool = projected.filter(player => !unavailable(player.status));
+  if (new Set(projected.map(player=>player.id)).size!==projected.length) throw new Error("Duplicate NFL player ID in simulation.");
+  const projectedIds=new Set(projected.map(player=>player.id));
+  if (lineups.some(lineup=>lineup.picks.some(({player})=>!projectedIds.has(player.id)))) {
+    throw new Error("NFL candidate player is missing a simulation projection.");
+  }
   const ownershipBias = new Map();
   for (const player of pool) {
     if (!Number.isFinite(player.ownership)) continue;
@@ -28,7 +37,7 @@ function simulateNFLTournament(players,lineups,{target = "first", portfolioSize 
     ownershipBias.set(player.id,Math.max(-8,Math.min(8,3*Math.log(oddsRelativeToTenPercent))));
   }
   const field = [];
-  for (let index = 0; index < fieldSize; index++) {
+  for (let index = 0; index < opponentCount; index++) {
     const rankedPool = pool.map(player => ({
       ...player,selection:"available",maxExposure:100,
       points:player.points+(ownershipBias.get(player.id) ?? 0)+normal(fieldRandom)*Math.max(2,Math.abs(player.points)*0.32)
@@ -39,13 +48,17 @@ function simulateNFLTournament(players,lineups,{target = "first", portfolioSize 
   }
   if (field.length < 25) throw new Error("Too few opponent lineups could be modeled from this slate.");
 
-  const fieldKeys = field.map(rosterKey);
+  const duplicates = new Map();
+  for (const lineup of field) {
+    const key=rosterKey(lineup);
+    duplicates.set(key,(duplicates.get(key) ?? 0)+1);
+  }
   const objectiveShares = new Map(lineups.map(lineup => [lineup.ids,new Float64Array(scenarioCount)]));
   const top3Places = percentilePlaces(field.length+portfolioSize);
   const entries = lineups.map(lineup => ({
-    lineup,win:0,top:0,top3:0,scores:[],duplicates:fieldKeys.filter(key => key === rosterKey(lineup)).length
+    lineup,win:0,top:0,top3:0,scores:[],duplicates:duplicates.get(rosterKey(lineup)) ?? 0
   }));
-  const places = Math.floor((field.length+1)/10);
+  const places = percentilePlaces(field.length+portfolioSize,10);
   for (let index = 0; index < scenarioCount; index++) {
     const gameFactors = new Map();
     const teamFactors = new Map();
@@ -84,7 +97,7 @@ function simulateNFLTournament(players,lineups,{target = "first", portfolioSize 
   return {
     opponents:field.length,
     ownershipPlayers:ownershipBias.size,
-    fieldPlayers:pool.length,
+    fieldPlayers:pool.length,seed,requestedOpponents:opponentCount,
     firstPlaceShares:objectiveShares,
     target,top3Places,
     scenarios:scenarioCount,
@@ -99,9 +112,28 @@ function simulateNFLTournament(players,lineups,{target = "first", portfolioSize 
   };
 }
 
-export function rankNFLTournament(players,lineups) {
-  const {firstPlaceShares,...ranking} = simulateNFLTournament(players,lineups);
+export function rankNFLTournament(players,lineups,options) {
+  const {firstPlaceShares,...ranking} = simulateNFLTournament(players,lineups,options);
   return ranking;
+}
+
+export function compareNFLPortfolios(players,portfolio,baseline,{seed,opponentCount,scenarioCount} = {}) {
+  if (!portfolio.length || portfolio.length!==baseline.length) throw new Error("Compare equal, nonempty NFL portfolios.");
+  if (!seed) throw new Error("Independent NFL simulation needs a nonzero seed.");
+  const {firstPlaceShares,scenarios,opponents,top3Places} = simulateNFLTournament(players,[...portfolio,...baseline],{
+    seed,opponentCount,scenarioCount,target:"top3",portfolioSize:portfolio.length
+  });
+  let tournament=0, projection=0, improved=0, regressed=0;
+  for (let scenario=0;scenario<scenarios;scenario++) {
+    const hit = roster=>roster.some(lineup=>firstPlaceShares.get(lineup.ids)[scenario]);
+    const a=hit(portfolio);
+    const b=hit(baseline);
+    tournament+=Number(a);
+    projection+=Number(b);
+    improved+=Number(a && !b);
+    regressed+=Number(b && !a);
+  }
+  return {seed,scenarios,opponents,top3Places,tournament,projection,improved,regressed};
 }
 
 function selectTournamentPair(ranked,limits,difference) {
@@ -128,7 +160,7 @@ function selectTournamentPair(ranked,limits,difference) {
   return pair;
 }
 
-export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0,target = "first"} = {}) {
+export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0,target = "first",seed,opponentCount,scenarioCount} = {}) {
   const candidates = new Map();
   const limits = new Map(players.map(player => [
     player.id, player.selection === "lock" ? count :
@@ -190,7 +222,7 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
   if (!candidates.size) return {lineups:[],limited,restriction};
 
   const ranked = simulateNFLTournament(players,[...candidates.values()],{
-    target:target === "top3" ? "top3" : "first",portfolioSize:count
+    target:target === "top3" ? "top3" : "first",portfolioSize:count,seed,opponentCount,scenarioCount
   });
   if (ranked.target === "top3" && !ranked.top3Places) {
     throw new Error("The modeled NFL field is too small to have a top-3% place.");
@@ -235,7 +267,7 @@ export function selectTournamentPortfolio(ranked,limits,count,difference,limited
       "The simulated candidate pool could not fill the portfolio within your exposure and lineup difference settings." : undefined,
     simulation:{
       opponents:ranked.opponents,scenarios:ranked.scenarios,
-      target:ranked.target,top3Places:ranked.top3Places,
+      target:ranked.target,seed:ranked.seed,requestedOpponents:ranked.requestedOpponents,top3Places:ranked.top3Places,
       ...(ranked.target === "top3" && lineups.length === count ? {
         top3Coverage:covered.reduce((sum,value) => sum+value,0)/scenarioCount
       } : {}),

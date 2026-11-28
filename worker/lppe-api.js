@@ -317,7 +317,7 @@ export default {
     if (request.method !== "GET") return json({error:"Method not allowed"},405);
     const path = new URL(request.url).pathname;
     if (path === "/" || path === "/health") return json({
-      app:"LPPE",status:"online",version:"0.6",message:"LPPE API is running"});
+      app:"LPPE",status:"online",version:"0.7",revision:env.LPPE_VERSION?.id ?? null,tag:env.LPPE_VERSION?.tag ?? null,message:"LPPE API is running"});
     if (path === "/api/dfs/status") {
       if(!env.DFS_ARCHIVE) return json({configured:false,reason:"missing_storage",sports:SPORTS});
       const statuses=await Promise.all(SPORTS.flatMap(sport=>["injuries","results"].map(async kind=>await env.DFS_ARCHIVE.get("dfs/status/"+kind+"/"+sport,"json") || {sport,kind,status:"not_checked"})));

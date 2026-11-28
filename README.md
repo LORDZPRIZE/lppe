@@ -59,7 +59,7 @@ Paths are relative to the manifest. Use slates with the current NBA Classic rost
 
 ## NBA prop probability benchmark
 
-Run `node scripts/benchmark-nba-props.mjs RESULTS_DIRECTORY HOLDOUT_YYYYMMDD`. Save complete final response bodies from `/api/nba/model?results=YYYYMMDD` as `YYYYMMDD.json` in the directory. Include at least a week of games before the holdout. The benchmark runs the dashboard's original hit-rate estimate and its revised estimate against the same outcomes. It creates half-point test lines around each player's recent median using games available before tipoff. Several test lines share the same game result. Use archived PrizePicks lines and exact payouts to evaluate actual entry performance.
+Run `node scripts/benchmark-nba-props.mjs RESULTS_DIRECTORY HOLDOUT_YYYYMMDD`. Save complete final response bodies from `/api/nba/model?results=YYYYMMDD` as `YYYYMMDD.json` in the directory. Include at least a week of games before the holdout. The benchmark runs the dashboard's original hit-rate estimate and its revised estimate against the same outcomes. It compares the dashboard with a minutes-adjusted challenger in a chronological holdout. It reports point forecast error, Brier score, log loss, and calibration bins for synthetic integer and half-point lines. Several test lines share the same game result. Use archived PrizePicks lines and exact payouts to evaluate actual entry performance.
 
 ## Top-3% FanDuel tournament research
 
@@ -81,3 +81,5 @@ Use this manifest format. Paths are relative to the manifest.
     }
 
 For the NFL benchmark, add a verified numeric **topThreePercentScore** from the finalized contest. A cutoff hit includes ties. For a paired holdout also set **holdout** to true, provide a unique **contestId**, and provide **lockAt** and **salaryCapturedAt** with time zones. If you also supply **projections**, **scenarios**, or **field**, provide the corresponding **projectionsCapturedAt**, **scenariosCapturedAt**, or **fieldCapturedAt**. Archive the modeled inputs before lock. The report records input hashes, counts unpaired slates, and gives per-strategy 95% Wilson intervals across paired slates. Use an unseen period and choose one contest per slate before reviewing outcomes.
+
+Optional NFL manifest field **simulationSeeds** accepts up to eight distinct nonzero unsigned 32-bit integers. It compares the built portfolios on fresh modeled fields with shared scoring scenarios under each seed. The output is a simulation sensitivity check.

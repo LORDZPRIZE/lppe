@@ -75,7 +75,10 @@ export function normalizePublicSlate({rows,updatedAt},events,now) {
   if (cheapest.reduce((total,salary)=>total+salary,0) > salaryCap) {
     return {error:"The public preview omits the lower-salary players needed to build under $60,000. Connect the salary API or import your contest CSV."};
   }
-  for (const player of players) if (player.source) player.source = "Daily Fantasy Fuel";
+  for (const player of players) if (player.source) {
+    player.source = "Daily Fantasy Fuel";
+    player.projectionUpdatedAt = new Date(updatedAt).toISOString();
+  }
   return {date,updatedAt,lockAt:Math.min(...usedGames.values()),gameCount:usedGames.size,players,skipped,
     provider:"Daily Fantasy Fuel",poolType:"public preview",label:"Published FanDuel pool"};
 }
@@ -206,19 +209,21 @@ export function attachSlateGames(pool,events,now,sport = "NBA") {
 
 export function addNBAProjections(pool,{rows,updatedAt},now) {
   const age = now-Date.parse(updatedAt);
-  if (!(age >= -120000 && age <= 2*60*60000)) return pool;
+  if (!(age >= -120000 && age <= 2*60*60000) || !Array.isArray(rows) ||
+      (Number.isFinite(pool.lockAt) && (now >= pool.lockAt || Date.parse(updatedAt) >= pool.lockAt))) return pool;
 
   const key = (name,team,salary) => JSON.stringify([matchName(name),teamCode(team),Number(salary)]);
   const slateTeams = new Set(pool.players.map(player => player.team));
   const projections = new Map();
   for (const row of rows) {
     if (row.date !== pool.date || !row.name || !row.team || !row.opponent ||
-        !slateTeams.has(teamCode(row.opponent))) continue;
-    const points = row.points.trim() ? Number(row.points) : NaN;
+        !slateTeams.has(teamCode(row.team)) || !slateTeams.has(teamCode(row.opponent)) ||
+        teamCode(row.team) === teamCode(row.opponent)) continue;
+    const points = String(row.points ?? "").trim() ? Number(row.points) : NaN;
     if (!Number.isFinite(points) || points < 0) continue;
     const identity = key(row.name,row.team,row.salary);
     // An ambiguous identity is safer to leave on the salary feed's baseline.
-    projections.set(identity,projections.has(identity) ? null : {points,positions:row.positions.toUpperCase().split("/"),game:[teamCode(row.team),teamCode(row.opponent)].sort().join("/")});
+    projections.set(identity,projections.has(identity) ? null : {points,positions:String(row.positions ?? "").toUpperCase().split(/[\s/,;|-]+/),game:[teamCode(row.team),teamCode(row.opponent)].sort().join("/")});
   }
 
   const eligible = pool.players.filter(player => player.selection !== "exclude").length;
@@ -229,14 +234,15 @@ export function addNBAProjections(pool,{rows,updatedAt},now) {
   }
   let matched = 0;
   const players = pool.players.map(player => {
-    if (player.selection === "exclude") return player;
+    if (player.selection === "exclude" || unavailable(player.status)) return player;
     const identity = key(player.name,player.team,player.salary);
     const projection = projections.get(identity);
     if (counts.get(identity) !== 1 || !projection ||
         (player.game?.includes("/") && player.game !== projection.game) ||
         !player.positions.some(position => projection.positions.includes(position))) return player;
     matched++;
-    return {...player,points:projection.points,source:"Daily Fantasy Fuel"};
+    return {...player,points:projection.points,source:"Daily Fantasy Fuel",projectionUpdatedAt:new Date(updatedAt).toISOString(),
+      ceiling:undefined};
   });
   return matched ? {...pool,players,projectionCoverage:{matched,eligible,updatedAt}} : pool;
 }
