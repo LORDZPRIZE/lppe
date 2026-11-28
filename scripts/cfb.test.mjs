@@ -1,3 +1,4 @@
+import {makeCfbSnapshot,saveCfbSnapshot,readStoredCfbSnapshots,selectCfbSnapshot} from "../fanduel-cfb-snapshot.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {execFileSync,spawnSync} from "node:child_process";
@@ -79,7 +80,10 @@ test("CFB joint target respects Classic slots, stacks, exposures, and portfolio 
   assert.ok([...result.lineups[1].ids].filter(id=>!result.lineups[0].ids.has(id)).length>=2);
   assert.ok(result.simulation.firstAndAllTop10Coverage<=result.simulation.allTop10Coverage);
   assert.ok(result.simulation.firstAndAllTop10Coverage<=result.simulation.firstPointsCoverage);
-  const comparison=compareNFLPortfolios(players,result.lineups,result.lineups,{...options,seed:1000});
+  const joint=buildFootballTournament(players,2,2,12000,{...options,target:"firstAndTop10"});
+  assert.equal(joint.simulation.target,"firstAndTop10");
+  assert.ok(joint.simulation.firstAndAllTop10Coverage>=result.simulation.firstAndAllTop10Coverage);
+  const comparison=compareNFLPortfolios(players,joint.lineups,joint.lineups,{...options,seed:1000,target:"firstAndTop10"});
   assert.equal(comparison.tournament,comparison.projection);
   assert.equal(comparison.improved+comparison.regressed,0);
   assert.throws(()=>buildFootballTournament(players,11,2,12000,options),/at most ten/);
@@ -116,6 +120,28 @@ test("CFB benchmark derives cutoffs and ranks from a finalized exact-lock leader
     assert.equal(report.holdout.tournamentFirstAndAllTop10,1);
     assert.equal(report.results[0].top1Cutoff,111);
     assert.match(report.results[0].provenance.sha256.leaderboard,/^[a-f0-9]{64}$/);
+    const request={sport:"CFB",tournament:true,count:1,difference:2,options:{target:"firstAndTop10"},players};
+    const result=buildFootballTournament(players,1,2,12000,{sport:"CFB",target:"firstAndTop10",opponentCount:110,scenarioCount:128});
+    const lockAt=Date.parse(slate.lockAt);
+    const capture={slateId:"137134",slate:"Sat Main · 2026-11-28",startedAt:lockAt-1000,lockAt,excluded:[]};
+    const snapshot=makeCfbSnapshot(capture,request,result,lockAt-20);
+    assert.throws(()=>makeCfbSnapshot(capture,request,result,lockAt),/pre-lock/);
+    const storage=Object.create({getItem(key){return this[key] ?? null},setItem(key,value){this[key]=value},
+      removeItem(key){delete this[key]}});
+    saveCfbSnapshot(storage,snapshot);
+    saveCfbSnapshot(storage,{...snapshot,limited:!snapshot.limited});
+    assert.equal(readStoredCfbSnapshots(storage).length,1);
+    assert.equal(readStoredCfbSnapshots(storage)[0].limited,snapshot.limited);
+    const selection={lockAt,count:1,slateLabel:"Sat Main",target:"firstAndTop10"};
+    assert.throws(()=>selectCfbSnapshot([{...snapshot,tournament:[Array(7).fill("bad")]}],selection),/lineups/);
+    writeFileSync(join(temp,"archive.json"),JSON.stringify([snapshot]));
+    const {salary,salaryCapturedAt,...archivedSlate}=slate;
+    writeFileSync(path,JSON.stringify({sport:"CFB",target:"firstAndTop10",count:1,
+      slates:[{...archivedSlate,archive:"archive.json"}]}));
+    const replay=JSON.parse(execFileSync(process.execPath,args,{encoding:"utf8"}));
+    assert.equal(replay.holdout.tournamentFirstAndAllTop10,1);
+    assert.equal(replay.results[0].provenance.archiveUsed,true);
+    assert.match(replay.results[0].provenance.sha256.archive,/^[a-f0-9]{64}$/);
     writeFileSync(path,JSON.stringify({sport:"CFB",count:1,slates:[{...slate,slateLabel:"Late"}]}));
     assert.match(spawnSync(process.execPath,args,{encoding:"utf8"}).stderr,/label and lock time/);
   } finally { rmSync(temp,{recursive:true,force:true}); }

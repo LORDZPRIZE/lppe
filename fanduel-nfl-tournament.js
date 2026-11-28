@@ -1,6 +1,7 @@
 import {percentilePlaces, placeShare} from "./fanduel-contest-metrics.js";
 import {buildLineups, cfbMatchupIssue, unavailable} from "./fanduel-optimizer.js";
 
+const jointTargets = ["allTop10","firstAndTop10"];
 const rosterKey = lineup => JSON.stringify([...lineup.ids].sort());
 
 function makeRandom(seed) {
@@ -61,8 +62,8 @@ function simulateFootballTournament(players,lineups,{target = "first", portfolio
   const objectiveShares = new Map(lineups.map(lineup => [lineup.ids,new Float64Array(scenarioCount)]));
   const top3Places = percentilePlaces(field.length+portfolioSize);
   const top1Places = percentilePlaces(field.length+portfolioSize,1);
-  const targetPlaces = target==="allTop10" ? 10 : target==="top1" ? top1Places : top3Places;
-  const topTenRecords = target==="allTop10" ? new Map() : null;
+  const targetPlaces = jointTargets.includes(target) ? 10 : target==="top1" ? top1Places : top3Places;
+  const topTenRecords = jointTargets.includes(target) ? new Map() : null;
   const entries = lineups.map(lineup => ({
     lineup,win:0,top:0,top3:0,top1:0,scores:[],duplicates:duplicates.get(rosterKey(lineup)) ?? 0
   }));
@@ -142,8 +143,11 @@ export function compareNFLPortfolios(players,portfolio,baseline,{seed,opponentCo
   });
   let tournament=0, projection=0, improved=0, regressed=0;
   for (let scenario=0;scenario<scenarios;scenario++) {
-    const hit = roster=>topTenRecords ? portfolioOutcome(roster,topTenRecords,scenario).rank<=10 :
-      roster.some(lineup=>firstPlaceShares.get(lineup.ids)[scenario]);
+    const hit = roster=>{
+      if (!topTenRecords) return roster.some(lineup=>firstPlaceShares.get(lineup.ids)[scenario]);
+      const outcome=portfolioOutcome(roster,topTenRecords,scenario);
+      return outcome.rank<=10 && (target!=="firstAndTop10" || outcome.first);
+    };
     const a=hit(portfolio);
     const b=hit(baseline);
     tournament+=Number(a);
@@ -185,7 +189,7 @@ export function buildNFLTournament(players,count,difference,searchLimit,options)
 
 export function buildFootballTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0,target = "first",
   seed,opponentCount,scenarioCount,sport="NFL",fixedSlots} = {}) {
-  if (target==="allTop10" && count>10) throw new Error("Choose at most ten lineups for the all-top-10 target.");
+  if (jointTargets.includes(target) && count>10) throw new Error("Choose at most ten lineups for a top-ten portfolio target.");
   if (sport==="CFB") {
     const issue=cfbMatchupIssue(players.filter(p=>Number.isFinite(p.points) && !unavailable(p.status)));
     if (issue) throw new Error(issue);
@@ -265,7 +269,7 @@ export function buildFootballTournament(players,count,difference,searchLimit,{ex
     }
   }
   const ranked = simulateFootballTournament(players,[...candidates.values()],{
-    target:["top1","top3","allTop10"].includes(target) ? target : "first",portfolioSize:count,seed,opponentCount:opponentCount ?? (sport==="CFB" ? 240 : undefined),scenarioCount,sport
+    target:["top1","top3",...jointTargets].includes(target) ? target : "first",portfolioSize:count,seed,opponentCount:opponentCount ?? (sport==="CFB" ? 240 : undefined),scenarioCount,sport
   });
   if (["top1","top3"].includes(ranked.target) && !ranked.targetPlaces) {
     throw new Error("The modeled football field is too small for this percentile. A top-1% place needs at least 100 total entries.");
@@ -294,7 +298,7 @@ function portfolioOutcome(lineups,records,scenario) {
 }
 
 function selectAllTopTenPortfolio(ranked,limits,count,difference,limited,baseline) {
-  const {topTenRecords,scenarios}=ranked;
+  const {topTenRecords,scenarios,target}=ranked;
   function evaluate(lineups) {
     let all=0,first=0,both=0,excess=0;
     for (let i=0;i<scenarios;i++) {
@@ -307,7 +311,11 @@ function selectAllTopTenPortfolio(ranked,limits,count,difference,limited,baselin
     }
     return {all,first,both,excess};
   }
-  const better=(a,b)=>!b || (a.all-b.all || a.both-b.both || a.first-b.first || b.excess-a.excess)>0;
+  function better(a,b) {
+    if (!b) return true;
+    const primary = target==="firstAndTop10" ? (a.both-b.both || a.all-b.all) : (a.all-b.all || a.both-b.both);
+    return (primary || a.first-b.first || b.excess-a.excess)>0;
+  }
   const usage=new Map();
   const lineups=[];
   let current;
@@ -353,7 +361,7 @@ function selectAllTopTenPortfolio(ranked,limits,count,difference,limited,baselin
   }
   return {lineups,limited,restriction:lineups.length<count ?
     "The simulated candidate pool could not fill the portfolio within your exposure and lineup difference settings." : undefined,
-    simulation:{opponents:ranked.opponents,requestedOpponents:ranked.requestedOpponents,scenarios,target:"allTop10",
+    simulation:{opponents:ranked.opponents,requestedOpponents:ranked.requestedOpponents,scenarios,target,
       seed:ranked.seed,ownershipPlayers:ranked.ownershipPlayers,fieldPlayers:ranked.fieldPlayers,
       ...(lineups.length===count ? {allTop10Coverage:current.all/scenarios,firstPointsCoverage:current.first/scenarios,
         firstAndAllTop10Coverage:current.both/scenarios} : {})}};

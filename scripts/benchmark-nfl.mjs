@@ -1,3 +1,4 @@
+import {selectCfbSnapshot} from "../fanduel-cfb-snapshot.js";
 import {createHash} from "node:crypto";
 import {finalizedField, percentilePlaces, wilsonInterval} from "../fanduel-contest-metrics.js";
 import {readFileSync} from "node:fs";
@@ -11,7 +12,7 @@ const mean = values => values.reduce((sum,value) => sum+value,0)/values.length;
 const round = value => Number(value.toFixed(3));
 const read = path => readFileSync(path,"utf8");
 
-function benchmarkSlate(slate,root,count,sport) {
+function benchmarkSlate(slate,root,count,sport,target) {
   const hashes = {};
   const readSlateFile = key => {
     const data = read(resolve(root,slate[key]));
@@ -23,7 +24,11 @@ function benchmarkSlate(slate,root,count,sport) {
   const captureFields = ["salary",...(slate.projections ? ["projections"] : []),
     ...(slate.scenarios ? ["scenarios","field"] : [])];
   const lockAt = timestamp(slate.lockAt);
-  const timed = captureFields.every(key => timestamp(slate[key+"CapturedAt"]) < lockAt);
+  const archived=slate.archive ? selectCfbSnapshot(JSON.parse(readSlateFile("archive")),{
+    lockAt,count,slateLabel:slate.slateLabel,target
+  }) : null;
+  if (archived && sport!=="CFB") throw new Error("Paired snapshot archives are only supported for CFB.");
+  const timed = Boolean(archived) || captureFields.every(key => timestamp(slate[key+"CapturedAt"]) < lockAt);
   let cutoff=slate.topThreePercentScore;
   let top1Cutoff=slate.topOnePercentScore;
   let fieldSize=null;
@@ -60,6 +65,28 @@ function benchmarkSlate(slate,root,count,sport) {
   if (slate.holdout === true && (!timed || !slate.contestId?.trim() || !Number.isFinite(cutoff))) {
     throw new Error("Holdout slates need a contest ID, pre-lock timestamps for each model input and a numeric top-3% cutoff.");
   }
+  const readActuals=()=>{
+    if (!slate.actuals && !standings) throw new Error("Supply actual player scores or finalized standings.");
+    if (!slate.actuals) return contestPlayerScores(standings);
+    const results=new Map();
+    for (const row of parseCSV(readSlateFile("actuals"))) {
+      if (!row.id || !row.actualfpts || !Number.isFinite(Number(row.actualfpts)) || results.has(row.id)) {
+        throw new Error("Actuals must have unique ID values and numeric Actual FPTS.");
+      }
+      results.set(row.id,Number(row.actualfpts));
+    }
+    return results;
+  };
+  const actuals=readActuals();
+  let simulate;
+  const cfbStrategy=target==="firstAndTop10" ? "CFB First + All Top 10" : "CFB All-Top-10 Portfolio";
+  if (archived) {
+    const toLineups=portfolio=>portfolio.map(ids=>({picks:ids.map(id=>({player:{id,name:id}}))}));
+    return report([
+      summarize(cfbStrategy,toLineups(archived.tournament),archived.limited),
+      summarize("Projection",toLineups(archived.baseline),archived.limited)
+    ],[]);
+  }
   const salary=readSlateFile("salary");
   if (timed && parseCSV(salary).some(row=>row.projectionupdatedat &&
       !(timestamp(row.projectionupdatedat)<=timestamp(slate.salaryCapturedAt)))) {
@@ -69,18 +96,10 @@ function benchmarkSlate(slate,root,count,sport) {
   const {players} = slate.projections ? applyPlayerProjections(salaryPlayers,readSlateFile("projections"),sport,{
     date:slate.date,asOf:timed ? timestamp(slate.projectionsCapturedAt) : undefined
   }) : {players:salaryPlayers};
-  if (!slate.actuals && !standings) throw new Error("Supply actual player scores or finalized standings.");
-  const actuals = slate.actuals ? new Map() : contestPlayerScores(standings);
-  for (const row of slate.actuals ? parseCSV(readSlateFile("actuals")) : []) {
-    if (!row.id || !row.actualfpts || !Number.isFinite(Number(row.actualfpts)) || actuals.has(row.id)) {
-      throw new Error("Actuals must have unique ID values and numeric Actual FPTS.");
-    }
-    actuals.set(row.id,Number(row.actualfpts));
-  }
   if (Boolean(slate.scenarios) !== Boolean(slate.field)) {
     throw new Error("Contest simulation requires both scenarios and field CSVs.");
   }
-  const simulate = slate.scenarios ? createContestSimulator(
+  simulate = slate.scenarios ? createContestSimulator(
     readSlateFile("scenarios"),readSlateFile("field"),players,sport
   ) : null;
   const candidates = [];
@@ -119,9 +138,9 @@ function benchmarkSlate(slate,root,count,sport) {
     strategies.push(top1.lineups.length===count ? summarize(strategy,top1.lineups,top1.limited) :
       {strategy,built:top1.lineups.length,limited:top1.limited,skipped:"Could not fill the requested portfolio."});
   }
-  const allTop10 = sport==="CFB" ? buildFootballTournament(players,count,2,160000,{target:"allTop10",sport}) : null;
+  const allTop10 = sport==="CFB" ? buildFootballTournament(players,count,2,160000,{target,sport}) : null;
   if (allTop10) {
-    const strategy="CFB All-Top-10 Portfolio";
+    const strategy=cfbStrategy;
     strategies.push(allTop10.lineups.length===count ? summarize(strategy,allTop10.lineups,allTop10.limited) :
       {strategy,built:allTop10.lineups.length,limited:allTop10.limited,skipped:"Could not fill the requested portfolio."});
   }
@@ -145,10 +164,15 @@ function benchmarkSlate(slate,root,count,sport) {
   const validationPortfolio=allTop10 ?? top3;
   const independentSimulation = projectionPortfolio && validationPortfolio.lineups.length===count ?
     seeds.map(seed=>compareNFLPortfolios(players,validationPortfolio.lineups,projectionPortfolio,{
-      seed,sport,target:sport==="CFB" ? "allTop10" : "top3"
+      seed,sport,target:sport==="CFB" ? target : "top3"
     })) : [];
-  return {strategies,independentSimulation,fieldSize,top3Cutoff:cutoff ?? null,top1Cutoff:top1Cutoff ?? null,provenance:{contestId:slate.contestId ?? null,lockAt:slate.lockAt ?? null,
-    holdout:slate.holdout === true,preLockTimestampsVerified:timed,sha256:hashes}};
+  return report(strategies,independentSimulation);
+
+  function report(strategies,independentSimulation) {
+    return {strategies,independentSimulation,fieldSize,top3Cutoff:cutoff ?? null,top1Cutoff:top1Cutoff ?? null,
+      provenance:{contestId:slate.contestId ?? null,lockAt:slate.lockAt ?? null,archiveUsed:Boolean(archived),
+        holdout:slate.holdout === true,preLockTimestampsVerified:timed,sha256:hashes}};
+  }
 
   function summarize(strategy,lineups,limited) {
     const scores = lineups.map(lineup => lineup.picks.reduce((sum,{player}) => {
@@ -166,6 +190,7 @@ function benchmarkSlate(slate,root,count,sport) {
       result.paperRanks=ranks;
       result.paperFirst=ranks.includes(1);
       result.paperAllTop10=ranks.every(rank=>rank<=10);
+      result.paperFirstAndAllTop10=result.paperFirst && result.paperAllTop10;
       result.worstPaperRank=Math.max(...ranks);
       result.gapToFirst=round(Math.max(0,fieldScores[0]/100-Math.max(...scores)));
     }
@@ -192,8 +217,9 @@ function benchmarkSlate(slate,root,count,sport) {
 try {
   const input = process.argv[2];
   if (!input) throw new Error("Usage: node scripts/benchmark-nfl.mjs path/to/manifest.json");
-  const {slates,count = 5,sport = "NFL"} = JSON.parse(read(input));
+  const {slates,count = 5,sport = "NFL",target="allTop10"} = JSON.parse(read(input));
   if (!["NFL","CFB"].includes(sport)) throw new Error("Manifest sport must be NFL or CFB.");
+  if (sport==="CFB" && !["allTop10","firstAndTop10"].includes(target)) throw new Error("Choose a supported CFB benchmark target.");
   if (sport==="CFB" && count>10) throw new Error("Request up to ten lineups per strategy for the CFB top-10 comparison.");
   if (!Array.isArray(slates) || !slates.length || !Number.isInteger(count) || count < 1 || count > 20) {
     throw new Error("Supply at least one slate and request 1–20 lineups per strategy.");
@@ -209,13 +235,13 @@ try {
   }
   const results = slates.map(slate => {
     try {
-      return {slate:slate.name,...benchmarkSlate(slate,dirname(resolve(input)),count,sport)};
+      return {slate:slate.name,...benchmarkSlate(slate,dirname(resolve(input)),count,sport,target)};
     } catch (error) {
       throw new Error((slate.name || slate.salary)+": "+error.message);
     }
   });
-  const metric=sport==="CFB" ? "paperAllTop10" : "contestTop3";
-  const strategy=sport==="CFB" ? "CFB All-Top-10 Portfolio" : "NFL Top-3% Portfolio";
+  const metric=sport==="CFB" ? (target==="firstAndTop10" ? "paperFirstAndAllTop10" : "paperAllTop10") : "contestTop3";
+  const strategy=sport==="CFB" ? (target==="firstAndTop10" ? "CFB First + All Top 10" : "CFB All-Top-10 Portfolio") : "NFL Top-3% Portfolio";
   const paired = results.filter(result => result.provenance.holdout).map(result => [
     result.strategies.find(item => item.strategy === strategy),
     result.strategies.find(item => item.strategy === "Projection")
