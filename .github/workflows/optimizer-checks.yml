@@ -1,26 +1,29 @@
 name: LPPE optimizer checks
+
 on:
   push:
-    branches: [main, lppe-autonomous-dfs]
+    branches: [main, lppe-autonomous-dfs, lppe-product-roadmap]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   optimizer:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Check JavaScript syntax
         run: |
-          node --experimental-default-type=module --check fanduel-optimizer.js
-          node --experimental-default-type=module --check fanduel-nfl-tournament.js
-          node --check scripts/benchmark-nfl.mjs
-      - name: Check optimizer module imports
-        run: |
-          node --experimental-default-type=module -e "import('./fanduel-optimizer.js').then(()=>import('./fanduel-nfl-tournament.js')).then(()=>console.log('Optimizer modules load'))"
+          git ls-files -z '*.js' '*.mjs' | xargs -0 -n 1 node --check
+      - name: Run FanDuel, PrizePicks and DFS regression tests
+        run: node --test scripts/*.test.mjs scripts/test-*.mjs worker/*.test.mjs
       - name: Check Python historical audit syntax
         run: python3 -c "import ast,pathlib; ast.parse(pathlib.Path('scripts/fanduel_contest_review.py').read_text())"
-
-      - name: DFS ingestion regression tests
-        run: node --experimental-default-type=module --test worker/dfs-intelligence.test.mjs

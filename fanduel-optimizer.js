@@ -1,3 +1,5 @@
+import {contestHandle, finalizedField, rankSummary} from "./fanduel-contest-metrics.js";
+
 export const roster = [
   ["PG", ["PG"]], ["SG", ["SG"]], ["SF", ["SF"]], ["PF", ["PF"]], ["C", ["C"]],
   ["G/F", ["PG", "SG", "SF", "PF"]], ["F/C", ["SF", "PF", "C"]],
@@ -96,7 +98,7 @@ export function reviewContest(source, username = "") {
   let wins = 0;
   let best = -Infinity;
   let top20Entries = 0;
-  const handle = username.trim().toLowerCase();
+  const handle = contestHandle(username);
   for (const row of rows) {
     if (!row.entryid) continue;
     entries++;
@@ -108,7 +110,7 @@ export function reviewContest(source, username = "") {
       cutoff = Math.min(cutoff,score);
       if (rank===1) winningScore=score;
     }
-    if (handle && row.entryname.replace(/\s*\(\d+\/\d+\)$/, "").trim().toLowerCase() === handle) {
+    if (handle && contestHandle(row.entryname) === handle) {
       userEntries++;
       if (Number.isFinite(score)) best = Math.max(best,score);
       if (rank <= 20) top20Entries++;
@@ -117,7 +119,11 @@ export function reviewContest(source, username = "") {
   }
   if (!entries) throw new Error("No contest entries found in this leaderboard.");
   if (userEntries && !Number.isFinite(best)) throw new Error("No scored entries found for that username.");
-  return {entries,userEntries,best:userEntries ? best : null,winningScore,wins,cutoff:entries >= 20 && Number.isFinite(cutoff) ? cutoff : null,top20Entries};
+  const finalized = finalizedField(rows);
+  const top3 = finalized ? rankSummary(finalized.filter(row => handle && contestHandle(row.entryname) === handle)
+    .map(row => Number(row.rank)),finalized.length) : null;
+  const top3Cutoff = top3?.top3Places ? Number(finalized[top3.top3Places-1].points) : null;
+  return {entries,userEntries,top3,top3Cutoff,best:userEntries ? best : null,winningScore,wins,cutoff:entries >= 20 && Number.isFinite(cutoff) ? cutoff : null,top20Entries};
 }
 
 const csvNumber = value => value?.trim() ? Number(value.replace(/[$,]/g, "")) : NaN;
@@ -624,6 +630,8 @@ export function contestPlayerScores(rows) {
 
 export function scoreSavedBuilds(rows,records,cutoff) {
   const field = rows.filter(row=>row.entryid && row.points && Number.isFinite(Number(row.points))).map(row=>Number(row.points)).sort((a,b)=>b-a);
+  const finalized = finalizedField(rows);
+  const finalScores = finalized?.map(row => Math.round(Number(row.points)*100)/100);
   const payouts = new Map();
   for (const row of rows) {
     const range = row.prizerank?.replaceAll(",","").match(/^(\d+)(?:st|nd|rd|th)?(?:\s*-\s*(\d+)(?:st|nd|rd|th)?)?$/i);
@@ -647,14 +655,19 @@ export function scoreSavedBuilds(rows,records,cutoff) {
       const rounded = scores.map(value=>Math.round(value*100)/100);
       const best = Math.max(...rounded);
       const bestRank = 1+field.filter(value=>value>best).length;
+      // Insert the entire synthetic portfolio; the benchmark retains all observed entries.
+      const paperField = (finalScores?.length ?? 0)+rounded.length;
+      const top3 = finalized && rounded.length === build.lineups.length
+        ? rankSummary(rounded.map(value => 1+finalScores.filter(n=>n>value).length+rounded.filter(n=>n>value).length),paperField)
+        : null;
       let gross = 0;
       for (const value of rounded) {
         const rank = 1+field.filter(n=>n>value).length+rounded.filter(n=>n>value).length;
         const ties = field.filter(n=>n===value).length+rounded.filter(n=>n===value).length;
         for (let place=rank;place<rank+ties;place++) gross+=(payouts.get(place)||0)/ties;
       }
-      results.push({version,recordIndex,slate:build.slate,capturedAt:build.capturedAt,lockAt:build.lockAt,requested:build.requested,scored:scores.length,total:build.lineups.length,
-        best,bestRank,gapToFirst:Math.max(0,(field[0]??best)-best),
+      results.push({version,recordIndex,slate:build.slate,capturedAt:build.capturedAt,lockAt:build.lockAt,requested:build.requested,target:build.target,scored:scores.length,total:build.lineups.length,
+        best,bestRank,top3,gapToFirst:Math.max(0,(field[0]??best)-best),
         net:rounded.length===build.lineups.length && payouts.size && Number.isFinite(fee) ? gross-fee*rounded.length : null,hits:cutoff === null ? null : scores.filter(score => Math.round(score*100) >= Math.round(cutoff*100)).length});
     }
   }

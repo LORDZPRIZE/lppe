@@ -1,3 +1,4 @@
+import {percentilePlaces, placeShare} from "./fanduel-contest-metrics.js";
 import {buildLineups, unavailable} from "./fanduel-optimizer.js";
 
 const fieldSize = 100;
@@ -11,7 +12,7 @@ function makeRandom(seed) {
   };
 }
 
-function simulateNFLTournament(players,lineups) {
+function simulateNFLTournament(players,lineups,{target = "first", portfolioSize = 1} = {}) {
   const fieldRandom = makeRandom(21839);
   const scenarioRandom = makeRandom(72203);
   const normal = random => Math.sqrt(-2*Math.log(random()))*Math.cos(2*Math.PI*random());
@@ -39,9 +40,10 @@ function simulateNFLTournament(players,lineups) {
   if (field.length < 25) throw new Error("Too few opponent lineups could be modeled from this slate.");
 
   const fieldKeys = field.map(rosterKey);
-  const firstPlaceShares = new Map(lineups.map(lineup => [lineup.ids,new Float64Array(scenarioCount)]));
+  const objectiveShares = new Map(lineups.map(lineup => [lineup.ids,new Float64Array(scenarioCount)]));
+  const top3Places = percentilePlaces(field.length+portfolioSize);
   const entries = lineups.map(lineup => ({
-    lineup,win:0,top:0,scores:[],duplicates:fieldKeys.filter(key => key === rosterKey(lineup)).length
+    lineup,win:0,top:0,top3:0,scores:[],duplicates:fieldKeys.filter(key => key === rosterKey(lineup)).length
   }));
   const places = Math.floor((field.length+1)/10);
   for (let index = 0; index < scenarioCount; index++) {
@@ -72,26 +74,26 @@ function simulateNFLTournament(players,lineups) {
         if (opponentScore > score) above++;
         if (opponentScore === score) tied++;
       }
-      if (above === 0) {
-        const share = 1/tied;
-        entry.win += share;
-        firstPlaceShares.get(entry.lineup.ids)[index] = share;
-      }
-      entry.top += Math.max(0,Math.min(tied,places-above))/tied;
+      const win = placeShare(above,tied,1);
+      entry.win += win;
+      entry.top += placeShare(above,tied,places);
+      entry.top3 += placeShare(above,tied,top3Places);
+      objectiveShares.get(entry.lineup.ids)[index] = target === "top3" ? Number(above < top3Places) : win;
     }
   }
   return {
     opponents:field.length,
     ownershipPlayers:ownershipBias.size,
     fieldPlayers:pool.length,
-    firstPlaceShares,
+    firstPlaceShares:objectiveShares,
+    target,top3Places,
     scenarios:scenarioCount,
-    lineups:entries.map(({lineup,win,top,scores,duplicates}) => ({
+    lineups:entries.map(({lineup,win,top,top3,scores,duplicates}) => ({
       ...lineup,tournament:{
-        win:win/scenarioCount,top:top/scenarioCount,duplicates,
+        win:win/scenarioCount,top:top/scenarioCount,top3:top3/scenarioCount,duplicates,
         ceiling:scores.sort((a,b) => a-b)[Math.ceil(scenarioCount*0.90)-1]/100
       }
-    })).sort((a,b) => b.tournament.win-a.tournament.win || b.tournament.top-a.tournament.top ||
+    })).sort((a,b) => (target === "top3" ? b.tournament.top3-a.tournament.top3 : 0) || b.tournament.win-a.tournament.win || b.tournament.top-a.tournament.top ||
       b.tournament.ceiling-a.tournament.ceiling || a.tournament.duplicates-b.tournament.duplicates ||
       b.points-a.points)
   };
@@ -106,8 +108,10 @@ function selectTournamentPair(ranked,limits,difference) {
   let pair;
   let bestCoverage = -1;
   for (const [index,first] of ranked.lineups.entries()) {
+    if ([...first.ids].some(id => !(limits.get(id) >= 1))) continue;
     const firstShares = ranked.firstPlaceShares.get(first.ids);
     for (const second of ranked.lineups.slice(index+1)) {
+      if ([...second.ids].some(id => !(limits.get(id) >= 1))) continue;
       const shared = [...second.ids].filter(id => first.ids.has(id));
       if (second.ids.size-shared.length < difference || shared.some(id => limits.get(id) < 2)) continue;
       const secondShares = ranked.firstPlaceShares.get(second.ids);
@@ -124,7 +128,7 @@ function selectTournamentPair(ranked,limits,difference) {
   return pair;
 }
 
-export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0} = {}) {
+export function buildNFLTournament(players,count,difference,searchLimit,{exposure = 100,stack = 0,target = "first"} = {}) {
   const candidates = new Map();
   const limits = new Map(players.map(player => [
     player.id, player.selection === "lock" ? count :
@@ -185,7 +189,12 @@ export function buildNFLTournament(players,count,difference,searchLimit,{exposur
   }
   if (!candidates.size) return {lineups:[],limited,restriction};
 
-  const ranked = simulateNFLTournament(players,[...candidates.values()]);
+  const ranked = simulateNFLTournament(players,[...candidates.values()],{
+    target:target === "top3" ? "top3" : "first",portfolioSize:count
+  });
+  if (ranked.target === "top3" && !ranked.top3Places) {
+    throw new Error("The modeled NFL field is too small to have a top-3% place.");
+  }
   return selectTournamentPortfolio(ranked,limits,count,difference,limited);
 }
 
@@ -200,7 +209,7 @@ export function selectTournamentPortfolio(ranked,limits,count,difference,limited
     let best;
     let bestGain = -1;
     for (const lineup of selectionPool) {
-      if ([...lineup.ids].some(id => (usage.get(id) || 0) >= limits.get(id))) continue;
+      if ([...lineup.ids].some(id => (usage.get(id) || 0) >= (limits.get(id) ?? 0))) continue;
       if (lineups.some(prior => [...lineup.ids].filter(id => !prior.ids.has(id)).length < difference)) continue;
       const shares = ranked.firstPlaceShares.get(lineup.ids);
       let gain = 0;
@@ -226,6 +235,10 @@ export function selectTournamentPortfolio(ranked,limits,count,difference,limited
       "The simulated candidate pool could not fill the portfolio within your exposure and lineup difference settings." : undefined,
     simulation:{
       opponents:ranked.opponents,scenarios:ranked.scenarios,
+      target:ranked.target,top3Places:ranked.top3Places,
+      ...(ranked.target === "top3" && lineups.length === count ? {
+        top3Coverage:covered.reduce((sum,value) => sum+value,0)/scenarioCount
+      } : {}),
       ownershipPlayers:ranked.ownershipPlayers,fieldPlayers:ranked.fieldPlayers
     }
   };
