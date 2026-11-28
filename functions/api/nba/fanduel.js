@@ -3,7 +3,8 @@ import { liveRefreshSeconds, importPlayers, matchName, profiles, salaryCap, team
 const source = "https://www.dailyfantasyfuel.com/nba/projections/fanduel/";
 const scoreboards = {
   NBA:"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=",
-  NFL:"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates="
+  NFL:"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=",
+  CFB:"https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?dates="
 };
 const injuryFeed = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries";
 const eastern = new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"});
@@ -188,7 +189,8 @@ export async function providerPool(read,slate,sport) {
 }
 
 export function attachSlateGames(pool,events,now,sport = "NBA") {
-  const slateTeams = new Set(pool.players.map(player => player.team));
+  const normalizedTeam=player=>teamCode(player.team,sport);
+  const slateTeams = new Set(pool.players.map(normalizedTeam));
   const games = new Map();
   const seen = new Set();
   for (const event of events) {
@@ -209,10 +211,11 @@ export function attachSlateGames(pool,events,now,sport = "NBA") {
   if (unique.size !== pool.gameCount || firstStart !== pool.lockAt ||
       [...slateTeams].some(team => !games.get(team))) return pool;
   const players = pool.players.map(player => {
-    const {game,gameDate,start} = games.get(player.team);
-    return {...player,game,gameDate,gameStart:start};
+    const team=normalizedTeam(player);
+    const {game,gameDate,start} = games.get(team);
+    return {...player,team,game,gameDate,gameStart:start};
   });
-  return {...pool,players};
+  return {...pool,players,...(sport==="CFB" ? {matchupSource:"ESPN"} : {})};
 }
 
 export function addNBAProjections(pool,{rows,updatedAt},now) {
@@ -315,7 +318,8 @@ async function currentNBAProjections() {
 }
 
 async function readSchedule(sport,date,timeout = 3500) {
-  const schedule = await fetch(scoreboards[sport]+date.replaceAll("-",""),{signal:AbortSignal.timeout(timeout)});
+  const params = sport==="CFB" ? "&groups=80&limit=300" : "";
+  const schedule = await fetch(scoreboards[sport]+date.replaceAll("-","")+params,{signal:AbortSignal.timeout(timeout)});
   if (!schedule.ok) throw new Error(sport+" schedule unavailable");
   const {events} = await schedule.json();
   return Array.isArray(events) ? events : [];
@@ -386,9 +390,17 @@ export async function onRequestGet({request,env}) {
   try {
     const cache = caches.default;
     const cacheKey = suffix => new Request(new URL("/lppe-internal/fanduel-v9/"+sport+"/"+suffix,request.url));
+    async function respondFromCache(pool,key) {
+      if (sport!=="CFB" || pool.matchupSource || pool.players.every(player=>player.game)) return reply(pool);
+      const events=await readSchedule(sport,pool.date,6000).catch(()=>[]);
+      const enriched=attachSlateGames(pool,events,Date.now(),sport);
+      if (enriched!==pool) await storePool(cache,key,enriched,120);
+      return reply(enriched);
+    }
     if (configured && !list && slateId !== null) {
-      const ready = await cachedPool(cache,cacheKey("provider/"+slateId));
-      if (ready) return reply(ready);
+      const key=cacheKey("provider/"+slateId);
+      const ready = await cachedPool(cache,key);
+      if (ready) return respondFromCache(ready,key);
     }
     let slate;
     let mainCandidates;
@@ -411,13 +423,13 @@ export async function onRequestGet({request,env}) {
     }
     const key = cacheKey(configured ? "provider/"+slate.id : "public");
     const cached = await cachedPool(cache,key);
-    if (cached) return reply(cached);
+    if (cached) return respondFromCache(cached,key);
     const isLiveNBA = configured && sport === "NBA";
     const projectionsRequest = isLiveNBA ? currentNBAProjections() : null;
     const injuriesRequest = isLiveNBA ? currentNBAInjuries() : null;
     const scheduledSport = configured && Object.hasOwn(scoreboards,sport);
     const scheduleRequest = scheduledSport ?
-      readSchedule(sport,easternDay(Date.parse(slate.starts_at))).catch(() => []) : null;
+      readSchedule(sport,easternDay(Date.parse(slate.starts_at)),sport==="CFB" ? 6000 : undefined).catch(() => []) : null;
     const salaryKey = isLiveNBA ? cacheKey("nba-salaries/"+slate.id) : null;
     let data = salaryKey ? await cachedPool(cache,salaryKey) : null;
     if (!data) {
@@ -450,7 +462,7 @@ export async function onRequestGet({request,env}) {
         cachedAt:new Date().toISOString()};
       await storePool(cache,cacheKey("saved-main/"+data.date),snapshot,86400);
     }
-    await storePool(cache,key,data,isLiveNBA ? 120 : liveRefreshSeconds(data.lockAt));
+    await storePool(cache,key,data,isLiveNBA || sport==="CFB" ? 120 : liveRefreshSeconds(data.lockAt));
     return reply(data);
   } catch (error) {
     const message = configured && /^The FanDuel salary/.test(error.message) ? error.message :
