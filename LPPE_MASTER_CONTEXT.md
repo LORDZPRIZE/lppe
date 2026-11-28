@@ -97,3 +97,7 @@ The opt-in **First place + every lineup in the top 10** objective prioritizes th
 The authenticated build log showed that the branch preview invoked **wrangler preview** without a Wrangler previews block. The Cloudflare production trigger was also pointed at the older **codex/free-prizepicks-refresh** branch and passed the relocated **worker/wrangler.toml** path. Native production targets **main** and uses the root configuration, with the deployed Worker tagged by Git commit. The GitHub Actions fallback checks for that same commit tag before deploying.
 
 Worker previews use the dedicated **lppe-prizepicks-preview** KV namespace. It is shared by previews and separate from the production board. Check the Workers Builds result, preview health, and production health after a release. The production health response exposes the active Worker revision and commit tag.
+
+### FanDuel checked-lineup CSV export
+
+NBA, NFL, MLB, and CFB Classic builds now support exporting checked lineups into an existing contest's FanDuel entries template. The browser checks roster headers and exact slate-prefixed player IDs, fills one entry per checked lineup, and excludes unrelated contests and untouched rows from the download. FanDuel upload and review remain separate.

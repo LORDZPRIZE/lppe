@@ -95,3 +95,7 @@ For a historical CFB holdout, run **node scripts/benchmark-nfl.mjs path/to/manif
 For **First place + every lineup in the top 10**, choose that experimental CFB target explicitly. A tie for the highest score counts if every lineup also reaches competition rank 10 or better in the same contest. Before lock, a completed live CFB tournament build automatically saves the exact player inputs, availability exclusions, settings, and the same-sized projection-only baseline on this device. Use **Download CFB contest snapshots** in Review.
 
 To grade a saved build against finalized standings, use the same benchmark manifest with **target** set to **firstAndTop10**, the exact build **count**, and **archive** pointing to the downloaded JSON in place of **salary** and **salaryCapturedAt**. Keep the same **lockAt**, **slateLabel**, **leaderboard**, **contestId**, and **holdout** fields. Replay scores the saved lineups directly.
+
+## Export checked FanDuel entries
+
+On the FanDuel optimizer, build NBA, NFL, MLB, or college football Classic lineups and check the lineups to use. Open FanDuel **Upcoming → CSV Edit** and download the entries template for the same slate. Load it in LPPE, choose the contest, and click **Download selected for FanDuel**. Each checked lineup fills one entry. Empty entries are filled first, and LPPE shows how many existing lineups the export will replace. The export includes only the chosen contest rows that were filled. Upload the resulting CSV from FanDuel and review the changes there. The template is processed in the browser.
