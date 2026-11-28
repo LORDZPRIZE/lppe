@@ -79,3 +79,9 @@ Used complete public NBA game results for November 18–26, 2026. The holdout be
 ### Production validation and rollback
 
 Run the full regression suite, build Pages Functions, and dry-run Wrangler from the repository root before promoting. Validate the GitHub Actions optimizer run, Cloudflare Pages production deployment, and Worker build status for the promoted commit. Check both live endpoints and compare changed production Pages assets against Git. Native Worker deployment and the authenticated fallback share the root Worker configuration. The fallback checks the tagged deployment's production health. Restore the prior known-good Pages deployment and Worker revision in Cloudflare if a rollback is necessary, then revert the production merge in Git after review.
+
+## November 28 · College football tournament work
+
+The long-term goal is a first-place score in each supported sport. For CFB the portfolio target is every lineup at competition rank 10 or better. Report first-place ties and the joint result alongside the top-10 rate. Keep separate cohorts by sport and contest format. Compare equal entry counts on real, unseen slates before treating modeled success as validated.
+
+The CFB optimizer now supports the seven-slot FanDuel Classic format with Superflex, checks matchup consistency for simulation, and uses the entire portfolio when computing its worst rank. It compares legal two-entry pairs directly and tests larger portfolios against a like-for-like projection baseline. Smaller-field simulations are ranking aids. Historical replay inserts all candidate entries into the complete observed leaderboard and verifies the archived slate label and lock timestamp. CFB salary pagination supports up to 2,400 advertised rows and reports incomplete responses explicitly.

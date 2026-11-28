@@ -2,7 +2,7 @@ import {lateSwapLineup} from "./fanduel-nba-review.js";
 import { buildLineups } from "./fanduel-optimizer.js";
 
 import { buildNBATournament, nbaRoleProjections } from "./fanduel-nba-tournament.js";
-import { buildNFLTournament } from "./fanduel-nfl-tournament.js";
+import { buildFootballTournament } from "./fanduel-nfl-tournament.js";
 
 self.addEventListener("message",({data}) => {
   try {
@@ -17,8 +17,8 @@ self.addEventListener("message",({data}) => {
       self.postMessage(buildNBATournament(players,count,difference,searchLimit,options));
       return;
     }
-    if (data.tournament && sport === "NFL") {
-      self.postMessage(buildNFLTournament(players,count,difference,searchLimit,options));
+    if (data.tournament && ["NFL","CFB"].includes(sport)) {
+      self.postMessage(buildFootballTournament(players,count,difference,searchLimit,{...options,sport}));
       return;
     }
     const pool = highCeiling ? players.map(player => ({

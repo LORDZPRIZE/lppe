@@ -135,6 +135,35 @@ export const teamCode = (raw,sport = "NBA") => {
   if (sport === "NFL") return {JAX:"JAC",WSH:"WAS"}[team] || team;
   return team;
 };
+export function cfbGameKey(game,team,opponent) {
+  const raw = String(game ?? "").trim().toUpperCase();
+  const pair = raw.split(/\s*(?:@|\/|\bVS\.?\s+)\s*/);
+  if (pair.length === 2 && pair.every(code=>/^[A-Z0-9]{2,8}$/.test(code))) {
+    if (pair[0] === pair[1] || !pair.includes(team)) return "";
+    return pair.sort().join("/");
+  }
+  const other = teamCode(opponent,"CFB");
+  if (other && other!==team && /^[A-Z0-9]{2,8}$/.test(other)) return [team,other].sort().join("/");
+  return /^[A-Z0-9_-]+$/.test(raw) && !/^(?:0|NA|N\/A|NONE|NULL|UNKNOWN)$/.test(raw) ? raw : "";
+}
+
+export function cfbMatchupIssue(players) {
+  const teamGames = new Map();
+  const gameTeams = new Map();
+  for (const player of players) {
+    if (!player.game) return "College football simulations need a verified Game or Opponent for every eligible player.";
+    if (teamGames.has(player.team) && teamGames.get(player.team)!==player.game) {
+      return "College football player rows disagree on a team's matchup.";
+    }
+    teamGames.set(player.team,player.game);
+    const teams=gameTeams.get(player.game) ?? new Set();
+    teams.add(player.team);
+    gameTeams.set(player.game,teams);
+    if (teams.size>2) return "A college football matchup has more than two teams.";
+  }
+  return gameTeams.size<2 ? "College football Classic requires players from at least two games." : null;
+}
+
 export const matchName = name => String(name ?? "").normalize("NFKD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const nameVariant = name => matchName(String(name ?? "").trim().replace(/[\s,]+(?:jr\.?|sr\.?|ii|iii|iv|v)$/i,""));
 function recordNameVariant(groups,name,team) {
@@ -294,15 +323,20 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
     const source = Number.isFinite(provided) ? "Salary CSV projection" :
       Number.isFinite(average) ? "FanDuel FPPG" : "";
     const status = row.injuryindicator || row.injurystatus || row.status || "";
+    const rawGame = row.game || row.gameid || row.matchup;
+    const game = sport==="CFB" ? cfbGameKey(rawGame,team,row.opp || row.opponent) :
+      (rawGame || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
     if (players.has(id)) {
       const existing = players.get(id);
       if (existing.team !== team || existing.salary !== salary || existing.name !== name ||
+          (sport==="CFB" && existing.game && game && existing.game!==game) ||
           (existing.gameDate && row.gamedate && existing.gameDate !== row.gamedate) ||
           (Number.isFinite(existing.points) && Number.isFinite(points) && existing.points !== points)) {
         throw new Error("Conflicting rows share a FanDuel player ID. Use a single slate CSV.");
       }
       if (existing.projectionUpdatedAt!==projectionTime(row)) existing.projectionUpdatedAt=null;
       existing.positions = [...new Set([...existing.positions, ...positions])];
+      if (!existing.game) existing.game=game;
       if (!Number.isFinite(existing.points) && Number.isFinite(points)) {
         existing.points=points;
         existing.source=source;
@@ -315,7 +349,6 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       }
       continue;
     }
-    const game = (row.game || row.gameid || row.matchup || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
     players.set(id,{id,name,positions,salary,team,points,gameDate:row.gamedate || undefined,confirmedStarter:/^(1|true|yes)$/i.test(row.starter) ? true : /^(0|false|no)$/i.test(row.starter) ? false : undefined,ceiling:readCeiling(row),ownership:readOwnership(row),source,projectionUpdatedAt:Number.isFinite(provided) ? projectionTime(row) : null,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
