@@ -1,10 +1,11 @@
+import {makeCfbSnapshot,saveCfbSnapshot,readStoredCfbSnapshots} from "./fanduel-cfb-snapshot.js";
 import {enteredNBAIds,reconcileNBAEntries,reviewPlayerCeilings,ownershipReview,pairHeldOut,readNBAArchive,summarizeTop3Pairs} from "./fanduel-nba-review.js";
 import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
 import { automaticSlateChoice, cfbMatchupIssue, matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
-const targetLabel = target => ({allTop10:"all-lineup top-10",top1:"top-1%",top3:"top-3%",top20:"top-20",first:"first-place"})[target] ?? "first-place";
+const targetLabel = target => ({firstAndTop10:"first-place and all-lineup top-10",allTop10:"all-lineup top-10",top1:"top-1%",top3:"top-3%",top20:"top-20",first:"first-place"})[target] ?? "first-place";
 const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const importForm = byId("fdImport");
 const autoLoad = byId("fdAutoLoad");
@@ -108,6 +109,7 @@ let importedSlateName;
 const savedSlateKey = "lppe-fanduel-import-v1";
 const savedSlateLifetime = 48 * 60 * 60 * 1000;
 const tournamentTargets = {NBA:"top20",NFL:"first",CFB:"allTop10"};
+const jointTargets = ["allTop10","firstAndTop10"];
 const tournamentSports = ["NBA","NFL","CFB"];
 const slateSettings = [byId("fdTarget"),mode,objective,count,difference,exposure,stack,depth,byId("fdFieldSize")];
 
@@ -574,7 +576,7 @@ function compareLineups(highCeiling,simulation) {
   if (highCeiling) headings.push("Ceiling FPTS");
   if (simulation) {
     headings.push("Modeled win share",sport.value==="CFB" ? "Modeled top-1% share" : "Modeled top-3% share");
-    if (simulation.target!=="allTop10") headings.push("Added "+targetLabel(simulation.target)+" coverage");
+    if (!jointTargets.includes(simulation.target)) headings.push("Added "+targetLabel(simulation.target)+" coverage");
   }
   const header = table.createTHead().insertRow();
   for (const label of headings) {
@@ -607,7 +609,7 @@ function compareLineups(highCeiling,simulation) {
     if (highCeiling) values.push(lineup.ceiling.toFixed(2));
     if (simulation) {
       values.push(percent.format(lineup.tournament.win),percent.format(sport.value==="CFB" ? lineup.tournament.top1 : lineup.tournament.top3));
-      if (simulation.target!=="allTop10") values.push(percent.format(lineup.tournament.addedWinCoverage));
+      if (!jointTargets.includes(simulation.target)) values.push(percent.format(lineup.tournament.addedWinCoverage));
     }
     for (const value of values) row.insertCell().textContent = value;
   }
@@ -923,7 +925,7 @@ function buildVerifiedLineups(news=null) {
   const tournament = gpp && tournamentSports.includes(sport.value) && objective.value === "tournament";
   if (tournament && sport.value==="NBA" && !byId("fdFieldSize").reportValidity()) return finish();
   if (tournament && sport.value==="CFB") {
-    if (byId("fdTarget").value==="allTop10" && requested>10) {
+    if (jointTargets.includes(byId("fdTarget").value) && requested>10) {
       byId("fdBuildStatus").textContent="Choose up to 10 lineups for the all-top-10 target.";
       return finish();
     }
@@ -964,6 +966,16 @@ function buildVerifiedLineups(news=null) {
     else {
       renderLineups(data,requested,highCeiling);
       if (loadedLiveSlate && lineups.length && slateLockAt > Date.now()) saveBuildHistory(data.baseline,data.ownershipForecast,data.simulation?.comparison,news,data.simulation?.newsComparison);
+      if (cfbCapture && lineups.length===requested && data.lineups.length===requested && data.baseline?.length===requested) {
+        try {
+          const snapshot=makeCfbSnapshot(cfbCapture,payload,data,Date.now());
+          saveCfbSnapshot(localStorage,snapshot);
+          byId("fdHistoryStatus").textContent="Paired pre-lock CFB snapshot saved on this device.";
+          byId("fdCfbSnapshotDownload").hidden=false;
+        } catch {
+          byId("fdHistoryStatus").textContent="The paired CFB snapshot could not be saved on this device.";
+        }
+      }
       if (news) showNewsComparison(news,data.simulation?.newsComparison);
     }
   });
@@ -974,8 +986,13 @@ function buildVerifiedLineups(news=null) {
     byId("fdBuildStatus").textContent = "The lineup builder could not start.";
   });
   const pool = gpp ? candidates : candidates.map(player => ({...player,maxExposure:100}));
-  activeWorker.postMessage({players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,
-    sport:sport.value,deep:gpp && depth.value === "deep",options});
+  const payload={players:pool,highCeiling,tournament,count:requested,difference:gpp ? difference.valueAsNumber : 1,
+    sport:sport.value,deep:gpp && depth.value === "deep",options};
+  const cfbCapture=tournament && payload.sport==="CFB" && loadedLiveSlate && Number.isFinite(slateLockAt) ? {
+    startedAt:Date.now(),lockAt:slateLockAt,slateId:String(loadedLiveSlate.id),slate:loadedLiveSlate.name,
+    excluded:poolForBuild().filter(player=>player.selection==="exclude")
+  } : null;
+  activeWorker.postMessage(payload);
 }
 refine.addEventListener("click",() => {
   depth.value = "deep";
@@ -1237,9 +1254,11 @@ function applyMode() {
   tournament.disabled = tournament.hidden = cash || !tournamentSports.includes(sport.value);
   byId("fdTargetLabel").hidden = tournament.disabled || objective.value!=="tournament";
   const target=byId("fdTarget");
-  const allTen=target.querySelector('option[value="allTop10"]');
-  allTen.disabled=allTen.hidden=sport.value!=="CFB";
-  if (allTen.disabled && target.value==="allTop10") target.value=tournamentTargets[sport.value] ?? "first";
+  for (const value of jointTargets) {
+    const option=target.querySelector('option[value="'+value+'"]');
+    option.disabled=option.hidden=sport.value!=="CFB";
+    if (option.disabled && target.value===value) target.value=tournamentTargets[sport.value] ?? "first";
+  }
   const topOne=target.querySelector('option[value="top1"]');
   topOne.disabled=topOne.hidden=sport.value!=="CFB";
   if (topOne.disabled && target.value==="top1") target.value=tournamentTargets[sport.value] ?? "first";
@@ -1526,6 +1545,23 @@ function showNewsComparison(news,comparison) {
   byId("fdResults").prepend(panel);
 }
 document.addEventListener("visibilitychange",startAutomaticSession);
+
+try {
+  byId("fdCfbSnapshotDownload").hidden=!readStoredCfbSnapshots(localStorage).length;
+} catch {}
+byId("fdCfbSnapshotDownload").addEventListener("click",()=>{
+  try {
+    const snapshots=readStoredCfbSnapshots(localStorage);
+    const url=URL.createObjectURL(new Blob([JSON.stringify(snapshots)],{type:"application/json"}));
+    const link=document.createElement("a");
+    link.href=url;
+    link.download="lppe-cfb-prelock-snapshots.json";
+    link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  } catch {
+    byId("fdHistoryStatus").textContent="Saved CFB snapshots could not be downloaded.";
+  }
+});
 
 const historyPrefix = "lppe-fd-build-v1/";
 function saveBuildHistory(baseline,ownershipForecast,comparison,news,newsComparison) {
