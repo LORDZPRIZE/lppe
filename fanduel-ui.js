@@ -1,9 +1,10 @@
-import {enteredNBAIds,reconcileNBAEntries,reviewPlayerCeilings,ownershipReview,pairHeldOut,readNBAArchive} from "./fanduel-nba-review.js";
+import {enteredNBAIds,reconcileNBAEntries,reviewPlayerCeilings,ownershipReview,pairHeldOut,readNBAArchive,summarizeTop3Pairs} from "./fanduel-nba-review.js";
 import { addRotations, nbaRoleProjections } from "./fanduel-nba-tournament.js";
 import { automaticSlateChoice, matchName, teamCode, applyPlayerProjections, importPlayers, inspectSalaryCSV, parseCSV, profiles, scoreSavedBuilds, reviewContest, summarizeReviewExport, reviewCSV, unavailable } from "./fanduel-optimizer.js";
 
 const byId = id => document.getElementById(id);
 const percent = new Intl.NumberFormat("en-US",{style:"percent",maximumFractionDigits:1});
+const targetLabel = target => ({top3:"top-3%",top20:"top-20",first:"first-place"})[target] ?? "first-place";
 const dollars = new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const importForm = byId("fdImport");
 const autoLoad = byId("fdAutoLoad");
@@ -106,6 +107,7 @@ let inspectedSalary;
 let importedSlateName;
 const savedSlateKey = "lppe-fanduel-import-v1";
 const savedSlateLifetime = 48 * 60 * 60 * 1000;
+const tournamentTargets = {NBA:"top20",NFL:"first"};
 const slateSettings = [byId("fdTarget"),mode,objective,count,difference,exposure,stack,depth,byId("fdFieldSize")];
 
 function readSavedSlate() {
@@ -569,7 +571,7 @@ function compareLineups(highCeiling,simulation) {
   const table = document.createElement("table");
   const headings = ["Lineup","Projected FPTS","FPTS vs. Lineup 1","Salary left","Players changed"];
   if (highCeiling) headings.push("Ceiling FPTS");
-  if (simulation) headings.push("Modeled win share",simulation.target==="top20" ? "Added top-20 coverage" : "Added win coverage");
+  if (simulation) headings.push("Modeled win share","Modeled top-3% share","Added "+targetLabel(simulation.target)+" coverage");
   const header = table.createTHead().insertRow();
   for (const label of headings) {
     const cell = document.createElement("th");
@@ -599,7 +601,7 @@ function compareLineups(highCeiling,simulation) {
     const values = [lineup.points.toFixed(2),signed.format(lineup.points-top.points),
       dollars.format(profiles[sport.value].salaryCap-lineup.salary),changed];
     if (highCeiling) values.push(lineup.ceiling.toFixed(2));
-    if (simulation) values.push(percent.format(lineup.tournament.win),percent.format(lineup.tournament.addedWinCoverage));
+    if (simulation) values.push(percent.format(lineup.tournament.win),percent.format(lineup.tournament.top3),percent.format(lineup.tournament.addedWinCoverage));
     for (const value of values) row.insertCell().textContent = value;
   }
   const wrapper = document.createElement("div");
@@ -621,13 +623,19 @@ function renderLineups(result,requested,highCeiling) {
     "No valid lineup found. Check projections, locks, exclusions, and roster eligibility.";
   if (result.simulation) {
     const {scenarios,opponents,ownershipPlayers,fieldPlayers} = result.simulation;
-    status.textContent = "Built "+lineups.length+" of "+requested+(" lineups. Selected for "+(result.simulation.target==="top20"?"top-20":"first-place")+" coverage across ")+
+    status.textContent = "Built "+lineups.length+" of "+requested+(" lineups. Selected for "+targetLabel(result.simulation.target)+" coverage across ")+
       scenarios+" scenarios against "+opponents+" simulated opponents. "+
       (ownershipPlayers ? "Projected ownership influenced the field for "+ownershipPlayers+" of "+fieldPlayers+" eligible players." :
         "The field used projections and random variation. Import projected ownership to factor in expected popularity.");
   }
-  if (result.simulation && sport.value==="NBA") status.textContent += " Experimental model. Win shares describe simulated outcomes only.";
-  if (result.simulation?.coverage != null) status.textContent += " At least one lineup reached the top 20 in "+percent.format(result.simulation.coverage)+" of selection scenarios.";
+  if (result.simulation && (sport.value==="NBA" || result.simulation.target==="top3")) {
+    status.textContent += " Experimental model. Shares describe simulated outcomes only.";
+  }
+  if (result.simulation?.top3Coverage != null) {
+    status.textContent += " At least one lineup reached the top 3% in "+percent.format(result.simulation.top3Coverage)+
+      " of selection scenarios (rank "+result.simulation.top3Places+" or better, ties included).";
+  }
+  if (result.simulation?.coverage != null && result.simulation.target!=="top3") status.textContent += " At least one lineup reached the top 20 in "+percent.format(result.simulation.coverage)+" of selection scenarios.";
   if (Number.isInteger(result.simulation?.balancedTeams)) {
     status.textContent += " Teams with enough rotation data for shared minutes: "+result.simulation.balancedTeams+".";
   }
@@ -651,16 +659,16 @@ function renderLineups(result,requested,highCeiling) {
     const table=document.createElement("table");
     table.createCaption().textContent="Best finish per portfolio across "+comparison.scenarios+" separate simulated contests. Ties count.";
     const headers=table.createTHead().insertRow();
-    for (const label of ["Portfolio","First","Top 20"]) {
+    for (const label of ["Portfolio","First","Top 20","Top 3%"]) {
       const cell=document.createElement("th");
       cell.scope="col";
       cell.textContent=label;
       headers.append(cell);
     }
     const body=table.createTBody();
-    for (const [label,firsts,hits] of [
-      ["Tournament",comparison.tournamentFirsts,comparison.tournamentHits],
-      ["Projected points",comparison.projectionFirsts,comparison.projectionHits]
+    for (const [label,firsts,hits,top3] of [
+      ["Tournament",comparison.tournamentFirsts,comparison.tournamentHits,comparison.tournamentTop3],
+      ["Projected points",comparison.projectionFirsts,comparison.projectionHits,comparison.projectionTop3]
     ]) {
       const row=body.insertRow();
       const name=document.createElement("th");
@@ -669,14 +677,18 @@ function renderLineups(result,requested,highCeiling) {
       row.append(name);
       row.insertCell().textContent=firsts??"Unavailable";
       row.insertCell().textContent=hits;
+      row.insertCell().textContent=top3??"Unavailable";
     }
     panel.append(heading,table);
     if (comparison.batches?.length) {
       const batches=comparison.batches;
-      const ahead=batches.filter(b=>b.tournamentHits>b.projectionHits).length;
-      const tied=batches.filter(b=>b.tournamentHits===b.projectionHits).length;
+      const top3=result.simulation.target==="top3";
+      const counts=batch=>top3 ? [batch.tournamentTop3,batch.projectionTop3] : [batch.tournamentHits,batch.projectionHits];
+      const pairs=batches.map(counts);
+      const ahead=pairs.filter(([a,b])=>a>b).length;
+      const tied=pairs.filter(([a,b])=>a===b).length;
       const summary=document.createElement("p");
-      summary.textContent="Top-20 comparison across "+batches.length+" batches of "+batches[0].scenarios+
+      summary.textContent=(top3 ? "Top-3%" : "Top-20")+" comparison across "+batches.length+" batches of "+batches[0].scenarios+
         " simulated slates against the same field: tournament ahead in "+ahead+", tied in "+tied+
         ", behind in "+(batches.length-ahead-tied)+".";
       panel.append(summary);
@@ -725,7 +737,8 @@ function renderLineups(result,requested,highCeiling) {
     if (highCeiling) meta.append(" · "+lineup.ceiling.toFixed(2)+" summed ceiling FPTS");
     if (lineup.tournament?.top20 != null) meta.append(" · "+percent.format(lineup.tournament.top20)+" modeled top 20");
     if (lineup.tournament) {
-      const {top,win,ceiling,duplicates} = lineup.tournament;
+      const {top,top3,win,ceiling,duplicates} = lineup.tournament;
+      if (top3 != null) meta.append(" · "+percent.format(top3)+" modeled top-3% share");
       meta.append(" · "+percent.format(win)+" modeled win · "+percent.format(top)+" modeled top-10% · "+ceiling.toFixed(1)+" simulated 90th percentile · "+duplicates+" field duplicates");
     }
     summary.append(label,value,meta);
@@ -1176,6 +1189,7 @@ sport.addEventListener("change",() => {
   clearLineups();
   byId("fdPool").hidden = true;
   applySport();
+  byId("fdTarget").value=tournamentTargets[sport.value] ?? "first";
   applyMode();
   liveSlate.value = "";
   listedSlates = [];
@@ -1185,7 +1199,11 @@ function applyMode() {
   const cash = mode.value === "cash";
   const tournament = objective.querySelector('option[value="tournament"]');
   tournament.disabled = tournament.hidden = cash || !["NBA","NFL"].includes(sport.value);
-  byId("fdTargetLabel").hidden = cash || sport.value!=="NBA" || objective.value!=="tournament";
+  byId("fdTargetLabel").hidden = tournament.disabled || objective.value!=="tournament";
+  const target=byId("fdTarget");
+  const nbaOnly=target.querySelector('option[value="top20"]');
+  nbaOnly.disabled=nbaOnly.hidden=sport.value!=="NBA";
+  if (nbaOnly.disabled && target.value==="top20") target.value="first";
   byId("fdFieldLabel").hidden = cash || sport.value!=="NBA" || objective.value!=="tournament";
   if (tournament.disabled && objective.value === "tournament") objective.value = "projection";
   for (const label of document.querySelectorAll("[data-gpp]")) label.hidden = cash;
@@ -1197,7 +1215,10 @@ function applyMode() {
   if (players.length) renderSlateCheck();
 }
 objective.addEventListener("change",applyMode);
-byId("fdTarget").addEventListener("change",clearLineups);
+byId("fdTarget").addEventListener("change",event=>{
+  tournamentTargets[sport.value]=event.target.value;
+  clearLineups();
+});
 byId("fdFieldSize").addEventListener("change",clearLineups);
 mode.addEventListener("change",() => {
   applyMode();
@@ -1273,6 +1294,13 @@ byId("fdContestReview").addEventListener("submit",async event => {
     const result = reviewContest(rows,username);
     output.textContent = "Field: "+result.entries.toLocaleString()+" entries."+
       (result.cutoff===null ? "" : " Top-20 cutoff: "+result.cutoff.toFixed(2)+".");
+    if (result.top3) {
+      const {top3Places,bestRank,bestPercentile,top3Count,top3Rate}=result.top3;
+      output.append(top3Places ? " Top 3% includes rank "+top3Places+" or better." : " The field has fewer than 34 scored entries.");
+      if (result.top3Cutoff!==null) output.append(" Top-3% cutoff: "+result.top3Cutoff.toFixed(2)+" FPTS.");
+      if (bestRank!==null) output.append(" Best rank "+bestRank+" (top "+bestPercentile.toFixed(2)+"%). "+
+        top3Count+" of "+result.userEntries+" entries reached the top 3% ("+percent.format(top3Rate)+").");
+    } else output.append(" Top-3% review requires a complete, finalized leaderboard.");
     if (result.winningScore!==null) output.append(" Winning score: "+result.winningScore.toFixed(2)+".");
     if (result.userEntries) {
       if (result.winningScore!==null) output.append(" First-place finishes: "+result.wins+". Gap to first: "+Math.max(0,result.winningScore-result.best).toFixed(2)+".");
@@ -1375,13 +1403,30 @@ byId("fdContestReview").addEventListener("submit",async event => {
           values.filter(x=>x.tournament.hits>0).length+"/"+values.length+" · projection-only "+
           values.filter(x=>x.projection.hits>0).length+"/"+values.length+". One contest per slate, equal entry counts.";
         output.append(note);
-      } else if (replay.length) {
+      }
+      const top3Pair=pairHeldOut(rows,replay,"top3");
+      if (top3Pair) {
+        const key="lppe-fd-top3-benchmark-v1";
+        const history=JSON.parse(localStorage.getItem(key) || "{}");
+        const prior=history[top3Pair.key];
+        if (!prior || (prior.contest===top3Pair.contest &&
+            Date.parse(top3Pair.tournament.capturedAt)<=Date.parse(prior.tournament.capturedAt))) {
+          history[top3Pair.key]=top3Pair;
+          localStorage.setItem(key,JSON.stringify(history));
+        }
+        const result=summarizeTop3Pairs(Object.values(history),"top3");
+        const interval=bounds=>bounds.map(value=>percent.format(value)).join(" to ");
+        output.append(" Top-3% paper replay across "+result.count+" paired slates. Tournament "+
+          result.tournament+"/"+result.count+" (95% interval "+interval(result.tournamentInterval)+
+          "); projected points "+result.projection+"/"+result.count+" (95% interval "+interval(result.projectionInterval)+
+          "). Tournament improved "+result.improved+" and regressed "+result.regressed+" slates.");
+      } else if (!paired && replay.length) {
         output.append(" Paired benchmark pending. Use complete standings and an archive containing both original builds for the same slate, lock and lineup count.");
       }
       for (const item of replay) {
         const note = document.createElement("p");
         note.textContent = item.slate+" · "+item.version+" saved build · scored "+item.scored+"/"+item.total+
-          " lineups · best "+item.best.toFixed(1)+(item.hits === null ? "" : " · "+item.hits+" reached the top-20 score")+" · paper best rank "+item.bestRank+" · "+item.gapToFirst.toFixed(1)+" points from first"+(item.net===null ? "" : " · estimated net "+dollars.format(item.net));
+          " lineups · best "+item.best.toFixed(1)+(item.hits === null ? "" : " · "+item.hits+" reached the top-20 score")+(item.top3?.top3Places ? " · "+item.top3.top3Count+" reached the paper top 3%" : "")+" · paper best rank "+item.bestRank+" · "+item.gapToFirst.toFixed(1)+" points from first"+(item.net===null ? "" : " · estimated net "+dollars.format(item.net));
         output.append(note);
       }
       if (!replay.length) output.append(" No saved pre-lock lineup could be scored. Check that the standings include one consistent point total for every player ID in the lineup.");
@@ -1450,6 +1495,7 @@ function saveBuildHistory(baseline,ownershipForecast,comparison,news,newsCompari
     ceiling:player.ceiling,ownership:player.ownership,minutes:player.minutes,starter:player.starter})));
   const snapshot = {capturedAt:new Date(now).toISOString(),sport:sport.value,slate:loadedLiveSlate.name,
     lockAt:new Date(slateLockAt).toISOString(),requested:Number(count.value),
+    target:objective.value==="tournament" ? byId("fdTarget").value : null,
     settings:Object.fromEntries(slateSettings.map(control => [control.id,control.value])),
     lineups:serialize(lineups)};
   loadedLiveSlate.lastSnapshot=snapshot;
@@ -1463,9 +1509,11 @@ function saveBuildHistory(baseline,ownershipForecast,comparison,news,newsCompari
     if (baseline?.length) {
       record.tournament = {...snapshot,ownershipForecast,comparison};
       record.projection = {...snapshot,settings:{...snapshot.settings,fdObjective:"projection"},lineups:serialize(baseline)};
-      if (!record.initialTournament) {
-        record.initialTournament={...snapshot,ownershipForecast};
-        record.initialBaseline=record.projection;
+      const first=snapshot.target==="top3" ? "initialTop3" : "initialTournament";
+      const firstBaseline=snapshot.target==="top3" ? "initialTop3Baseline" : "initialBaseline";
+      if (!record[first] && snapshot.lineups.length===snapshot.requested && baseline.length===snapshot.requested) {
+        record[first]={...snapshot,ownershipForecast};
+        record[firstBaseline]=record.projection;
       }
     }
     localStorage.setItem(key,JSON.stringify(record));

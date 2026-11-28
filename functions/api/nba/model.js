@@ -1,3 +1,4 @@
+import {pregameObservations} from "../../../nba-projection-research.js";
 const json = body => Response.json(body,{headers:{"Cache-Control":"no-store"}});
 
 async function getJson(url) {
@@ -42,7 +43,7 @@ function playerBoxScores(summary) {
         const [minutes,seconds = 0] = String(rawMinutes).split(":").map(Number);
         const played = minutes + seconds / 60;
         const counts = [points,rebounds,assists,String(threePointers).split("-")[0]];
-        if (!(played > 0) || counts.some(value => !/^\d+$/.test(value))) continue;
+        if (!(played > 0 && played <= 68) || seconds < 0 || seconds >= 60 || counts.some(value => !/^\d+$/.test(value))) continue;
         results.push({id:row.athlete.id,player:row.athlete.displayName,
           team:team.team.abbreviation,minutes:played,starter:row.starter,values:counts.map(Number)});
       }
@@ -63,7 +64,7 @@ function slateGames(events,today,part) {
 async function recentNBA(request, now, part) {
   const dates = [...new Set(Array.from({length:12},(_,day) => nbaDate(now + (1-day) * 86400000)))];
   const today = pacificSlate.format(now);
-  const cachePath = "model-v7/" + nbaDate(now) + "/" + encodeURIComponent(today) + "/" + (part ?? "all");
+  const cachePath = "model-v8/" + nbaDate(now) + "/" + encodeURIComponent(today) + "/" + (part ?? "all");
   return cachedNBA(request,cachePath,900,async () => {
     const boards = await Promise.allSettled(dates.map(date => getJson(espnNBA + "/scoreboard?dates=" + date)));
     if (boards[1].status !== "fulfilled" || !Array.isArray(boards[1].value.events)) {
@@ -109,7 +110,7 @@ async function recentNBA(request, now, part) {
       }));
     }
     return {players:[...players.values()].map(player => ({
-      ...player,games:player.games.sort((a,b) => Date.parse(b.date) - Date.parse(a.date)).slice(0,6)
+      ...player,games:pregameObservations(player.games,now,{limit:6})
     })).filter(player => player.games.length >= 4),schedule,part,partial};
   });
 }
@@ -118,18 +119,20 @@ async function completedNBA(request, date) {
   const days = await cachedNBA(request,"results-schedule-v1/" + date,900,() =>
     getJson(espnNBA + "/scoreboard?dates=" + date));
   if (!Array.isArray(days.events)) throw new Error("Missing NBA results schedule");
-  const games = days.events.filter(game => game.status?.type?.name === "STATUS_FINAL" &&
-    /^\d+$/.test(game.id) && Number.isFinite(Date.parse(game.date))).slice(0,16);
+  const final = [...new Map(days.events.filter(game => game.status?.type?.name === "STATUS_FINAL" &&
+    /^\d+$/.test(game.id) && Number.isFinite(Date.parse(game.date))).map(game=>[game.id,game])).values()];
+  final.sort((a,b)=>Date.parse(a.date)-Date.parse(b.date) || a.id.localeCompare(b.id));
+  const games = final.slice(0,16);
   const results = [];
   for (let offset = 0; offset < games.length; offset += 6) {
     const batch = await Promise.allSettled(games.slice(offset,offset+6).map(async game => ({
-      start:game.date,
+      id:game.id,start:game.date,
       players:await cachedNBA(request,"box-v1/" + game.id,86400,async () =>
         playerBoxScores(await getJson(espnNBA + "/summary?event=" + encodeURIComponent(game.id))))
     })));
     results.push(...batch.filter(item => item.status === "fulfilled").map(item => item.value));
   }
-  return {results,partial:results.length < games.length};
+  return {results,partial:results.length < final.length};
 }
 
 function normalizeNBAAvailability(data) {

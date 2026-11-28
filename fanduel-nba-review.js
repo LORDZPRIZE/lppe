@@ -1,3 +1,4 @@
+import {finalizedField, wilsonInterval} from "./fanduel-contest-metrics.js";
 import {contestPlayerScores,csvRecords,buildLineups,matchName,profiles,teamCode,unavailable} from "./fanduel-optimizer.js";
 
 function easternLockLabel(lockAt) {
@@ -147,7 +148,7 @@ export function enteredNBAIds(text) {
 export function readNBAArchive(text) {
   const records=JSON.parse(text);
   if (!Array.isArray(records)) throw new Error("Choose a downloaded LPPE NBA build history JSON.");
-  const versions=["first","latest","tournament","projection","initialTournament","initialBaseline","initialTop100","initialComparison"];
+  const versions=["first","latest","tournament","projection","initialTournament","initialBaseline","initialTop3","initialTop3Baseline","initialTop100","initialComparison"];
   const valid=[];
   for (const record of records) {
     const accepted={};
@@ -169,37 +170,41 @@ export function readNBAArchive(text) {
   return valid;
 }
 
-export function pairHeldOut(rows,replay) {
+export function pairHeldOut(rows,replay,target) {
   const info=Object.fromEntries(rows.filter(r=>r.contestinfo).map(r=>[r.contestinfo,r.contestvalue]));
 
-  const entries=rows.filter(r=>r.entryid);
-  if (new Set(entries.map(r=>r.entryid)).size!==entries.length) return null;
-  const emptySeats=entries.filter(row=>row.points==="null");
-  const scoredSeats=entries.length-emptySeats.length;
-  // FanDuel lists unfilled rosters at a shared trailing rank with a literal null score.
-  if (emptySeats.length && (!scoredSeats || emptySeats.some(row=>
-    row.lineup!=="" || row.won!=="$0.00" || Number(row.rank)!==scoredSeats+1))) return null;
-  if (entries.some(row=>row.points!=="null" && (!String(row.points??"").trim() ||
-      !Number.isFinite(Number(row.points)) || (emptySeats.length &&
-      !(Number(row.rank)>=1 && Number(row.rank)<=scoredSeats))))) return null;
-  if (!entries.length || !info["Start Time"] || !info["Contest Name"] || !info.Slate ||
-      Number(String(info["Seats Filled"]).replaceAll(",",""))!==entries.length) return null;
+  if (!finalizedField(rows) || !info["Start Time"] || !info["Contest Name"] || !info.Slate) return null;
 
   // Live snapshots append the slate date to the provider label.
   const label=value=>String(value || "").trim().toLowerCase().replace(/\s*·\s*\d{4}-\d{2}-\d{2}$/, "")
     .replace(/^(?:fanduel\s+)?nba\s+/, "").replace(/\s+slate$/, "").trim();
   const complete=item=>item.total>0 && item.scored===item.total && item.requested===item.total && Number.isInteger(item.hits);
-  const candidates=replay.filter(item=>(item.version==="initialTournament" || item.version==="initialTop100") &&
+  const baselineVersions=target === "top3" ? {initialTop3:"initialTop3Baseline"} :
+    {initialTournament:"initialBaseline",initialTop100:"initialComparison"};
+  const candidates=replay.filter(item=>Object.hasOwn(baselineVersions,item.version) &&
+    (target !== "top3" || (item.target === "top3" && item.top3?.top3Places > 0)) &&
     complete(item) && Date.parse(item.capturedAt)<Date.parse(item.lockAt) &&
     easternLockLabel(item.lockAt)===info["Start Time"] && label(item.slate)===label(info.Slate))
     .sort((a,b)=>Date.parse(a.capturedAt)-Date.parse(b.capturedAt));
   for (const tournament of candidates) {
-    const baselineVersion=tournament.version==="initialTournament" ? "initialBaseline" : "initialComparison";
+    const baselineVersion=baselineVersions[tournament.version];
     const projection=replay.find(item=>item.recordIndex===tournament.recordIndex && item.version===baselineVersion &&
       complete(item) && item.total===tournament.total && item.capturedAt===tournament.capturedAt &&
       item.lockAt===tournament.lockAt && item.slate===tournament.slate);
-    if (!projection) continue;
+    if (!projection || (target === "top3" && !projection.top3)) continue;
     return {key:JSON.stringify([tournament.lockAt,tournament.slate]),contest:info["Contest Name"],tournament,projection};
   }
   return null;
+}
+
+export function summarizeTop3Pairs(pairs, target) {
+  const matched = pairs.filter(pair => pair.tournament.target === target &&
+    pair.tournament.top3 && pair.projection.top3);
+  const count = matched.length;
+  const tournament = matched.filter(pair => pair.tournament.top3.contestTop3).length;
+  const projection = matched.filter(pair => pair.projection.top3.contestTop3).length;
+  const improved = matched.filter(pair => pair.tournament.top3.contestTop3 && !pair.projection.top3.contestTop3).length;
+  const regressed = matched.filter(pair => !pair.tournament.top3.contestTop3 && pair.projection.top3.contestTop3).length;
+  return {count,tournament,projection,improved,regressed,
+    tournamentInterval:wilsonInterval(tournament,count),projectionInterval:wilsonInterval(projection,count)};
 }

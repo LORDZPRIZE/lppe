@@ -1,3 +1,5 @@
+import {contestHandle, finalizedField, rankSummary} from "./fanduel-contest-metrics.js";
+
 export const roster = [
   ["PG", ["PG"]], ["SG", ["SG"]], ["SF", ["SF"]], ["PF", ["PF"]], ["C", ["C"]],
   ["G/F", ["PG", "SG", "SF", "PF"]], ["F/C", ["SF", "PF", "C"]],
@@ -96,7 +98,7 @@ export function reviewContest(source, username = "") {
   let wins = 0;
   let best = -Infinity;
   let top20Entries = 0;
-  const handle = username.trim().toLowerCase();
+  const handle = contestHandle(username);
   for (const row of rows) {
     if (!row.entryid) continue;
     entries++;
@@ -108,7 +110,7 @@ export function reviewContest(source, username = "") {
       cutoff = Math.min(cutoff,score);
       if (rank===1) winningScore=score;
     }
-    if (handle && row.entryname.replace(/\s*\(\d+\/\d+\)$/, "").trim().toLowerCase() === handle) {
+    if (handle && contestHandle(row.entryname) === handle) {
       userEntries++;
       if (Number.isFinite(score)) best = Math.max(best,score);
       if (rank <= 20) top20Entries++;
@@ -117,7 +119,11 @@ export function reviewContest(source, username = "") {
   }
   if (!entries) throw new Error("No contest entries found in this leaderboard.");
   if (userEntries && !Number.isFinite(best)) throw new Error("No scored entries found for that username.");
-  return {entries,userEntries,best:userEntries ? best : null,winningScore,wins,cutoff:entries >= 20 && Number.isFinite(cutoff) ? cutoff : null,top20Entries};
+  const finalized = finalizedField(rows);
+  const top3 = finalized ? rankSummary(finalized.filter(row => handle && contestHandle(row.entryname) === handle)
+    .map(row => Number(row.rank)),finalized.length) : null;
+  const top3Cutoff = top3?.top3Places ? Number(finalized[top3.top3Places-1].points) : null;
+  return {entries,userEntries,top3,top3Cutoff,best:userEntries ? best : null,winningScore,wins,cutoff:entries >= 20 && Number.isFinite(cutoff) ? cutoff : null,top20Entries};
 }
 
 const csvNumber = value => value?.trim() ? Number(value.replace(/[$,]/g, "")) : NaN;
@@ -129,8 +135,8 @@ export const teamCode = (raw,sport = "NBA") => {
   if (sport === "NFL") return {JAX:"JAC",WSH:"WAS"}[team] || team;
   return team;
 };
-export const matchName = name => name.normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
-const nameVariant = name => matchName(name.replace(/[\s,]+(?:jr\.?|sr\.?|ii|iii|iv|v)$/i,""));
+export const matchName = name => String(name ?? "").normalize("NFKD").replace(/\p{Mark}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const nameVariant = name => matchName(String(name ?? "").trim().replace(/[\s,]+(?:jr\.?|sr\.?|ii|iii|iv|v)$/i,""));
 function recordNameVariant(groups,name,team) {
   if (!name || !team) return;
   const key = nameVariant(name) + ":" + team;
@@ -166,90 +172,98 @@ const readOwnership = row => {
 const readCeiling = row => csvNumber(row.ceiling || row.ceilingfpts || row.projectedceiling);
 
 // A projection date needs an explicit timezone. A file or game date is not a projection update.
-function projectionTime(row) {
+function projectionTime(row, now = Date.now()) {
   const value=(row.projectionupdatedat || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return null;
   const time=Date.parse(value);
   const day=value.slice(0,10);
   const midnight=Date.parse(day+"T00:00:00Z");
   if (!Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0,10)!==day ||
-      !Number.isFinite(time) || time>Date.now()) return null;
+      !Number.isFinite(time) || time>now) return null;
   return new Date(time).toISOString();
 }
 
-export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{selectedSlate,date} = {}) {
+export function applyPlayerProjections(players,projectionCSV,sport = "NBA",{selectedSlate,date,asOf} = {}) {
   if (!projectionCSV.trim()) return {players,matched:0};
   const gameDates = new Set([date,...players.map(player => player.gameDate)].filter(Boolean));
   const byId = new Map();
   const byName = new Map();
-  const timeById = new Map();
-  const timeByName = new Map();
-  const ceilingById = new Map();
-  const ceilingByName = new Map();
-  const ownershipById = new Map();
-  const ownershipByName = new Map();
   const projectionVariants = new Map();
   const salaryVariants = new Map();
-  function addProjection(map, key, points) {
-    if (!key) return;
-    if (map.has(key) && map.get(key) !== points) map.set(key, null);
-    else map.set(key, points);
+  const idCounts = new Map();
+  const nameCounts = new Map();
+  const knownIds = new Set(players.map(player => player.id));
+  function append(map,key,evidence) {
+    const group = map.get(key) ?? [];
+    group.push(evidence);
+    map.set(key,group);
   }
   for (const row of parseCSV(projectionCSV)) {
     if (selectedSlate && row.slate && row.gamedate && cheatsheetKey(row) !== selectedSlate) continue;
-    if (date && row.gamedate && !gameDates.has(row.gamedate)) continue;
-    const projected = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
-    if (!Number.isFinite(projected)) continue;
+    if (gameDates.size && row.gamedate && !gameDates.has(row.gamedate)) continue;
+    const points = csvNumber(row.projection || row.projectedpoints || row.ppgprojection || row.fantasypoints || row.fpts || row.fppg);
+    if (!Number.isFinite(points) || (sport === "NBA" && points < 0)) continue;
+    const id = row.id || row.playerid;
     const displayName = playerName(row);
-    const name = matchName(displayName);
     const team = teamCode(row.team || row.teamabbr,sport);
-    recordNameVariant(projectionVariants,displayName,team);
-    addProjection(byId,row.id || row.playerid,projected);
-    if (name && team) addProjection(byName,name + ":" + team,projected);
-    const updated=projectionTime(row);
-    addProjection(timeById,row.id || row.playerid,updated);
-    if (name && team) addProjection(timeByName,name+":"+team,updated);
-    const ownership = readOwnership(row);
-    if (ownership !== undefined) {
-      addProjection(ownershipById,row.id || row.playerid,ownership);
-      if (name && team) addProjection(ownershipByName,name + ":" + team,ownership);
-    }
-    const ceiling = readCeiling(row);
-    if (Number.isFinite(ceiling)) {
-      addProjection(ceilingById,row.id || row.playerid,ceiling);
-      if (name && team) addProjection(ceilingByName,name + ":" + team,ceiling);
+    const hasTimestamp = Boolean(row.projectionupdatedat);
+    const timestamp = projectionTime(row,asOf);
+    // Historical runs cannot silently admit forecasts timestamped after their capture.
+    if (Number.isFinite(asOf) && hasTimestamp && !timestamp) continue;
+    const evidence = {id,name:matchName(displayName),team,date:row.gamedate,points,
+      timestamp,ceiling:readCeiling(row),ownership:readOwnership(row)};
+    if (id) append(byId,id,evidence);
+    if (evidence.name && team) {
+      append(byName,evidence.name+":"+team,evidence);
+      recordNameVariant(projectionVariants,displayName,team);
     }
   }
   if (!byId.size && !byName.size) throw new Error("Projection CSV needs a numeric Projection column and an ID or player name plus team.");
-  const playerNames = new Map();
   for (const player of players) {
     const identity = matchName(player.name)+":"+player.team;
-    playerNames.set(identity,(playerNames.get(identity) || 0)+1);
+    idCounts.set(player.id,(idCounts.get(player.id) || 0)+1);
+    nameCounts.set(identity,(nameCounts.get(identity) || 0)+1);
     recordNameVariant(salaryVariants,player.name,player.team);
   }
-  let matchedCount = 0;
+  const diagnostics = {id:0,name:0,variant:0,ambiguous:0,unmatched:0};
   const updated = players.map(player => {
-    const {id,name,team} = player;
+    const {id,name,team,gameDate} = player;
     const nameKey = matchName(name)+":"+team;
     const variantKey = nameVariant(name)+":"+team;
     const variants = projectionVariants.get(variantKey);
-    // Use a name fallback only when it identifies one salary player.
-    const uniqueName = playerNames.get(nameKey) === 1 ? nameKey : undefined;
+    const uniqueName = nameCounts.get(nameKey) === 1;
     const alternate = uniqueName && salaryVariants.get(variantKey)?.size === 1 && variants?.size === 1 ?
       variants.values().next().value : undefined;
-    const points = byId.get(id) ?? byName.get(uniqueName) ?? byName.get(alternate);
-    if (points == null) return player;
-    const updated=byId.get(id)!=null ? timeById.get(id) :
-      timeByName.get(byName.get(uniqueName)!=null ? uniqueName : alternate);
-    matchedCount++;
-    return {...player,points,source:"Projection CSV",projectionUpdatedAt:updated ?? null,
-      ceiling:ceilingById.get(id) ?? ceilingByName.get(uniqueName) ?? ceilingByName.get(alternate) ?? player.ceiling,
-      ownership:ownershipById.get(id) ?? ownershipByName.get(uniqueName) ?? ownershipByName.get(alternate) ?? player.ownership};
+    const suffixless = nameVariant(name);
+    const comparableAlternate = alternate && (matchName(name)===suffixless || alternate===suffixless+":"+team)
+      ? alternate : undefined;
+    const kind = byId.has(id) ? "id" : uniqueName && byName.has(nameKey) ? "name" : comparableAlternate ? "variant" : null;
+    const rows = kind === "id" ? byId.get(id) : kind === "name" ? byName.get(nameKey) : byName.get(comparableAlternate);
+    if (!rows) {
+      diagnostics.unmatched++;
+      return player;
+    }
+    const compatible = rows.filter(row => !row.date || !(gameDate || date) || row.date === (gameDate || date));
+    const first = compatible[0];
+    if (!first || idCounts.get(id) !== 1 || compatible.some(row =>
+        (row.team && row.team !== team) || (kind === "id" && row.name && row.name !== matchName(name) &&
+          !(comparableAlternate && row.name+":"+team===comparableAlternate)) ||
+        (kind !== "id" && row.id && knownIds.has(row.id) && row.id !== id) ||
+        row.points !== first.points) ||
+        (kind !== "id" && new Set(compatible.map(row=>row.id).filter(Boolean)).size > 1)) {
+      diagnostics.ambiguous++;
+      return player;
+    }
+    const common = key => compatible.every(row => Object.is(row[key],first[key])) ? first[key] : undefined;
+    const ceiling = common("ceiling");
+    diagnostics[kind]++;
+    return {...player,points:first.points,source:"Projection CSV",projectionUpdatedAt:common("timestamp") ?? null,
+      ceiling:Number.isFinite(ceiling) && ceiling >= first.points ? ceiling : undefined,
+      ownership:common("ownership") ?? player.ownership};
   });
-  if (!matchedCount) {
-    throw new Error("No projections matched this slate. Choose a matching file with player IDs or names and teams.");
-  }
-  return {players:updated,matched:matchedCount};
+  const matched = diagnostics.id+diagnostics.name+diagnostics.variant;
+  if (!matched) throw new Error("No projections matched this slate. Choose a matching file with player IDs or names and teams.");
+  return {players:updated,matched,projectionMatches:diagnostics};
 }
 
 export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {inspection,slateKey} = {}) {
@@ -282,11 +296,17 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
     const status = row.injuryindicator || row.injurystatus || row.status || "";
     if (players.has(id)) {
       const existing = players.get(id);
-      if (existing.team !== team || existing.salary !== salary || existing.name !== name) {
+      if (existing.team !== team || existing.salary !== salary || existing.name !== name ||
+          (existing.gameDate && row.gamedate && existing.gameDate !== row.gamedate) ||
+          (Number.isFinite(existing.points) && Number.isFinite(points) && existing.points !== points)) {
         throw new Error("Conflicting rows share a FanDuel player ID. Use a single slate CSV.");
       }
       if (existing.projectionUpdatedAt!==projectionTime(row)) existing.projectionUpdatedAt=null;
       existing.positions = [...new Set([...existing.positions, ...positions])];
+      if (!Number.isFinite(existing.points) && Number.isFinite(points)) {
+        existing.points=points;
+        existing.source=source;
+      }
       if (unavailable(status)) {
         existing.status = status;
         existing.selection = "exclude";
@@ -296,7 +316,7 @@ export function importPlayers(salaryCSV, projectionCSV = "", sport = "NBA", {ins
       continue;
     }
     const game = (row.game || row.gameid || row.matchup || (preview && row.opp ? [team,teamCode(row.opp,sport)].sort().join("/") : "")).toUpperCase().replace(/\s+/g,"");
-    players.set(id,{id,name,positions,salary,team,points,confirmedStarter:/^(1|true|yes)$/i.test(row.starter) ? true : /^(0|false|no)$/i.test(row.starter) ? false : undefined,ceiling:readCeiling(row),ownership:readOwnership(row),source,projectionUpdatedAt:Number.isFinite(provided) ? projectionTime(row) : null,status,game,
+    players.set(id,{id,name,positions,salary,team,points,gameDate:row.gamedate || undefined,confirmedStarter:/^(1|true|yes)$/i.test(row.starter) ? true : /^(0|false|no)$/i.test(row.starter) ? false : undefined,ceiling:readCeiling(row),ownership:readOwnership(row),source,projectionUpdatedAt:Number.isFinite(provided) ? projectionTime(row) : null,status,game,
       selection:unavailable(status) ? "exclude" : "available"});
   }
   if (!players.size) throw new Error("No compatible " + profile.name + " players found. Upload a CSV with ID, Name or Nickname, Position, Salary, and Team.");
@@ -624,6 +644,8 @@ export function contestPlayerScores(rows) {
 
 export function scoreSavedBuilds(rows,records,cutoff) {
   const field = rows.filter(row=>row.entryid && row.points && Number.isFinite(Number(row.points))).map(row=>Number(row.points)).sort((a,b)=>b-a);
+  const finalized = finalizedField(rows);
+  const finalScores = finalized?.map(row => Math.round(Number(row.points)*100)/100);
   const payouts = new Map();
   for (const row of rows) {
     const range = row.prizerank?.replaceAll(",","").match(/^(\d+)(?:st|nd|rd|th)?(?:\s*-\s*(\d+)(?:st|nd|rd|th)?)?$/i);
@@ -647,14 +669,19 @@ export function scoreSavedBuilds(rows,records,cutoff) {
       const rounded = scores.map(value=>Math.round(value*100)/100);
       const best = Math.max(...rounded);
       const bestRank = 1+field.filter(value=>value>best).length;
+      // Insert the entire synthetic portfolio; the benchmark retains all observed entries.
+      const paperField = (finalScores?.length ?? 0)+rounded.length;
+      const top3 = finalized && rounded.length === build.lineups.length
+        ? rankSummary(rounded.map(value => 1+finalScores.filter(n=>n>value).length+rounded.filter(n=>n>value).length),paperField)
+        : null;
       let gross = 0;
       for (const value of rounded) {
         const rank = 1+field.filter(n=>n>value).length+rounded.filter(n=>n>value).length;
         const ties = field.filter(n=>n===value).length+rounded.filter(n=>n===value).length;
         for (let place=rank;place<rank+ties;place++) gross+=(payouts.get(place)||0)/ties;
       }
-      results.push({version,recordIndex,slate:build.slate,capturedAt:build.capturedAt,lockAt:build.lockAt,requested:build.requested,scored:scores.length,total:build.lineups.length,
-        best,bestRank,gapToFirst:Math.max(0,(field[0]??best)-best),
+      results.push({version,recordIndex,slate:build.slate,capturedAt:build.capturedAt,lockAt:build.lockAt,requested:build.requested,target:build.target,scored:scores.length,total:build.lineups.length,
+        best,bestRank,top3,gapToFirst:Math.max(0,(field[0]??best)-best),
         net:rounded.length===build.lineups.length && payouts.size && Number.isFinite(fee) ? gross-fee*rounded.length : null,hits:cutoff === null ? null : scores.filter(score => Math.round(score*100) >= Math.round(cutoff*100)).length});
     }
   }

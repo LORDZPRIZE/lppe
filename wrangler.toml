@@ -1,5 +1,5 @@
 name = "lppe-api"
-main = "lppe-api.js"
+main = "worker/lppe-api.js"
 compatibility_date = "2026-11-12"
 keep_vars = true
 workers_dev = true
@@ -17,3 +17,6 @@ id = "bb9802fc725c488cb7f43ef56002f689"
 
 [triggers]
 crons = ["*/15 * * * *"]
+
+[version_metadata]
+binding = "LPPE_VERSION"

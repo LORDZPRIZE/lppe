@@ -1,3 +1,4 @@
+import {percentilePlaces, placeShare} from "../fanduel-contest-metrics.js";
 import {parseCSV, profiles} from "../fanduel-optimizer.js";
 
 const round = value => Number(value.toFixed(6));
@@ -17,6 +18,7 @@ function lowerBound(scores,target,includeEqual) {
 export function createContestSimulator(scenarioCSV,fieldCSV,players) {
   const {roster,salaryCap,maxTeam} = profiles.NFL;
   const playerById = new Map(players.map(player => [player.id,player]));
+  if (playerById.size !== players.length) throw new Error("Duplicate salary roster player ID.");
   const scenarios = new Map();
   for (const {scenario,id,fpts} of parseCSV(scenarioCSV)) {
     if (!scenario || !playerById.has(id) || !fpts?.trim() || !Number.isFinite(Number(fpts))) {
@@ -30,19 +32,23 @@ export function createContestSimulator(scenarioCSV,fieldCSV,players) {
   if (!scenarios.size) throw new Error("At least one slate scenario is required.");
 
   const duplicates = new Map();
-  const field = parseCSV(fieldCSV).map((row,index) => {
-    const ids = ["qb","rb1","rb2","wr1","wr2","wr3","te","flex","def"].map(slot => row[slot]);
+  function validate(ids,label) {
     const picks = ids.map(id => playerById.get(id));
-    if (new Set(ids).size !== roster.length ||
+    if (ids.length !== roster.length || new Set(ids).size !== roster.length ||
         picks.some((player,slot) => !player?.positions.some(position => roster[slot][1].includes(position)))) {
-      throw new Error("Invalid player IDs or roster slots in field lineup "+(index+1)+".");
+      throw new Error("Invalid player IDs or roster slots in "+label+".");
     }
     const teams = new Map();
     for (const player of picks) teams.set(player.team,(teams.get(player.team) || 0)+1);
-    if (teams.size < 3 || Math.max(...teams.values()) > maxTeam ||
+    if (picks.some(player => !player.team || !Number.isFinite(player.salary) || player.salary <= 0) ||
+        teams.size < 3 || Math.max(...teams.values()) > maxTeam ||
         picks.reduce((sum,player) => sum+player.salary,0) > salaryCap) {
-      throw new Error("Team or salary rules violated in field lineup "+(index+1)+".");
+      throw new Error("Team or salary rules violated in "+label+".");
     }
+  }
+  const field = parseCSV(fieldCSV).map((row,index) => {
+    const ids = ["qb","rb1","rb2","wr1","wr2","wr3","te","flex","def"].map(slot => row[slot]);
+    validate(ids,"field lineup "+(index+1));
     const key = rosterKey(ids);
     duplicates.set(key,(duplicates.get(key) || 0)+1);
     return ids;
@@ -59,28 +65,37 @@ export function createContestSimulator(scenarioCSV,fieldCSV,players) {
   const prepared = [...scenarios].map(([scenario,scores]) => ({
     scenario,scores,fieldScores:field.map(ids => score(ids,scores,scenario)).sort((a,b) => a-b)
   }));
-  const places = Math.max(1,Math.floor((field.length+1)/100));
+  const places = Math.max(1,percentilePlaces(field.length+1,1));
+  const top3Places = percentilePlaces(field.length+1);
   const cache = new Map();
   return function evaluate(lineup) {
-    const ids = lineup.picks.map(({player}) => player.id);
+    const ids = [...lineup.picks].sort((a,b) => a.slot-b.slot).map(({player}) => player.id);
+    validate(ids,"candidate lineup");
     const key = rosterKey(ids);
     if (cache.has(key)) return cache.get(key);
     let winShares = 0;
     let topShares = 0;
+    let top3Shares = 0;
+    let top3Hits = 0;
     for (const {scenario,scores,fieldScores} of prepared) {
       const points = score(ids,scores,scenario);
       const above = field.length-lowerBound(fieldScores,points,true);
       const tied = field.length-lowerBound(fieldScores,points,false)-above+1;
       winShares += above === 0 ? 1/tied : 0;
-      topShares += Math.max(0,Math.min(tied,places-above))/tied;
+      topShares += placeShare(above,tied,places);
+      top3Shares += placeShare(above,tied,top3Places);
+      if (above < top3Places) top3Hits++;
     }
     const result = {
       scenarios:prepared.length,
       opponents:field.length,
       topOnePercentPlaces:places,
+      top3Places,
       fieldDuplicates:duplicates.get(key) || 0,
       winShare:round(winShares/prepared.length),
-      topOnePercentShare:round(topShares/prepared.length)
+      topOnePercentShare:round(topShares/prepared.length),
+      top3Share:round(top3Shares/prepared.length),
+      top3HitRate:round(top3Hits/prepared.length)
     };
     cache.set(key,result);
     return result;

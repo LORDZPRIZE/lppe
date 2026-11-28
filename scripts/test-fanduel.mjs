@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { automaticSlateChoice, liveRefreshSeconds, applyPlayerProjections, buildLineups, importPlayers, inspectSalaryCSV, profiles } from "../fanduel-optimizer.js";
 import { addNBAProjections, applyNBAInjuryReport, attachSlateGames, normalizeProviderPlayers, onRequestGet } from "../functions/api/nba/fanduel.js";
-import { buildNFLTournament, rankNFLTournament } from "../fanduel-nfl-tournament.js";
+import { buildNFLTournament, rankNFLTournament, compareNFLPortfolios } from "../fanduel-nfl-tournament.js";
 
 test("separates player and projection rows by cheatsheet contest", () => {
   const salary = [
@@ -668,4 +668,105 @@ test("saved Main lookup uses only the cached exact-ID pre-lock pool", async cont
   context.mock.method(Date,"now",()=>Date.parse(start));
   assert.equal((await get(pool.date)).status,404);
   assert.equal(fetch.mock.callCount(),calls);
+});
+
+test("NFL top-3% optimizes repeatable coverage with legal distinct entries", () => {
+  const pool = sampleNFLPool();
+  pool[0].selection = "lock";
+  const build = () => buildNFLTournament(pool,2,2,60000,{target:"top3",stack:2});
+  const result = build();
+  assert.equal(result.simulation.target,"top3");
+  assert.equal(result.simulation.top3Places,Math.floor((result.simulation.opponents+2)*3/100));
+  assert.equal(result.lineups.length,2);
+  assert.equal(result.lineups.every(l=>l.ids.has(pool[0].id)),true);
+  assert.ok([...result.lineups[0].ids].filter(id=>!result.lineups[1].ids.has(id)).length>=2);
+  const sum = result.lineups.reduce((value,lineup)=>value+lineup.tournament.addedWinCoverage,0);
+  assert.equal(sum,result.simulation.top3Coverage);
+  assert.deepEqual(build(),result);
+});
+
+test("NBA top-3% separates rank hits from tie shares and compares all seeded batches",async () => {
+  const {buildNBATournament}=await import("../fanduel-nba-tournament.js");
+  const players=["PG","SG","SF","PF","C","PG","SF","SG","C"].map((position,i)=>({
+    id:"p"+i,name:"Player "+i,team:["A","B","C"][i%3],positions:[position],
+    salary:5000,points:20+i,selection:"available"
+  }));
+  assert.throws(()=>buildNBATournament(players,1,1,18000,{fieldSize:33,target:"top3"}),/at least 34/);
+  const result=buildNBATournament(players,1,1,18000,{fieldSize:34,target:"top3"});
+  assert.equal(result.simulation.top3Places,1);
+  assert.equal(result.simulation.top3Coverage,1);
+  assert.ok(Math.abs(result.lineups[0].tournament.top3-1/34)<1e-12);
+  const comparison=result.simulation.comparison;
+  assert.equal(comparison.tournamentTop3,comparison.scenarios);
+  assert.equal(comparison.projectionTop3,comparison.scenarios);
+  assert.equal(comparison.batches.reduce((sum,b)=>sum+b.tournamentTop3,0),comparison.tournamentTop3);
+});
+
+test("external NFL simulator validates candidate slots and allocates ties across cutoff places",async () => {
+  const {createContestSimulator}=await import("./nfl-contest-sim.mjs");
+  const players=sampleNFLPool();
+  const {lineups:[lineup]}=buildLineups(players,1,1,160000,"NFL");
+  const row=[...lineup.picks].sort((a,b)=>a.slot-b.slot).map(p=>p.player.id).join(",");
+  const scenarios="Scenario,ID,FPTS\n"+players.map(p=>"test,"+p.id+",0").join("\n");
+  const field="QB,RB1,RB2,WR1,WR2,WR3,TE,FLEX,DEF\n"+Array(99).fill(row).join("\n");
+  const evaluate=createContestSimulator(scenarios,field,players);
+  const metrics=evaluate(lineup);
+  assert.equal(metrics.top3Places,3);
+  assert.equal(metrics.fieldDuplicates,99);
+  assert.equal(metrics.top3Share,.03);
+  assert.equal(metrics.top3HitRate,1);
+  assert.throws(()=>evaluate({...lineup,picks:lineup.picks.slice(1)}),/candidate lineup/);
+  assert.throws(()=>createContestSimulator(scenarios,field,[...players,players[0]]),/Duplicate salary/);
+});
+
+test("NFL benchmark validates holdout chronology and produces paired top-3% results",async () => {
+  const {mkdtempSync,writeFileSync,rmSync}=await import("node:fs");
+  const {spawnSync}=await import("node:child_process");
+  const {tmpdir}=await import("node:os");
+  const {join}=await import("node:path");
+  const root=mkdtempSync(join(tmpdir(),"lppe-nfl-test-"));
+  try {
+    const players=sampleNFLPool();
+    const salary="ID,Name,Position,Salary,Team,Projection\n"+players.map(p=>
+      [p.id,p.name,p.positions[0],p.salary,p.team,p.points].join(",")).join("\n");
+    const actuals="ID,Actual FPTS\n"+players.map(p=>p.id+",10").join("\n");
+    writeFileSync(join(root,"salary.csv"),salary);
+    writeFileSync(join(root,"actuals.csv"),actuals);
+    const manifest=join(root,"manifest.json");
+    const slate={name:"Example",salary:"salary.csv",actuals:"actuals.csv",contestId:"test-1",holdout:true,
+      topThreePercentScore:90,lockAt:"2026-11-22T18:00:00Z",salaryCapturedAt:"2026-11-22T17:59:00Z"};
+    const run=slates=>{
+      writeFileSync(manifest,JSON.stringify({count:1,slates}));
+      return spawnSync(process.execPath,["scripts/benchmark-nfl.mjs",manifest],{encoding:"utf8"});
+    };
+    const response=run([slate]);
+    assert.equal(response.status,0,response.stderr);
+    const report=JSON.parse(response.stdout);
+    assert.equal(report.holdout.paired,1);
+    assert.equal(report.holdout.tournament,1);
+    assert.equal(report.holdout.projection,1);
+    assert.equal(report.results[0].provenance.preLockTimestampsVerified,true);
+    assert.match(report.results[0].provenance.sha256.actuals,/^[a-f0-9]{64}$/);
+    assert.match(run([{...slate,salaryCapturedAt:slate.lockAt}]).stderr,/pre-lock timestamps/);
+    assert.match(run([slate,slate]).stderr,/Duplicate contest ID/);
+    assert.match(run([slate,{...slate,contestId:"test-2",holdout:false}]).stderr,/periods overlap/);
+  } finally {
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+
+test("NFL simulations validate budgets and compare equal portfolios on fresh shared scenarios",()=>{
+  const pool=sampleNFLPool();
+  const a=buildLineups(pool,1,1,160000,"NFL").lineups;
+  const b=buildLineups(pool,1,1,160000,"NFL",{stack:2}).lineups;
+  const options={seed:728,opponentCount:40,scenarioCount:128};
+  const result=compareNFLPortfolios(pool,a,b,options);
+  assert.equal(result.seed,728);
+  assert.equal(result.scenarios,128);
+  assert.equal(result.top3Places,Math.floor((result.opponents+1)*.03));
+  assert.equal(result.tournament-result.projection,result.improved-result.regressed);
+  assert.deepEqual(compareNFLPortfolios(pool,a,b,options),result);
+  assert.throws(()=>compareNFLPortfolios(pool,a,[],options),/equal, nonempty/);
+  assert.throws(()=>compareNFLPortfolios(pool,a,b,{...options,opponentCount:5}),/modeled opponents/);
+  assert.throws(()=>rankNFLTournament([...pool,pool[0]],a),/Duplicate NFL player ID/);
 });
