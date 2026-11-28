@@ -91,3 +91,9 @@ The live November 28 Main feed returned 1,029 players after the pagination repai
 ### CFB joint objective and reproducible snapshots
 
 The opt-in **First place + every lineup in the top 10** objective prioritizes the joint event in each scenario. It counts competition-rank ties and retains first-place and all-top-10 rates separately. Complete live builds saved before lock retain the original optimizer request, exclusions, simulated results, and equal-size projection-only lineup IDs. The first completed snapshot for each slate, target, and count is kept in browser storage. Download the CFB snapshots from Review and use the archive-backed benchmark against finalized standings to score the original builds.
+
+### Cloudflare Worker native build repair
+
+The authenticated build log showed that the branch preview invoked **wrangler preview** without a Wrangler previews block. The Cloudflare production trigger was also pointed at the older **codex/free-prizepicks-refresh** branch and passed the relocated **worker/wrangler.toml** path. Native production targets **main** and uses the root configuration, with the deployed Worker tagged by Git commit. The GitHub Actions fallback checks for that same commit tag before deploying.
+
+Worker previews use the dedicated **lppe-prizepicks-preview** KV namespace. It is shared by previews and separate from the production board. Check the Workers Builds result, preview health, and production health after a release. The production health response exposes the active Worker revision and commit tag.

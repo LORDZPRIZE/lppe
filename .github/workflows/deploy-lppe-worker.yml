@@ -25,7 +25,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -34,11 +33,10 @@ jobs:
       - name: Check whether Cloudflare already published the production revision
         id: native
         if: github.event_name == 'push'
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
-          version() { sed -n 's/.*status:"online",version:"\([0-9.]*\)".*/\1/p'; }
-          before=$(git show HEAD^:worker/lppe-api.js | version)
-          current=$(version < worker/lppe-api.js)
-          if [ "$current" != "$before" ] && EXPECTED_VERSION="$current" node scripts/check-worker-deployment.mjs; then
+          if node scripts/check-worker-deployment.mjs; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy lppe-api
