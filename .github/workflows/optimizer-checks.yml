@@ -27,5 +27,17 @@ jobs:
         run: node --test scripts/*.test.mjs scripts/test-*.mjs worker/*.test.mjs
       - name: Check Python historical audit syntax
         run: python3 -c "import ast,pathlib; ast.parse(pathlib.Path('scripts/fanduel_contest_review.py').read_text())"
+      - name: Verify preview uses isolated KV
+        run: |
+          python3 - <<'PYTHON'
+          import tomllib
+
+          with open("wrangler.toml", "rb") as handle:
+              config = tomllib.load(handle)
+          production = {entry["id"] for entry in config["kv_namespaces"]}
+          preview = {entry["binding"]: entry["id"] for entry in config["previews"]["kv_namespaces"]}
+          assert "PRIZEPICKS_BOARD" in preview, "Missing preview board KV binding"
+          assert production.isdisjoint(preview.values()), "Preview KV must be separate from production"
+          PYTHON
       - name: Bundle Cloudflare Worker from repository root
         run: npx --yes wrangler@4.169.0 deploy --dry-run --outdir "${RUNNER_TEMP}/lppe-worker"
